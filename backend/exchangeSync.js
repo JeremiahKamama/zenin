@@ -39,6 +39,23 @@ async function safeJson(response) {
   }
 }
 
+// Authoritative mapping of exchange key -> the platform tag (lowercase) used in
+// `user_workspace_trades`/`user_workspace_trade_fills`/`journal_events`, and the exact
+// display-case strategy_name(s) used in `user_workspace_portfolio`. Both the sync path
+// (portfolio.sync) and the connected-account cascade removal read from this single source
+// of truth so they never drift apart.
+const EXCHANGE_SYNC_TAGS = {
+  hyperliquid: { platform: "hyperliquid", strategyNames: ["Hyperliquid Perp"] },
+  binance: { platform: "binance", strategyNames: ["Binance Spot", "Binance Perp"] },
+  bybit: { platform: "bybit", strategyNames: ["Bybit Spot", "Bybit Perp"] },
+  interactive_brokers: { platform: "interactive_brokers", strategyNames: ["IBKR Portfolio"] }
+};
+
+function tagsForExchange(exchange) {
+  const key = String(exchange || "").trim().toLowerCase();
+  return EXCHANGE_SYNC_TAGS[key] || null;
+}
+
 async function fetchJsonOrThrow(fetch, url, options, label) {
   const response = await fetch(url, options);
   const data = await safeJson(response);
@@ -210,8 +227,15 @@ async function fetchBybitSigned(fetch, path, params, apiKey, apiSecret, recvWind
 
 async function syncHyperliquid(apiKey, extraData = {}, context = {}) {
   const fetch = await resolveFetch();
-  const address = apiKey || extraData.address;
-  if (!address) throw new Error("Hyperliquid address is required");
+  // The stored api_key for a Hyperliquid wallet connection is a wenc:-prefixed
+  // encryption wrapper, NOT the raw address. The real address lives in
+  // extra_data.address. Use that; only fall back to apiKey when it actually
+  // looks like an address (0x...) so we never send a wenc: wrapper to the API.
+  const looksLikeAddress = (v) => typeof v === "string" && /^0x[a-fA-F0-9]{8,}$/.test(v.trim());
+  const address = (extraData && looksLikeAddress(extraData.address))
+    ? String(extraData.address).trim()
+    : (looksLikeAddress(apiKey) ? String(apiKey).trim() : (extraData && extraData.address) || apiKey);
+  if (!address || !looksLikeAddress(address)) throw new Error("Hyperliquid address is required");
 
   const [state, fills, meta] = await Promise.all([
     fetchJsonOrThrow(fetch, "https://api.hyperliquid.xyz/info", {
@@ -239,7 +263,8 @@ async function syncHyperliquid(apiKey, extraData = {}, context = {}) {
       const ctx = assetCtxs[i] || {};
       metaMap[u.name] = {
         funding: toNumber(ctx.funding),
-        openInterest: toNumber(ctx.openInterest)
+        openInterest: toNumber(ctx.openInterest),
+        markPx: toNumber(ctx.markPx)
       };
     });
   }
@@ -250,9 +275,16 @@ async function syncHyperliquid(apiKey, extraData = {}, context = {}) {
     return {
       symbol: pos.coin,
       name: pos.coin,
-      price: toNumber(pos.markPrice),
+      // clearinghouseState positions carry no live mark price; pull it from
+      // the metaAndAssetCtxs feed so Portfolio shows current market value.
+      price: metaEntry.markPx || toNumber(pos.markPx) || toNumber(pos.entryPx),
       quantity: toNumber(pos.szi),
       entry_price: toNumber(pos.entryPx),
+      // Derivative semantics for the canonical layer (spec §1.4 — never dropped):
+      unrealizedPnl: toNumber(pos.unrealizedPnl),
+      collateral: toNumber(pos.marginUsed),
+      leverage: pos.leverage != null && pos.leverage.value != null ? toNumber(pos.leverage.value) : null,
+      liquidation_price: toNumber(pos.liquidationPx),
       type: "crypto",
       market_type: "perp",
       order_type: toNumber(pos.szi) > 0 ? "buy" : "sell",
@@ -299,6 +331,105 @@ async function syncHyperliquid(apiKey, extraData = {}, context = {}) {
 
   const cashBalance = toNumber(state?.marginSummary?.accountValue);
   console.log(`[Hyperliquid] Found ${holdings.length} positions, ${trades.length} fills.`);
+  return { holdings, trades, tradeFills, cashBalance, currency: "USDC", syncContext: context };
+}
+
+// Lighter (zklighter.elliot.ai) — keyless, read-only, queried by L1 wallet
+// address. Positions come from the /account endpoint; trades are best-effort
+// (the /trades endpoint needs an account_index, which we derive from the
+// account response when present). Never attempts auth or writes.
+async function syncLighter(apiKey, extraData = {}, context = {}) {
+  const fetch = await resolveFetch();
+  const looksLikeAddress = (v) => typeof v === "string" && /^0x[a-fA-F0-9]{8,}$/.test(v.trim());
+  const address = (extraData && looksLikeAddress(extraData.address))
+    ? String(extraData.address).trim()
+    : (looksLikeAddress(apiKey) ? String(apiKey).trim() : (extraData && extraData.address) || apiKey);
+  if (!address || !looksLikeAddress(address)) throw new Error("Lighter L1 address is required");
+
+  const account = await fetchJsonOrThrow(
+    fetch,
+    `https://mainnet.zklighter.elliot.ai/api/v1/account?by=l1_address&value=${encodeURIComponent(address)}&active_only=false`,
+    undefined,
+    "Lighter account fetch failed"
+  );
+
+  const positions = Array.isArray(account) ? account : (account?.positions || []);
+  const holdings = positions
+    .filter((p) => p && Math.abs(toNumber(p.position)) > 0)
+    .map((p) => {
+      const symbol = String(p.market_id ?? p.market ?? p.symbol ?? "").trim();
+      const sign = toNumber(p.sign) >= 0 ? 1 : -1;
+      const size = toNumber(p.position) * sign;
+      const entry = toNumber(p.avg_entry_price ?? p.avgEntryPrice);
+      const positionValue = toNumber(p.position_value ?? p.positionValue);
+      const mark = positionValue && size !== 0 ? Math.abs(positionValue / size) : (entry || toNumber(p.mark_price ?? p.markPrice));
+      return {
+        symbol,
+        name: symbol,
+        price: mark,
+        quantity: size,
+        entry_price: entry,
+        type: "crypto",
+        market_type: "perp",
+        order_type: size > 0 ? "buy" : "sell",
+        unrealized_pnl: toNumber(p.unrealized_pnl ?? p.unrealizedPnl),
+        collateral: toNumber(p.collateral),
+        leverage: p.leverage != null ? toNumber(p.leverage) : null,
+        liquidation_price: toNumber(p.liquidation_price ?? p.liquidationPrice),
+        strategyName: "Lighter Perp",
+        date_added: new Date().toISOString()
+      };
+    });
+
+  // Best-effort trade history: the /trades endpoint is keyed by account_index.
+  const trades = [];
+  const tradeFills = [];
+  const accountIndex = account?.account_index ?? account?.accountIndex
+    ?? (Array.isArray(account) ? account[0]?.account_index : undefined);
+  if (accountIndex != null) {
+    try {
+      const fills = await fetchJsonOrThrow(
+        fetch,
+        `https://mainnet.zklighter.elliot.ai/api/v1/trades?account_index=${encodeURIComponent(accountIndex)}&limit=100&sort_by=timestamp&sort_dir=desc`,
+        undefined,
+        "Lighter trades fetch failed"
+      ).catch(() => null);
+      const tradeRows = Array.isArray(fills) ? fills : (fills?.trades || []);
+      tradeRows.forEach((f, idx) => {
+        const asset = String(f.market_id ?? f.symbol ?? "").trim().toUpperCase();
+        const record = buildTradeAndFillRecord({
+          platform: "lighter",
+          clientId: `lt-${f.trade_id ?? f.id ?? idx}`,
+          platformTradeId: f.trade_id ?? f.id,
+          platformFillId: f.trade_id ?? f.id,
+          executedAt: f.timestamp ?? f.time,
+          asset,
+          name: asset,
+          type: "crypto",
+          side: f.side === "sell" ? "sell" : "buy",
+          marketType: "perp",
+          quantity: Math.abs(toNumber(f.amount ?? f.size ?? f.quantity)),
+          price: toNumber(f.price),
+          notional: Math.abs(toNumber(f.amount ?? f.size ?? f.quantity) * toNumber(f.price)),
+          fee: Math.abs(toNumber(f.fee ?? 0)),
+          feeCurrency: "USDC",
+          feeSource: "exchange_reported",
+          strategyName: "Lighter Perp",
+          rawPayload: f,
+          executionMeta: { side: f.side, role: f.role }
+        });
+        trades.push(record.trade);
+        tradeFills.push(record.tradeFill);
+      });
+    } catch (err) {
+      console.warn("[Lighter] trades sync skipped:", err?.message || err);
+    }
+  }
+
+  // Account-level collateral → treated as the free cash bucket for the unified
+  // read model. Positions already carry their own market value.
+  const cashBalance = toNumber(account?.total_collateral ?? account?.collateral ?? 0);
+  console.log(`[Lighter] Found ${holdings.length} positions, ${trades.length} fills.`);
   return { holdings, trades, tradeFills, cashBalance, currency: "USDC", syncContext: context };
 }
 
@@ -374,6 +505,11 @@ async function syncBinance(apiKey, apiSecret, context = {}) {
           price: toNumber(position.markPrice),
           quantity: toNumber(position.positionAmt),
           entry_price: toNumber(position.entryPrice),
+          // Derivative semantics for the canonical layer (spec §1.4 — never dropped):
+          unrealizedPnl: toNumber(position.unRealizedProfit),
+          collateral: toNumber(position.initialMargin),
+          leverage: position.leverage != null ? toNumber(position.leverage) : null,
+          liquidation_price: toNumber(position.liquidationPrice),
           type: "crypto",
           market_type: "perp",
           order_type: toNumber(position.positionAmt) > 0 ? "buy" : "sell",
@@ -641,6 +777,27 @@ async function verifyExchangeCredentialScope(exchange, apiKey, apiSecret) {
       }
     };
   }
+  if (normalizedExchange === "lighter" && apiKey && !apiSecret) {
+    return {
+      permissionScope: "read_only",
+      canTrade: false,
+      canWithdraw: false,
+      readOnlyVerified: true,
+      verificationStatus: "verified_watch_only",
+      verificationMessage: "Public address connection verified as watch-only.",
+      providerMeta: {
+        addressType: "public_wallet",
+        permissionsDetected: {
+          canReadBalances: true,
+          canReadTrades: true,
+          canReadOrders: true,
+          canTrade: false,
+          canWithdraw: false,
+          isWatchOnly: true
+        }
+      }
+    };
+  }
   if (normalizedExchange === "binance") {
     const result = await verifyBinanceCredentialScope(apiKey, apiSecret);
     return {
@@ -775,11 +932,224 @@ async function syncBybit(apiKey, apiSecret, context = {}) {
   return { holdings, trades, tradeFills, cashBalance: 0, currency: "USDT", syncContext: context };
 }
 
+// ---------------------------------------------------------------------------
+// Interactive Brokers — Client Portal Web API
+// ---------------------------------------------------------------------------
+// Supports both (a) the local CP Gateway (default https://localhost:5000/v1/api)
+// and (b) the cloud-hosted IBKR Web API (https://api.ibkr.com/v1/api). Set
+// extraData.gatewayUrl to choose; defaults to localhost gateway.
+//
+// The CP Gateway requires the user to authenticate via browser BEFORE sync.
+// The cloud API uses OAuth 1.0a/2.0 (extraData should contain the access token).
+// extraData: { gatewayUrl?: string, accountId?: string, accessToken?: string }
+//
+// Web API reference: https://ibkrcampus.com/campus/ibkr-api-page/webapi-doc/
+
+const IBKR_DEFAULT_GATEWAY = "https://localhost:5000";
+
+// IBKR enforces a per-endpoint limit of 1 req / 5 secs for /portfolio/accounts
+// and /iserver/account/pnl/partitioned. Use a simple token-bucket delay.
+function delay(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function fetchIbkrGateway(url, endpoint, { method = "GET", body, timeout = 15000, accessToken } = {}) {
+  const fetch = await resolveFetch();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeout);
+  const headers = { "Content-Type": "application/json" };
+  if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+  try {
+    const resp = await fetch(`${url}${endpoint}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctl.signal,
+      // Gateway uses self-signed certs in local mode.
+      ...(url.startsWith("https://localhost") ? {} : {})
+    });
+    clearTimeout(timer);
+    return resp;
+  } catch (err) {
+    clearTimeout(timer);
+    if (err.cause?.code === "ECONNREFUSED" || err.cause?.code === "ECONNRESET" || err.cause?.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
+      throw new Error("IBKR Gateway not reachable. Ensure the Client Portal Gateway is running and authenticated via browser.");
+    }
+    throw new Error(`IBKR API request failed: ${err.message}`);
+  }
+}
+
+async function syncIbkr(apiKey, apiSecret, context = {}) {
+  const extraData = typeof context === "object" && context.extraData ? context.extraData : {};
+  const gatewayUrl = (String(extraData.gatewayUrl || IBKR_DEFAULT_GATEWAY).replace(/\/$/, "")) + "/v1/api";
+  const targetAccount = extraData.accountId || null;
+  const accessToken = extraData.accessToken || null;
+
+  // 1. Validate session — must be authenticated before any data calls.
+  let status;
+  try {
+    const authResp = await fetchIbkrGateway(gatewayUrl, "/iserver/auth/status", { accessToken });
+    status = await authResp.json();
+  } catch (err) {
+    throw new Error("IBKR authentication check failed. Ensure the gateway is running and you've authenticated via browser (or provided a valid access token).");
+  }
+  const authenticated = status.authenticated === true || status.established === true;
+  const connected = status.connected === true;
+  if (!authenticated) {
+    const competing = status.competing === true ? " (another session is active)" : "";
+    throw new Error(`IBKR session not authenticated${competing}. Authenticate via the Client Portal browser window or provide a valid access token.`);
+  }
+  if (!connected) {
+    throw new Error("IBKR session not connected to brokerage infrastructure. Wait for session initialisation and re-sync.");
+  }
+
+  // 2. List accounts (GET, per Web API docs). 1 req / 5 secs limit.
+  await delay(200); // gentle pacing
+  const acctsResp = await fetchIbkrGateway(gatewayUrl, "/portfolio/accounts", { accessToken });
+  if (!acctsResp.ok) {
+    const text = await acctsResp.text().catch(() => "");
+    throw new Error(`IBKR accounts endpoint returned ${acctsResp.status}: ${text.slice(0, 200)}`);
+  }
+  const accounts = await acctsResp.json();
+  const accountList = Array.isArray(accounts) ? accounts : [];
+  if (accountList.length === 0) throw new Error("No accounts found on IBKR. Ensure your username has trading permissions for at least one account.");
+
+  const accountId = targetAccount || String(accountList[0]?.accountId || accountList[0]?.id || "");
+  if (!accountId) throw new Error("Could not determine IBKR account ID. Provide one in extraData.accountId.");
+
+  // 3. Fetch positions (paginated, 0-indexed). Max ~10 pages.
+  const positions = [];
+  for (let page = 0; page < 10; page++) {
+    await delay(200);
+    const posResp = await fetchIbkrGateway(gatewayUrl, `/portfolio/${accountId}/positions/${page}`, { accessToken });
+    if (posResp.status === 404) break; // no more pages
+    if (!posResp.ok) {
+      console.warn(`[IBKR] Position page ${page} returned ${posResp.status}, skipping.`);
+      break;
+    }
+    const posData = await posResp.json();
+    const pagePositions = Array.isArray(posData) ? posData : [];
+    if (pagePositions.length === 0) break;
+    positions.push(...pagePositions);
+    if (pagePositions.length < 30) break;
+  }
+
+  // 4. Fetch account summary (cash, equity, margin)
+  let cashBalance = 0;
+  let currency = "USD";
+  try {
+    await delay(200);
+    const summaryResp = await fetchIbkrGateway(gatewayUrl, `/portfolio/${accountId}/summary`, { accessToken, timeout: 10000 });
+    if (summaryResp.ok) {
+      const summary = await summaryResp.json();
+      // summary has top-level keys per currency segment (e.g. "USD", "BASE")
+      const segments = Array.isArray(summary) ? summary : (summary && typeof summary === "object" ? Object.values(summary) : []);
+      segments.forEach((seg) => {
+        if (seg && seg.currency) {
+          const totalCash = Number(seg.totalcashvalue || seg.cashbalance || 0);
+          if (totalCash > 0 && String(seg.currency).toUpperCase() === "USD") {
+            cashBalance += totalCash;
+          }
+          if (seg.currency && !currency) currency = String(seg.currency);
+        }
+      });
+    }
+  } catch (_) { /* summary is best-effort */ }
+
+  // Fallback: try ledger for currency balances.
+  if (cashBalance === 0) {
+    try {
+      await delay(200);
+      const ledgerResp = await fetchIbkrGateway(gatewayUrl, `/portfolio/${accountId}/ledger`, { accessToken, timeout: 10000 });
+      if (ledgerResp.ok) {
+        const ledger = await ledgerResp.json();
+        if (ledger && typeof ledger === "object") {
+          Object.values(ledger).forEach((entry) => {
+            if (entry && typeof entry.commoditymarketvalue === "number") {
+              cashBalance += entry.commoditymarketvalue;
+            }
+          });
+        }
+      }
+    } catch (_) { /* ledger is best-effort */ }
+  }
+
+  // 5. Map positions to unified shape. IBKR position fields per Web API reference:
+  //   conid, ticker, contractDesc, position, mktPrice, avgCost, assetClass
+  const holdings = positions.map((p) => {
+    const qty = Number(p.position || 0);
+    const price = Number(p.mktPrice || p.markPrice || 0);
+    const assetClass = String(p.assetClass || "").toUpperCase();
+    return {
+      symbol: String(p.ticker || p.contractDesc || "").trim().toUpperCase(),
+      name: String(p.name || p.companyName || p.contractDesc || String(p.ticker || "")),
+      price,
+      quantity: qty,
+      entry_price: Number(p.avgCost || p.costBasis || 0),
+      market_value: Math.abs(qty * price),
+      type: assetClass === "CASH" ? "fiat" : (assetClass === "OPT" || assetClass === "FOP" ? "option" : "stock"),
+      market_type: assetClass === "CASH" ? "cash" : (assetClass === "OPT" || assetClass === "FOP" ? "option" : "spot"),
+      strategyName: "IBKR Portfolio"
+    };
+  }).filter((h) => Math.abs(h.quantity) > 0);
+
+  // 6. Fetch recent executions (trades)
+  const tradeModels = [];
+  try {
+    await delay(200);
+    const tradesResp = await fetchIbkrGateway(gatewayUrl, "/iserver/account/trades", { accessToken, timeout: 10000 });
+    if (tradesResp.ok) {
+      const trades = await tradesResp.json();
+      const tradeList = Array.isArray(trades) ? trades : [];
+      tradeList.forEach((t) => {
+        tradeModels.push({
+          symbol: String(t.ticker || t.contractDesc || "").toUpperCase(),
+          side: String(t.side || "").toUpperCase(),
+          quantity: Math.abs(Number(t.size || t.quantity || 0)),
+          unit_price: Number(t.price || 0),
+          notional: Math.abs(Number(t.size || t.quantity || 0)) * Number(t.price || 0),
+          currency: String(t.currency || "USD"),
+          fee: Number(t.commission || t.fees || 0),
+          fee_currency: String(t.currency || "USD"),
+          order_type: String(t.orderType || t.type || "").toLowerCase(),
+          executed_at: t.executionTime || t.tradeTime || t.reportDate || new Date().toISOString(),
+          platform_trade_id: String(t.executionId || t.orderId || t.tradeId || ""),
+          closedPnl: Number(t.fifoPnlRealized || t.realizedPnl || 0) || null
+        });
+      });
+    }
+  } catch (_) { /* trades are best-effort */ }
+
+  console.log(`[IBKR] Found ${holdings.length} positions, ${tradeModels.length} executions.`);
+  return {
+    holdings,
+    trades: tradeModels.map((t) => ({
+      symbol: t.symbol,
+      side: t.side,
+      quantity: t.quantity,
+      price: t.unit_price,
+      notional: t.notional,
+      fee: t.fee,
+      feeCurrency: t.fee_currency,
+      executedAt: t.executed_at,
+      platformTradeId: t.platform_trade_id,
+      platform: "ibkr",
+      marketType: "spot"
+    })),
+    tradeFills: [],
+    cashBalance,
+    currency,
+    syncContext: context
+  };
+}
+
 module.exports = {
   syncHyperliquid,
+  syncLighter,
   syncBinance,
   syncBybit,
+  syncIbkr,
   verifyExchangeCredentialScope,
+  EXCHANGE_SYNC_TAGS,
+  tagsForExchange,
   _internals: {
     toNumber,
     roundMoney,

@@ -44,6 +44,7 @@ const APP_RUNTIME_CONFIG = {
       Journal: 'pro',
       Options: 'desk',
       Predictions: 'desk',
+      Research: 'pro',
       'Tax Estimator': 'starter',
       Metrics: 'pro'
     }
@@ -93,7 +94,7 @@ const APP_RUNTIME_CONFIG = {
   connections: {
     venues: {
       cex: ['Binance', 'Bybit', 'Kraken', 'OKX', 'Coinbase Advanced'],
-      dex: ['Hyperliquid', 'dYdX', 'Aevo', 'Lyra', 'Derive'],
+      dex: ['Hyperliquid', 'Lighter', 'dYdX', 'Aevo', 'Lyra', 'Derive', 'Aster', 'Variational'],
       brokers: ['Interactive Brokers', 'Alpaca', 'Tradier', 'Schwab', 'Robinhood'],
       prediction: ['Polymarket', 'Kalshi']
     }

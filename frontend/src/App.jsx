@@ -1,7 +1,8 @@
 import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  PanelLeftClose,
-  PanelLeftOpen,
+  Bell,
+  Menu,
+  Search,
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -10,20 +11,21 @@ import { PasswordRequirementsList } from "@/components/ui/async-state";
 import { ToastProvider, Toaster } from "@/components/ui/toast";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
+import { PlanLockOverlay } from "@/components/PlanLockOverlay";
 import { WorkspaceScopeProvider } from "./components/WorkspaceScopeContext";
+import { NotificationPreferences } from "@/components/NotificationPreferences";
 import "./styles.css";
 import "./styles/intelligence.css";
 import "./styles/brokerage.css";
 import { calculateAccountSnapshot, calculatePortfolioMarketValue } from "./utils/accountMetrics";
 import { calculateOptionPnL } from "./utils/optionsPnL";
-import { updateFXRates, convertToUSD, inferAssetCurrency } from "./utils/currencyUtils";
+import { updateFXRates, convertToUSD } from "./utils/currencyUtils";
 import { ZeninLogo } from "./components/Branding";
 import { TransmissionExplorerProvider } from "./transmission/TransmissionExplorerProvider.jsx";
 import { openExplorer as openTransmissionExplorer } from "./transmission/TransmissionEngine.js";
 import {
   AccountIcon,
   AnalyticsIcon,
-  BriefingIcon,
   HomeIcon,
   IntelligenceIcon,
   JournalIcon,
@@ -41,11 +43,15 @@ import {
 } from "./components/SidebarIcons";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
 import { getSnapshotFallbackMessage } from "./utils/staleNotice";
+import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "./utils/portfolioHeadline";
 import { fetchBrokerageWorkspaceSummary } from "./utils/brokerageApi.js";
+import { useUnifiedPortfolio } from "./hooks/useUnifiedPortfolio";
 import { zeninFetch, zeninFetchJson } from "./utils/zeninFetch";
 import { buildAssetRoute } from "./utils/assetRegistry";
 import { normalizeInstrumentSymbol, resolveCurrencyInstrument, CURATED_ETF_CATALOG } from "./utils/currencyInstruments.js";
 import { ProviderHealthDashboard } from "./components/ProviderHealthDashboard";
+import { NotificationCenter } from "./components/NotificationCenter";
+import { useNotificationStream } from "./hooks/useNotificationStream";
 import { IndicatorActionsProvider } from "./utils/indicatorActions";
 import { startRegistration } from "@simplewebauthn/browser";
 import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection } from "./utils/workspacePersistence";
@@ -83,7 +89,7 @@ import { useMediaQuery, useViewportWidth } from "./hooks/useMediaQuery";
 import { usePlanGate } from "./hooks/usePlanGate";
 import { CommandPalette, useCommandPaletteLauncher } from "./components/CommandPalette";
 import SecurityRecovery from "./components/SecurityRecovery";
-import { searchAssets } from "./utils/assetSearch.js";
+import { searchAssets, searchAssetsLive } from "./utils/assetSearch.js";
 import { enqueueImportSync, flushImportSyncQueue, hasPendingImportSync } from "./utils/importSyncQueue";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 import FirstSessionWelcome from "./components/onboarding/launch/FirstSessionWelcome";
@@ -175,10 +181,6 @@ function lazyWithReloadRetry(loader, retryKey) {
 const HomeModule = lazyWithReloadRetry(
   () => import("./components/HomeModule").then((mod) => ({ default: mod.HomeModule })),
   "zenin_lazy_retry_home"
-);
-const BriefingModule = lazyWithReloadRetry(
-  () => import("./components/BriefingModule").then((mod) => ({ default: mod.BriefingModule })),
-  "zenin_lazy_retry_briefing"
 );
 const PersonaOnboardingModal = lazyWithReloadRetry(
   () => import("./components/PersonaOnboardingModal").then((mod) => ({ default: mod.PersonaOnboardingModal })),
@@ -288,7 +290,14 @@ const Analytics = lazyWithReloadRetry(
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
-const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid", "lighter", "variational"]);
+const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid", "lighter", "interactive_brokers"]);
+// Providers shown in the connect UI but not yet syncable (honest "coming soon"
+// stubs — no fabricated sync capability). Rendered disabled with a "Soon" badge.
+const COMING_SOON_PROVIDERS = new Set(["aster", "variational"]);
+// USD-pegged stablecoins treated as 1:1 with USD for buying-power/cash totals.
+// Connected wallets (e.g. Hyperliquid) sync USDC; without this, a USDC balance
+// never replaces the default seed cash and "Buying power" stays stuck at $10K.
+const USD_STABLE_EQUIVALENTS = new Set(["USD", "USDC", "USDT"]);
 
 function normalizeProviderId(value) {
   return String(value || "")
@@ -311,15 +320,18 @@ function getDefaultConnectionLabel(provider, venueType = "cex") {
 function buildClientConnectionCapability(provider) {
   const providerId = normalizeProviderId(provider);
   const syncAvailable = SYNC_ENABLED_PROVIDERS.has(providerId);
+  const watchOnly = providerId === "hyperliquid" || providerId === "lighter";
   return {
-    accessMode: providerId === "hyperliquid" ? "watch_only" : "read_only_metadata",
+    accessMode: watchOnly ? "watch_only" : (syncAvailable ? "read_only_key" : "read_only_metadata"),
     syncAvailable,
     syncStatus: syncAvailable ? "sync_supported" : "metadata_only",
     nextAction: syncAvailable
-      ? "Run sync to import holdings, balances, and fills."
+      ? (watchOnly ? "Run sync to import holdings, balances, and fills." : "Provide a provider-side read-only API key, then run sync to import holdings, balances, and fills.")
       : "Saved for workspace context. Live sync is not available for this provider yet.",
     supportMessage: syncAvailable
-      ? "Zenin can import live portfolio data from this provider with read-only access."
+      ? (watchOnly
+          ? "Zenin can import live portfolio data from this public watch-only address."
+          : "Zenin can import live portfolio data from this provider with a read-only API key. Some centralized exchanges may also be available through SnapTrade.")
       : "Zenin stores this source as read-only metadata until a provider adapter is available."
   };
 }
@@ -406,6 +418,25 @@ function formatRelativeTime(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
+function isActionableWorkspaceNotification(notification = {}) {
+  const type = String(notification.type || "").toLowerCase();
+  const severity = String(notification?.metadata?.severity || notification.severity || "").toLowerCase();
+  return ["critical", "danger", "risk", "high", "warning", "review"].includes(severity)
+    || type.includes("security")
+    || type.includes("portfolio_transaction")
+    || type.includes("risk")
+    || type.includes("rebalance")
+    || type.includes("price_alert");
+}
+
+function notificationToastTone(notification = {}) {
+  const severity = String(notification?.metadata?.severity || notification.severity || "").toLowerCase();
+  if (["critical", "danger", "risk", "high"].includes(severity) || String(notification.type || "").includes("security")) return "error";
+  const type = String(notification.type || "");
+  if (type.includes("trade_execution") || type.includes("portfolio_transaction")) return "success";
+  return "info";
+}
+
 function formatDateShort(iso) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -419,10 +450,10 @@ function getProviderTrustForAccount(account) {
   }
   // Fallback for legacy/guest rows without a server-provided providerTrust
   const provider = String(account?.exchange || account?.provider || "").trim().toLowerCase();
-  const scopeStatus = String(account?.scopeVerificationStatus || (provider === "hyperliquid" ? "verified_watch_only" : "scope_unverified")).trim().toLowerCase();
+  const scopeStatus = String(account?.scopeVerificationStatus || (provider === "hyperliquid" || provider === "lighter" ? "verified_watch_only" : "scope_unverified")).trim().toLowerCase();
   const canTrade = false;
   const canWithdraw = false;
-  const isWatchOnly = provider === "hyperliquid";
+  const isWatchOnly = provider === "hyperliquid" || provider === "lighter";
   return {
     provider,
     providerLabel: account?.provider || account?.exchange || "Unknown provider",
@@ -679,9 +710,9 @@ function getPersonaPromptSessionKey(userId) {
 }
 
 function getPersonaSectionOrder(personaKey) {
-  if (personaKey === "casual_investor") return ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Journal"];
-  if (personaKey === "active_trader") return ["Briefing", "Watchlist", "Portfolio", "Intelligence", "Journal", "Analytics"];
-  if (personaKey === "small_team") return ["Briefing", "Research", "Watchlist", "Intelligence", "Journal", "Analytics"];
+  if (personaKey === "casual_investor") return ["Home", "Portfolio", "Watchlist", "Research", "Journal"];
+  if (personaKey === "active_trader") return ["Watchlist", "Portfolio", "Intelligence", "Journal", "Analytics"];
+  if (personaKey === "small_team") return ["Research", "Watchlist", "Intelligence", "Journal", "Analytics"];
   return null;
 }
 
@@ -977,11 +1008,6 @@ const SIDEBAR_SECTION_META = {
     eyebrow: "Home",
     description: "Open your daily snapshot and market pulse."
   },
-  Briefing: {
-    group: "Core",
-    eyebrow: "Briefing",
-    description: "Today's briefing: portfolio, alerts, decisions, and executions in one loop."
-  },
   Portfolio: {
     group: "Core",
     eyebrow: "Portfolio",
@@ -1030,6 +1056,11 @@ const SIDEBAR_SECTION_META = {
 };
 
 const SIDEBAR_GROUP_ORDER = ["Core", "Research", "Tools"];
+
+// Mobile primary destinations (thumbs-first bottom nav). The remaining
+// sections stay in the hamburger drawer — progressive disclosure, not a
+// flattened dump of the desktop sidebar.
+const MOBILE_PRIMARY_NAV = ["Home", "Portfolio", "Research", "Journal"];
 
 const GUEST_DEMO_SNAPSHOT_LABEL = "May 24, 2026, 12:25";
 
@@ -1182,84 +1213,6 @@ function getSectionFromGuestSlug(slug, sections) {
   const normalized = String(slug || "").trim().toLowerCase();
   return sections.find((section) => getGuestSectionSlug(section) === normalized) || "";
 }
-
-const searchFallbackAssets = (query, type) => {
-  const normalizedQuery = String(query || "").trim().toLowerCase();
-  const normalizedType = String(type || "").toLowerCase();
-  if (!normalizedQuery) return [];
-  if (normalizedType === "indicator" || normalizedType === "indicators") {
-    const fallbackMacroGeos = Array.isArray(getAppRuntimeConfig()?.analytics?.fallbackMacroGeos)
-      ? getAppRuntimeConfig().analytics.fallbackMacroGeos
-      : [];
-    return fallbackMacroGeos
-      .filter((geo) => String(geo?.type || "").trim().toLowerCase() === "country")
-      .filter((geo) => {
-        const code = String(geo?.code || "").trim().toLowerCase();
-        const name = String(geo?.name || "").trim().toLowerCase();
-        return code.includes(normalizedQuery) || name.includes(normalizedQuery);
-      })
-      .slice(0, 8)
-      .map((geo) => ({
-        symbol: String(geo?.code || "").trim().toUpperCase(),
-        name: String(geo?.name || "").trim(),
-        type: "indicator",
-        category: "indicators",
-        marketType: "macro",
-        market: "Macro",
-        countryCode: String(geo?.code || "").trim().toUpperCase(),
-        countryName: String(geo?.name || "").trim()
-      }));
-  }
-  if (normalizedType === "commodity" || normalizedType === "commodities") {
-    return getFallbackAssetsForCategory("commodities")
-      .filter((asset) =>
-        String(asset.symbol || "").toLowerCase().includes(normalizedQuery) ||
-        String(asset.name || "").toLowerCase().includes(normalizedQuery)
-      )
-      .slice(0, 8)
-      .map((asset) => ({
-        ...asset,
-        type: "commodity",
-        category: "commodities",
-        marketType: "commodity",
-      }));
-  }
-  if (normalizedType === "etf" || normalizedType === "etfs") {
-    return searchAssets(normalizedQuery, 24)
-      .filter((asset) => asset.kind === "etf")
-      .slice(0, 8)
-      .map((asset) => ({
-        ...asset,
-        type: "etf",
-        category: "etfs",
-        marketType: "equity",
-      }));
-  }
-  if (normalizedType === "currency" || normalizedType === "currencies" || normalizedType === "forex") {
-    return searchAssets(normalizedQuery, 24)
-      .filter((asset) => asset.kind === "currency" || asset.kind === "forex")
-      .slice(0, 8)
-      .map((asset) => ({
-        ...asset,
-        type: asset.type || (String(asset.symbol || "").includes("/") ? "forex" : "currency"),
-        category: "currencies",
-        marketType: asset.marketType || (String(asset.symbol || "").includes("/") ? "forex" : "macro"),
-      }));
-  }
-  const category = normalizedType === "crypto"
-    ? "crypto"
-    : normalizedType === "indicator" || normalizedType === "indicators"
-      ? "indicators"
-      : normalizedType === "commodity" || normalizedType === "commodities"
-        ? "commodities"
-        : "stocks";
-  return getFallbackAssetsForCategory(category)
-    .filter((asset) =>
-      String(asset.symbol || "").toLowerCase().includes(normalizedQuery) ||
-      String(asset.name || "").toLowerCase().includes(normalizedQuery)
-    )
-    .slice(0, 8);
-};
 
 function requiredPlanForSection(section) {
   return getAppRuntimeConfig()?.subscription?.sectionMinPlan?.[section] || "starter";
@@ -1539,6 +1492,10 @@ function App() {
   }, [booted]);
 
   const [portfolio, setPortfolio] = useState(() => {
+    // Authenticated users must NOT inherit stale guest/demo holdings from
+    // localStorage — the backend bootstrap (setPortfolio(incomingHoldings))
+    // repopulates live data. Only guests may seed the demo capability view.
+    if (hasAuthToken()) return [];
     const stored = readStoredArray("zenin_portfolio");
     if (stored.length > 0) return stored;
     // Initial demo data for new guests to show app capability
@@ -1576,6 +1533,19 @@ function App() {
   const [apiTradeExecutions, setApiTradeExecutions] = useState([]);
   const [workspaceNotifications, setWorkspaceNotifications] = useState([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [isNotificationInboxOpen, setIsNotificationInboxOpen] = useState(false);
+  const [notificationCenterLoading, setNotificationCenterLoading] = useState(false);
+  const [notificationCenterError, setNotificationCenterError] = useState("");
+  const [notificationPrefs, setNotificationPrefs] = useState({
+    transactionActivityPopups: false,
+    depositWithdrawalPopups: true,
+    sourceHealthAlerts: true,
+    largeTransactionThreshold: 0,
+    mutedSources: []
+  });
+  const notificationToastIdsRef = useRef(new Set());
+  const notificationsSeededRef = useRef(false);
   const [homeMarketMovers, setHomeMarketMovers] = useState([]);
   const [homeMacroData, setHomeMacroData] = useState([]);
   const [error, setError] = useState(null);
@@ -1585,11 +1555,6 @@ function App() {
   const [watchlistRetryNonce, setWatchlistRetryNonce] = useState(0);
   const [watchlistRefreshNonce, setWatchlistRefreshNonce] = useState(0);
   const [sharedWatchlistAccess, setSharedWatchlistAccess] = useState({ shared: false, allowed: true, requiredPlan: "starter" });
-  const [searchTerm, setSearchTerm] = useState("");
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchHasSettled, setSearchHasSettled] = useState(false);
-  const [searchType, setSearchType] = useState("tradfi"); // null, "tradfi", "crypto", or "indicator"
   const [customStockThemes, setCustomStockThemes] = useState(() => {
     try {
       const raw = localStorage.getItem("zenin_custom_stock_themes");
@@ -1604,8 +1569,6 @@ function App() {
   const [routeState, setRouteState] = useState(() => parseRouteFromLocation());
   const [companyRouteAsset, setCompanyRouteAsset] = useState(null);
   const [tradeToast, setTradeToast] = useState(null);
-  const searchSectionRef = useRef(null);
-  const searchTypeSelectRef = useRef(null);
   const [journalThreadContext, setJournalThreadContext] = useState(null);
   const [alertBuilder, setAlertBuilder] = useState({ open: false, asset: null });
   const [compareDrawer, setCompareDrawer] = useState({ open: false, assets: [] });
@@ -1618,7 +1581,6 @@ function App() {
   }, [taxSubView]);
   const priceCacheRef = useRef(new Map());
   const portfolioRef = useRef([]);
-  const searchRequestSeqRef = useRef(0);
   const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
   const WATCHLIST_CATEGORY_REFRESH_TTL_MS = 5 * 60 * 1000;
 
@@ -1799,66 +1761,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!searchTerm.trim() || !searchType) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchHasSettled(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    const requestId = searchRequestSeqRef.current + 1;
-    searchRequestSeqRef.current = requestId;
-    setSearchLoading(true);
-    setSearchHasSettled(false);
-
-    zeninFetch(`/search?q=${encodeURIComponent(searchTerm)}&type=${searchType}`, {
-      signal: controller.signal
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data?.error || `HTTP ${res.status}`);
-        }
-        return data;
-      })
-      .then((data) => {
-        if (searchRequestSeqRef.current !== requestId) return;
-        setSearchResults(Array.isArray(data?.results) ? data.results : []);
-        setSearchHasSettled(true);
-      })
-      .catch(() => {
-        if (controller.signal.aborted || searchRequestSeqRef.current !== requestId) return;
-        setSearchResults(searchFallbackAssets(searchTerm, searchType));
-        setSearchHasSettled(true);
-      })
-      .finally(() => {
-        if (searchRequestSeqRef.current !== requestId) return;
-        setSearchLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [searchTerm, searchType]);
-
-  useEffect(() => {
-    if (!searchTerm) return;
-    const handlePointerDown = (event) => {
-      const container = searchSectionRef.current;
-      if (!container) return;
-      if (!container.contains(event.target)) {
-        setSearchTerm("");
-        setSearchResults([]);
-      }
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("touchstart", handlePointerDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("touchstart", handlePointerDown);
-    };
-  }, [searchTerm]);
-
-  useEffect(() => {
     const handlePopState = () => {
       const nextRoute = parseRouteFromLocation();
       setRouteState(nextRoute);
@@ -1929,17 +1831,6 @@ function App() {
     const type = normalizeMetaKey(asset?.type);
     return [symbol, marketType, type, theme, category].join("::");
   };
-
-  const getSearchResultKey = (asset) => (
-    [
-      normalizeSymbolKey(asset?.symbol),
-      String(asset?.marketType || inferWatchlistMarketType(asset)).trim().toLowerCase(),
-      normalizeMetaKey(asset?.type),
-      normalizeMetaKey(asset?.category),
-      normalizeMetaKey(asset?.theme),
-      String(asset?.name || "").trim().toLowerCase()
-    ].join("::")
-  );
 
   const isStrictStockAsset = (asset) => {
     const normalizedType = inferWatchlistAssetKind(asset);
@@ -2199,21 +2090,6 @@ useEffect(() => {
     if (marketType === "spot" || marketType === "perp") return "crypto";
     if (asset?.theme || asset?.category) return "stock";
     return "stock";
-  };
-
-  const selectSearchResult = (asset) => {
-    if (!asset) return;
-    if (searchType !== "currency") {
-      setSelectedAsset(asset);
-      return;
-    }
-
-    // Currency search only opens a modal after an explicit result choice. The
-    // registry enrichment locks the selected result to currency/forex identity
-    // even though a standalone currency legitimately carries marketType=macro.
-    const instrument = resolveCurrencyInstrument(asset.symbol);
-    if (!instrument) return;
-    setSelectedAsset({ ...asset, ...instrument });
   };
 
   const navigateToAppRoute = () => {
@@ -2509,7 +2385,7 @@ useEffect(() => {
   }, []);
 
   const openWorkspaceSection = useCallback((section, payload = null) => {
-    const appSections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
+    const appSections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
     if (!appSections.includes(section)) return;
     startTransition(() => {
       if (routeState.type === "company") navigateToAppRoute();
@@ -2638,7 +2514,7 @@ useEffect(() => {
       navigateToCompare({ symbol, kind: payload?.kind || "equity", compareSymbol: peerSymbol || null });
       return;
     }
-    if (target && openWorkspaceSection && ["Home","Briefing","Portfolio","Watchlist","Analytics","Intelligence","Options","Predictions","Journal","Tax Estimator"].includes(target)) {
+    if (target && openWorkspaceSection && ["Home","Portfolio","Watchlist","Analytics","Intelligence","Options","Predictions","Journal","Tax Estimator"].includes(target)) {
       openWorkspaceSection(target);
     }
   }, [buildAssetRoute, openWorkspaceSection, openTransmissionExplorer, openAssetResearch, navigateToCompare, setRouteState]);
@@ -2951,8 +2827,10 @@ useEffect(() => {
         nextCashBalances[currency] = amount;
       });
       setCashBalances(nextCashBalances);
-      if (nextCashBalances.USD != null) {
-        setBalance(nextCashBalances.USD);
+      const stableBalance = Object.entries(nextCashBalances)
+        .reduce((sum, [cur, amt]) => USD_STABLE_EQUIVALENTS.has(cur) ? sum + Number(amt || 0) : sum, 0);
+      if (stableBalance > 0) {
+        setBalance(stableBalance);
       }
       return nextCashBalances;
     } catch (error) {
@@ -2964,6 +2842,8 @@ useEffect(() => {
   const refreshWorkspaceNotifications = useCallback(async ({ toastNew = false } = {}) => {
     console.count("refreshNotifications");
     if (!hasAuthToken()) return [];
+    setNotificationCenterLoading(true);
+    setNotificationCenterError("");
     try {
       const res = await zeninFetch("/notifications?limit=50");
       const data = await res.json().catch(() => ({}));
@@ -2973,18 +2853,166 @@ useEffect(() => {
       const incoming = Array.isArray(data?.notifications) ? data.notifications : [];
       setWorkspaceNotifications(incoming);
       setUnreadNotificationCount(Number(data?.unreadCount || incoming.filter((item) => !item?.readAt).length || 0));
-      if (toastNew) {
-        const latestTradePing = incoming.find((item) => !item?.readAt && String(item?.type || "").startsWith("trade_execution."));
-        if (latestTradePing) {
-          showTradeToast(latestTradePing.title || "New trade execution synced", "success");
+
+      const nextIds = new Set(incoming.map((item) => String(item?.id || "")).filter(Boolean));
+      if (toastNew && notificationsSeededRef.current) {
+        const latestActionable = incoming.find((item) => (
+          !item?.readAt
+          && !notificationToastIdsRef.current.has(String(item?.id || ""))
+          && isActionableWorkspaceNotification(item)
+        ));
+        if (latestActionable) {
+          showTradeToast(latestActionable.title || "New workspace notification", notificationToastTone(latestActionable));
         }
       }
+      notificationToastIdsRef.current = nextIds;
+      notificationsSeededRef.current = true;
       return incoming;
     } catch (error) {
       console.warn("Notifications refresh failed.", error);
+      setNotificationCenterError(error?.message || "Zenin could not refresh workspace notifications.");
       return [];
+    } finally {
+      setNotificationCenterLoading(false);
     }
   }, []);
+
+  // Merge an incoming realtime notification into the inbox (deduped by id) and
+  // update the unread badge. Popup is decided by the event's metadata.popup flag
+  // (server-driven) AND the user's notification preferences.
+  const mergeRealtimeNotification = useCallback((notification) => {
+    if (!notification || notification.id == null) return;
+    const id = Number(notification.id);
+    setWorkspaceNotifications((prev) => {
+      if (prev.some((n) => Number(n.id) === id)) return prev; // already present
+      const next = [notification, ...prev];
+      const unread = next.filter((n) => !n.readAt).length;
+      setUnreadNotificationCount(unread);
+      return next;
+    });
+    const meta = notification?.metadata || {};
+    const provider = String(meta.provider || "").toLowerCase();
+    const txnType = String(meta.transactionType || "").toLowerCase();
+    const large = meta.large === true;
+    const muted = Array.isArray(notificationPrefs.mutedSources) && notificationPrefs.mutedSources.map(String).includes(provider);
+
+    let allowPopup = meta.popup === true;
+    // User preferences can override the server's conservative popup policy for
+    // transaction types. The server defaults buys/sells/fills to popup=false
+    // (bulk sync is noise), but users who opt in via transactionActivityPopups
+    // want real-time execution toasts even for single trades.
+    if (!allowPopup && txnType && ["buy", "sell", "fill", "dividend", "interest", "fee", "adjustment"].includes(txnType)) {
+      allowPopup = !!notificationPrefs.transactionActivityPopups;
+    }
+    if (allowPopup && muted) allowPopup = false;
+    if (allowPopup && txnType && (txnType === "deposit" || txnType === "withdrawal" || txnType === "transfer")) {
+      allowPopup = notificationPrefs.depositWithdrawalPopups !== false;
+    }
+    if (allowPopup && (meta.category === "portfolio-sync" || /auth|stale|recover|fail/i.test(String(meta.type || "")))) {
+      allowPopup = !!notificationPrefs.sourceHealthAlerts;
+    }
+    if (allowPopup && large && notificationPrefs.largeTransactionThreshold > 0) {
+      allowPopup = Number(meta.notional || 0) >= Number(notificationPrefs.largeTransactionThreshold);
+    }
+
+    if (allowPopup && !notification.readAt && notificationsSeededRef.current) {
+      showTradeToast(notification.title || "New workspace notification", notificationToastTone(notification));
+    }
+  }, [notificationPrefs]);
+
+  const loadNotificationPrefs = useCallback(async () => {
+    try {
+      const data = await zeninFetchJson("/db/workspace/docs/notificationPreferences", { timeoutMs: 6000 }).catch(() => null);
+      const doc = data && data.document && typeof data.document === "object" ? data.document : {};
+      setNotificationPrefs((prev) => ({ ...prev, ...doc }));
+    } catch {
+      /* keep defaults */
+    }
+  }, []);
+
+  const markWorkspaceNotificationRead = useCallback(async (notification) => {
+    const notificationId = Number(notification?.id);
+    if (!Number.isInteger(notificationId) || notification?.readAt) return;
+    const readAt = new Date().toISOString();
+    setWorkspaceNotifications((current) => current.map((item) => (
+      Number(item?.id) === notificationId ? { ...item, readAt } : item
+    )));
+    setUnreadNotificationCount((current) => Math.max(0, current - 1));
+    try {
+      const response = await zeninFetch(`/notifications/${notificationId}/read`, { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || "Notification could not be marked as read.");
+    } catch (error) {
+      setNotificationCenterError(error?.message || "Notification could not be marked as read.");
+      void refreshWorkspaceNotifications();
+    }
+  }, [refreshWorkspaceNotifications]);
+
+  const markAllWorkspaceNotificationsRead = useCallback(async () => {
+    if (!unreadNotificationCount) return;
+    const readAt = new Date().toISOString();
+    setWorkspaceNotifications((current) => current.map((item) => item?.readAt ? item : { ...item, readAt }));
+    setUnreadNotificationCount(0);
+    try {
+      const response = await zeninFetch("/notifications/read-all", { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || "Notifications could not be marked as read.");
+    } catch (error) {
+      setNotificationCenterError(error?.message || "Notifications could not be marked as read.");
+      void refreshWorkspaceNotifications();
+    }
+  }, [refreshWorkspaceNotifications, unreadNotificationCount]);
+
+  const navigateFromWorkspaceNotification = useCallback(async (notification) => {
+    await markWorkspaceNotificationRead(notification);
+    setIsNotificationCenterOpen(false);
+    const actionUrl = String(notification?.actionUrl || notification?.metadata?.actionUrl || "").trim();
+    if (actionUrl && typeof window !== "undefined") {
+      try {
+        const target = new URL(actionUrl, window.location.origin);
+        if (target.origin === window.location.origin && target.pathname === "/app") {
+          const section = String(target.searchParams.get("section") || "").toLowerCase();
+          const tab = String(target.searchParams.get("tab") || "").toLowerCase();
+          if (section === "settings") {
+            if (tab === "accounts") openConnectedAccounts();
+            else openAccountSettings();
+            return;
+          }
+          const labelMap = {
+            home: "Home", portfolio: "Portfolio", watchlist: "Watchlist",
+            research: "Research", analytics: "Analytics", intelligence: "Intelligence", options: "Options",
+            predictions: "Predictions", journal: "Journal", tax: "Tax Estimator"
+          };
+          if (labelMap[section]) {
+            openWorkspaceSection(labelMap[section]);
+            return;
+          }
+        }
+        if (/^https?:/i.test(actionUrl)) {
+          window.open(actionUrl, "_blank", "noopener,noreferrer");
+          return;
+        }
+      } catch {
+        // Malformed deep links fall through to the semantic section fallback.
+      }
+    }
+
+    const type = String(notification?.type || "").toLowerCase();
+    if (type.startsWith("account_sync")) openConnectedAccounts();
+    else if (type.includes("journal")) openWorkspaceSection("Journal");
+    else if (type.includes("research") || type.includes("document")) openWorkspaceSection("Research");
+    else if (type.includes("trade") || type.includes("execution") || type.includes("risk") || type.includes("rebalance")) openWorkspaceSection("Portfolio");
+    else if (type.includes("market") || type.includes("watchlist") || type.includes("price")) openWorkspaceSection("Watchlist");
+    else openWorkspaceSection("Home");
+  }, [markWorkspaceNotificationRead, openWorkspaceSection]);
+
+  useEffect(() => {
+    if (!hasAuthToken()) return undefined;
+    const timer = window.setInterval(() => {
+      void refreshWorkspaceNotifications({ toastNew: true });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshWorkspaceNotifications]);
 
   const refreshApiTradeExecutions = useCallback(async () => {
     if (!hasAuthToken()) return [];
@@ -3063,8 +3091,10 @@ useEffect(() => {
     const incomingNotifications = Array.isArray(notificationsData?.notifications) ? notificationsData.notifications : [];
 
     setCashBalances(nextCashBalances);
-    if (nextCashBalances.USD != null) {
-      setBalance(nextCashBalances.USD);
+    const stableBalance = Object.entries(nextCashBalances)
+      .reduce((sum, [cur, amt]) => USD_STABLE_EQUIVALENTS.has(cur) ? sum + Number(amt || 0) : sum, 0);
+    if (stableBalance > 0) {
+      setBalance(stableBalance);
     }
     setPortfolio(incomingHoldings);
     setActiveOptionsTrades(
@@ -3656,6 +3686,13 @@ const handleOptionTradeClosed = async (tradeId) => {
     [portfolioWithEntry, spotPrices]
   );
 
+  // Unified multi-source portfolio read model (Phase C). Degrades gracefully:
+  // when the backend summary is unavailable, isUnified is false and we fall back
+  // to the legacy locally-computed value below. Preferring the unified total when
+  // present rewires every surface that consumes calculatePortfolioValue at once.
+  const unified = useUnifiedPortfolio();
+  const unifiedPortfolioValue = unified.isUnified ? unified.totalValue : null;
+
 
   const totalOptionsPnL = useMemo(() => {
     return activeOptionsTrades.reduce((total, trade) => {
@@ -3666,7 +3703,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     }, 0);
   }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
-  const calculatePortfolioValue = () => portfolioMarketValue;
+  const calculatePortfolioValue = () =>
+    resolveHeadlineValue({ unified, legacyEquity: portfolioMarketValue });
 
   const calculatePortfolioGain = () => {
     const spotGain = portfolioWithEntry.reduce((total, item) => {
@@ -4119,8 +4157,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       companyRouteAsset,
       ...(Array.isArray(watchlistAssets) ? watchlistAssets : []),
       ...(Array.isArray(assets) ? assets : []),
-      ...(Array.isArray(portfolioWithEntry) ? portfolioWithEntry : []),
-      ...(Array.isArray(searchResults) ? searchResults : [])
+      ...(Array.isArray(portfolioWithEntry) ? portfolioWithEntry : [])
     ].filter(
       (entry) =>
         entry &&
@@ -4137,7 +4174,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       const bScore = [b?.theme, b?.category, b?.role, b?.edge, b?.name].filter(Boolean).length;
       return bScore - aScore;
     })[0];
-  }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry, searchResults]);
+  }, [routeState, companyRouteAsset, watchlistAssets, assets, portfolioWithEntry]);
 
   const isCommodityRouteAsset = Boolean(
     selectedAsset && (selectedAsset.type === "commodity" || selectedAsset.marketType === "commodity" || selectedAsset.category === "commodities")
@@ -4147,9 +4184,10 @@ const handleOptionTradeClosed = async (tradeId) => {
     selectedAsset && (selectedAsset.type === "etf" || selectedAsset.marketType === "etf" || selectedAsset.category === "etfs")
   );
 
-  const sections = ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const sections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
   const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
   const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
+  const [analyticsInitialTab, setAnalyticsInitialTab] = useState(null);
   const [activeSection, setActiveSection] = useState(() => {
     if (typeof window !== "undefined" && isGuestQueryRequested()) {
       const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
@@ -4213,7 +4251,15 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [isSidebarVisuallyCollapsed, viewportWidth]);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
-  const devFullAccess = useMemo(() => isDevFullAccessEnabled(), []);
+  // A signed-in user must never get the guest/dev-full-access demo view.
+  // zenin_auth_user is written to localStorage on every successful sign-in,
+  // so its presence is a TDZ-safe (in-scope) auth signal here. Combined with
+  // the flag being cleared on sign-in (see sign-in handler), this guarantees
+  // authenticated users render live workspace data, not the May-24 snapshot.
+  const devFullAccess = useMemo(() => {
+    try { if (localStorage.getItem("zenin_auth_user")) return false; } catch {}
+    return isDevFullAccessEnabled();
+  }, []);
   const explicitGuestAccess = useMemo(() => isGuestQueryRequested(), []);
   const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
@@ -4799,6 +4845,30 @@ const handleOptionTradeClosed = async (tradeId) => {
           setIsGuestUser(false);
           clearGuestQueryFromAppUrl();
           setAuthUserId(data.user.id != null ? String(data.user.id) : "");
+          // A real sign-in must never inherit the guest / dev-full-access
+          // demo snapshot. Clear the flag so the app renders live workspace
+          // data (not the May-24 guest saved-data view). Sign-out already
+          // clears this; this closes the trap where a tab that clicked
+          // "Continue as Guest" earlier keeps showing demo data after sign-in.
+          try { localStorage.removeItem("zenin_guest_full_access"); } catch {}
+          // A real sign-in must also clear stale guest/localStorage demo data so
+          // the signed-in dashboard never renders inherited demo holdings (AAPL/
+          // BTC) or the $10K default buying power. Sign-out already clears these;
+          // clear them on sign-IN too so the demo snapshot can't bleed through.
+          // Keep auth tokens (zenin_auth_*) and email intact.
+          try {
+            ["zenin_balance", "zenin_portfolio", "zenin_trades", "zenin_active_options_trades", "zenin_connected_accounts", "zenin_watchlist_assets"]
+              .forEach((k) => { try { localStorage.removeItem(k); } catch {} });
+          } catch {}
+          // Reset in-memory demo state so stale holdings/$10K don't flash before
+          // the backend bootstrap (setPortfolio/setBalance/...) repopulates live.
+          try {
+            if (typeof setPortfolio === "function") setPortfolio([]);
+            if (typeof setTrades === "function") setTrades([]);
+            if (typeof setActiveOptionsTrades === "function") setActiveOptionsTrades([]);
+            if (typeof setConnectedAccounts === "function") setConnectedAccounts([]);
+            if (typeof setBalance === "function") setBalance(0);
+          } catch {}
           setAuthDisplayName(String(data.user.displayName || "").trim());
           setCurrentPlan(effectivePlan);
           setCurrentBillingCycle(effectiveBillingCycle);
@@ -4934,9 +5004,14 @@ const handleOptionTradeClosed = async (tradeId) => {
         nextCashBalances[currency] = amount;
       });
       setCashBalances(nextCashBalances);
-      if (nextCashBalances.USD != null) {
-        setBalance(nextCashBalances.USD);
-      }
+      // Treat USD-pegged stablecoins (USD/USDT/USDC) as buying power so a
+      // synced wallet holding USDC (not "USD") populates the headline balance
+      // instead of leaving the $10K default.
+      const STABLES = new Set(["USD", "USDT", "USDC"]);
+      const stableTotal = Object.keys(nextCashBalances)
+        .filter((c) => STABLES.has(c))
+        .reduce((sum, c) => sum + (Number(nextCashBalances[c]) || 0), 0);
+      if (stableTotal > 0) setBalance(stableTotal);
 
       setPortfolio(incomingHoldings);
       setActiveOptionsTrades(
@@ -4963,8 +5038,6 @@ const handleOptionTradeClosed = async (tradeId) => {
       setWorkspaceMembers(Array.isArray(bootstrapData?.workspaceMembers) ? bootstrapData.workspaceMembers : []);
       setWorkspaceInvites(Array.isArray(bootstrapData?.workspaceInvites) ? bootstrapData.workspaceInvites : []);
       setWorkspaceActivity(Array.isArray(bootstrapData?.workspaceActivity) ? bootstrapData.workspaceActivity : []);
-      setTodayBriefing(bootstrapData?.todayBriefing || null);
-      setDecisionThreads(Array.isArray(bootstrapData?.decisionThreads) ? bootstrapData.decisionThreads : []);
       setWorkspaceForm({
         name: String(bootstrapData?.activeWorkspace?.name || "").trim(),
         slug: String(bootstrapData?.activeWorkspace?.slug || "").trim()
@@ -4985,6 +5058,35 @@ const handleOptionTradeClosed = async (tradeId) => {
           lastSyncStatus: account.lastSyncStatus || "idle",
           lastSyncMeta: account.lastSyncMeta || {}
         })));
+      }
+      // Always merge unified-pipeline sources (Hyperliquid / Lighter / SnapTrade)
+      // into Connected accounts so a user with BOTH a workspace account and a
+      // unified source sees every connected source in one place. Dedup by
+      // provider + sourceType so we never double-list. (Fixes the case where a
+      // workspace account existed and unified sources were silently dropped.)
+      if (unified?.isUnified && Array.isArray(unified.sources)) {
+        setConnectedAccounts((prev) => {
+          const base = prev.length ? prev : [];
+          const seen = new Set(base.map((a) => `${a.venueType}-${String(a.provider).toLowerCase()}`));
+          const fromUnified = unified.sources
+            .filter((s) => s.sourceType !== "manual")
+            .map((s) => ({
+              id: `${s.sourceType}-${s.provider}`,
+              provider: s.provider,
+              exchange: s.provider,
+              username: s.label || s.provider,
+              venueType: s.sourceType === "brokerage" ? "broker" : s.sourceType === "wallet" ? "dex" : "cex",
+              apiKeyMasked: "Synced via unified pipeline",
+              providerTrust: { cannotTrade: true, cannotWithdraw: true },
+              syncAvailable: true,
+              connectedAt: null,
+              lastSyncAt: s.lastSyncAt || null,
+              lastSyncStatus: s.status || "synced",
+              lastSyncMeta: {}
+            }))
+            .filter((u) => !seen.has(`${u.venueType}-${u.provider.toLowerCase()}`));
+          return fromUnified.length ? [...base, ...fromUnified] : base;
+        });
       }
       setCategories(
         Array.isArray(bootstrapData?.categories) && bootstrapData.categories.length
@@ -5030,7 +5132,16 @@ const handleOptionTradeClosed = async (tradeId) => {
     secondaryBootstrappedRef.current = true;
     void refreshApiTradeExecutions();
     void refreshWorkspaceNotifications();
+    void loadNotificationPrefs();
   }, [bootstrapError, bootstrapLoading, isGuestUser, refreshApiTradeExecutions, refreshWorkspaceNotifications]);
+
+  // Realtime notifications over SSE — opens after authenticated workspace bootstrap,
+  // recreates on workspace switch/sign-out, merges into the inbox, updates the unread badge.
+  useNotificationStream({
+    activeWorkspaceId: activeWorkspace?.id,
+    isAuthenticated: hasAuthToken(),
+    onEvent: mergeRealtimeNotification
+  });
 
   useEffect(() => {
     if (!isGuestUser) return;
@@ -5056,9 +5167,8 @@ const handleOptionTradeClosed = async (tradeId) => {
   const [showBrokerageFlow, setShowBrokerageFlow] = useState(false);
   const [brokerageAccounts, setBrokerageAccounts] = useState([]);
   const [brokerageSummary, setBrokerageSummary] = useState(null);
-  const [todayBriefing, setTodayBriefing] = useState(null);
-  const [decisionThreads, setDecisionThreads] = useState([]);
-  
+  const [confirmRemoveAccount, setConfirmRemoveAccount] = useState(null);
+
   const [workspaceMembers, setWorkspaceMembers] = useState([]);
   const [workspaceInvites, setWorkspaceInvites] = useState([]);
   const [workspaceActivity, setWorkspaceActivity] = useState([]);
@@ -5816,17 +5926,27 @@ const handleOptionTradeClosed = async (tradeId) => {
         : brokerOptions;
   const selectedProviderId = normalizeProviderId(accountForm.provider);
   const selectedProviderCanSync = SYNC_ENABLED_PROVIDERS.has(selectedProviderId);
-  const selectedProviderIsHyperliquid = selectedProviderId === "hyperliquid";
+  const selectedProviderIsHyperliquid = selectedProviderId === "hyperliquid" || selectedProviderId === "lighter";
   const selectedProviderCapability = buildClientConnectionCapability(accountForm.provider);
   const apiKeyFieldLabel = selectedProviderIsHyperliquid ? "Wallet address" : "API Key / Account ID";
   const apiKeyPlaceholder = selectedProviderIsHyperliquid
     ? "Enter public wallet address"
+    : selectedProviderId === "interactive_brokers"
+    ? "https://localhost:5000 (gateway URL) or IBKR account"
     : "Enter read-only API key or account ID";
-  const showApiSecretField = accountForm.venueType === "cex" && selectedProviderCanSync;
-  const selectedProviderSyncLabel = selectedProviderCanSync ? "Live sync available" : "Metadata only";
+  const showApiSecretField = (accountForm.venueType === "cex" && selectedProviderCanSync)
+    || (accountForm.venueType === "broker" && selectedProviderId === "interactive_brokers");
+  const selectedProviderIsComingSoon = COMING_SOON_PROVIDERS.has(selectedProviderId);
+  const selectedProviderSyncLabel = selectedProviderCanSync
+    ? "Live sync available"
+    : selectedProviderIsComingSoon
+      ? "Coming soon"
+      : "Metadata only";
   const selectedProviderSyncHelp = selectedProviderCanSync
     ? "Zenin can pull holdings, balances, and fills with read-only access."
-    : selectedProviderCapability.supportMessage;
+    : selectedProviderIsComingSoon
+      ? "Live sync for this venue is on the roadmap — connect to reserve your spot; sync arrives in a future release."
+      : selectedProviderCapability.supportMessage;
 
   const onboardingVenuePreview = useMemo(
     () =>
@@ -5887,22 +6007,6 @@ const handleOptionTradeClosed = async (tradeId) => {
       return null;
     } finally {
       setWorkspaceBusy(false);
-    }
-  }, [isGuestUser]);
-
-  const refreshBriefingAndThreads = useCallback(async () => {
-    if (isGuestUser) return;
-    try {
-      const [briefingRes, threadsRes] = await Promise.all([
-        zeninFetch("/daily-briefing"),
-        zeninFetch("/decision-threads")
-      ]);
-      const briefingData = await briefingRes.json().catch(() => ({}));
-      const threadsData = await threadsRes.json().catch(() => ({}));
-      if (briefingRes.ok) setTodayBriefing(briefingData?.briefing || null);
-      if (threadsRes.ok) setDecisionThreads(Array.isArray(threadsData?.items) ? threadsData.items : []);
-    } catch {
-      // no-op
     }
   }, [isGuestUser]);
 
@@ -6101,7 +6205,8 @@ const handleOptionTradeClosed = async (tradeId) => {
         }
 
         // 3. Re-fetch workspace to update PortfolioContext
-        await fetchWorkspace();
+        try { await refreshBootstrap(); } catch { /* refetched on next bootstrap */ }
+        try { await unified.refresh(); } catch { /* unified refresh is best-effort */ }
         if (canSyncProvider) {
           void refreshApiTradeExecutions();
           void refreshWorkspaceNotifications({ toastNew: false });
@@ -6218,7 +6323,8 @@ const handleOptionTradeClosed = async (tradeId) => {
         lastSyncStatus: "success",
         lastSyncMeta: syncPayload
       } : a));
-      void fetchWorkspace();
+      void refreshBootstrap();
+      void unified.refresh();
       void refreshApiTradeExecutions();
       void refreshWorkspaceNotifications({ toastNew: false });
       setSyncingAccountIdsState((prev) => ({ ...prev, [acc.id]: null }));
@@ -6281,7 +6387,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         throw new Error(errData.error || "Failed to remove account");
       }
       setConnectedAccounts((prev) => prev.filter((a) => a.id !== acc.id));
-      void fetchWorkspace();
+      void refreshBootstrap();
       void refreshWorkspacePanel();
     } catch (error) {
       setConnectAccountFeedback(error.message || "Failed to remove account.");
@@ -6885,7 +6991,6 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const sidebarIconMap = {
     Home: HomeIcon,
-    Briefing: BriefingIcon,
     Portfolio: PortfolioIcon,
     Watchlist: WatchlistIcon,
     Research: ResearchIcon,
@@ -6905,6 +7010,118 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   // Command palette (⌘/Ctrl+K)
   const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteLauncher();
+  const globalSearchTriggerRef = useRef(null);
+  const notificationTriggerRef = useRef(null);
+  const accountTriggerRef = useRef(null);
+  const activeShellTriggerRef = useRef(null);
+
+  const returnFocusToShellTrigger = useCallback(() => {
+    window.setTimeout(() => activeShellTriggerRef.current?.focus(), 0);
+  }, []);
+
+  const openGlobalSearch = useCallback(() => {
+    activeShellTriggerRef.current = globalSearchTriggerRef.current;
+    if (viewportWidth <= 960) setIsSidebarCollapsed(true);
+    setIsNotificationCenterOpen(false);
+    setIsNotificationInboxOpen(false);
+    setIsSettingsOpen(false);
+    setCommandPaletteOpen(true);
+  }, [setCommandPaletteOpen, viewportWidth]);
+
+  const closeGlobalSearch = useCallback(() => {
+    setCommandPaletteOpen(false);
+    returnFocusToShellTrigger();
+  }, [returnFocusToShellTrigger, setCommandPaletteOpen]);
+
+  const openNotifications = useCallback(() => {
+    activeShellTriggerRef.current = notificationTriggerRef.current;
+    if (viewportWidth <= 960) setIsSidebarCollapsed(true);
+    setCommandPaletteOpen(false);
+    setIsSettingsOpen(false);
+    setIsNotificationInboxOpen(false);
+    setIsNotificationCenterOpen(true);
+    void refreshWorkspaceNotifications();
+  }, [refreshWorkspaceNotifications, setCommandPaletteOpen, viewportWidth]);
+
+  const closeNotifications = useCallback(() => {
+    setIsNotificationCenterOpen(false);
+    returnFocusToShellTrigger();
+  }, [returnFocusToShellTrigger]);
+
+  // Debounced live asset search for the Command Palette. Fires curated
+  // (instant) + backend (Yahoo stocks, CoinGecko/Hyperliquid crypto) with a
+  // 180ms debounce so we don't hammer external APIs on each keystroke.
+  const paletteSearchTimerRef = useRef(null);
+  const debouncedSearchAssetsLive = useCallback((q) => {
+    return new Promise((resolve) => {
+      if (paletteSearchTimerRef.current) clearTimeout(paletteSearchTimerRef.current);
+      paletteSearchTimerRef.current = setTimeout(() => {
+        resolve(searchAssetsLive(q));
+      }, 180);
+    });
+  }, []);
+
+  const openAllNotifications = useCallback(() => {
+    setIsNotificationCenterOpen(false);
+    setIsNotificationInboxOpen(true);
+    void refreshWorkspaceNotifications();
+  }, [refreshWorkspaceNotifications]);
+
+  const closeAllNotifications = useCallback(() => {
+    setIsNotificationInboxOpen(false);
+    returnFocusToShellTrigger();
+  }, [returnFocusToShellTrigger]);
+
+  const openAccountSettings = useCallback(() => {
+    activeShellTriggerRef.current = accountTriggerRef.current;
+    if (viewportWidth <= 960) setIsSidebarCollapsed(true);
+    setCommandPaletteOpen(false);
+    setIsNotificationCenterOpen(false);
+    setIsNotificationInboxOpen(false);
+    setActiveSettingsCategory("Profile");
+    setIsSettingsOpen(true);
+  }, [setCommandPaletteOpen, viewportWidth]);
+
+  // Open Settings -> Accounts -> Connected Accounts so the user can retry a
+  // failed sync or remove the connection before reconnecting. Used by
+  // account-sync success/failure notification deep-links.
+  const openConnectedAccounts = useCallback(() => {
+    activeShellTriggerRef.current = accountTriggerRef.current;
+    if (viewportWidth <= 960) setIsSidebarCollapsed(true);
+    setCommandPaletteOpen(false);
+    setIsNotificationCenterOpen(false);
+    setIsNotificationInboxOpen(false);
+    setActiveSettingsCategory("Accounts");
+    setExpandedSettingsPanels((prev) => ({ ...prev, "accounts-connected": true }));
+    setIsSettingsOpen(true);
+  }, [setCommandPaletteOpen, viewportWidth]);
+
+  const toggleSidebarFromNavbar = useCallback(() => {
+    if (viewportWidth <= 960 && isSidebarVisuallyCollapsed) {
+      setCommandPaletteOpen(false);
+      setIsNotificationCenterOpen(false);
+      setIsNotificationInboxOpen(false);
+      setIsSettingsOpen(false);
+    }
+    toggleSidebarCollapse();
+  }, [isSidebarVisuallyCollapsed, setCommandPaletteOpen, toggleSidebarCollapse, viewportWidth]);
+
+  useEffect(() => {
+    const handler = (event) => {
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      );
+      if (event.key === "/" && !isTyping) {
+        event.preventDefault();
+        openGlobalSearch();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [openGlobalSearch]);
   const paletteCommands = useMemo(() => {
     const jump = (section) => () => openWorkspaceSection(section);
     const sectionCommands = accessibleSections
@@ -6961,9 +7178,17 @@ const handleOptionTradeClosed = async (tradeId) => {
   // Demo workspace disabled: guests now see the full app (real modules with
   // empty/placeholder states, since they have no backend session).
   const shouldRenderGuestPreview = false;
-  const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0;
+  const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0 && !(unified?.isUnified && (unified.sources?.length || 0) > 0);
   const sharedWatchlistLocked = sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed;
   const hasDeskFeatureAccess = isAdmin || normalizeCurrentPlan(currentPlan) === "desk";
+  const hasProFeatureAccess = isAdmin || ["pro", "desk"].includes(normalizeCurrentPlan(currentPlan));
+  // Gated-section lock: returns the required plan label if the user can't
+  // access `section`, else null. Mirrors nav gating (hasSectionAccessForUser)
+  // so the render block honors the same Pro/Desk tiers.
+  const lockedFor = (section) => {
+    if (hasSectionAccessForUser(currentPlan, isAdmin, section)) return null;
+    return formatPlanLabel(requiredPlanForSection(section) || "pro");
+  };
   const lockedWatchlistPreviewAssets = useMemo(() => (
     sharedWatchlistLocked
       ? mergeAssetPrices(getFallbackAssetsForCategory(activeCategory), assets)
@@ -7048,17 +7273,6 @@ const handleOptionTradeClosed = async (tradeId) => {
     <WorkspaceScopeProvider accounts={connectedAccounts}>
     <TransmissionExplorerProvider onNavigate={handleTransmissionNavigate}>
     <div className={`app-layout ${isSidebarVisuallyCollapsed ? "sidebar-is-collapsed" : ""} ${usesWorkspaceShell ? "app-layout-home" : ""} ${booted ? "ob-booted" : "ob-boot"}`}>
-      {isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
-        <button
-          className="fixed top-[calc(env(safe-area-inset-top,0px)+12px)] left-[max(12px,env(safe-area-inset-left))] z-[1000] flex items-center justify-center p-2 rounded-md bg-[var(--color-surface-hover)] border border-[var(--color-border-medium)] backdrop-blur-md text-[var(--color-text-secondary)] cursor-pointer hover:bg-[var(--color-surface-selected)] transition-colors"
-          onClick={() => setIsSidebarCollapsed(false)}
-          aria-label="Open Menu"
-          aria-expanded={!isSidebarVisuallyCollapsed}
-          aria-controls="zenin-primary-sidebar"
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        </button>
-      )}
       {!isSidebarVisuallyCollapsed && viewportWidth <= 960 && (
         <div
           className="mobile-sidebar-scrim fixed inset-0 z-[1090] bg-black/55 backdrop-blur-[2px]"
@@ -7071,35 +7285,36 @@ const handleOptionTradeClosed = async (tradeId) => {
         <TooltipProvider delayDuration={150}>
         <header className="sidebar-header sidebar-brand-row">
           {!isSidebarVisuallyCollapsed ? (
-            <>
-              <div className="sidebar-brand-left">
-                <div className="sidebar-brand-mark"><ZeninLogo size="sm" showText={false} /></div>
-                <div className="sidebar-brand-type">
-                  <span className="sidebar-brand-name">ZENIN</span>
-                </div>
+            <div className="sidebar-brand-left">
+              <div className="sidebar-brand-mark"><ZeninLogo size="sm" showText={false} /></div>
+              <div className="sidebar-brand-type">
+                <span className="sidebar-brand-name">ZENIN</span>
               </div>
-              <button
-                type="button"
-                className="sidebar-collapse-toggle"
-                onClick={toggleSidebarCollapse}
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-              >
-                <PanelLeftClose size={18} strokeWidth={2} aria-hidden="true" />
-              </button>
-            </>
+            </div>
           ) : (
             <div className="sidebar-collapsed-brand">
               <button
+                type="button"
                 className="sidebar-collapsed-mark"
-                onClick={toggleSidebarCollapse}
+                onClick={toggleSidebarFromNavbar}
                 aria-label="Expand sidebar"
-                title="Expand sidebar"
+                aria-expanded="false"
+                aria-controls="zenin-primary-sidebar"
               >
                 <span className="sidebar-z-monogram" aria-hidden="true">Z</span>
               </button>
             </div>
           )}
+          <button
+            type="button"
+            className="sidebar-collapse-toggle icon-button"
+            onClick={toggleSidebarFromNavbar}
+            aria-label={isSidebarVisuallyCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!isSidebarVisuallyCollapsed}
+            aria-controls="zenin-primary-sidebar"
+          >
+            <Menu aria-hidden="true" />
+          </button>
         </header>
 
         <nav className="sidebar-nav" aria-label="Workspace navigation">
@@ -7220,49 +7435,6 @@ const handleOptionTradeClosed = async (tradeId) => {
           <Tooltip side="right">
             <TooltipTrigger asChild>
               <button
-                className="sidebar-utility-row sidebar-account-row settings-launcher"
-                onClick={() => setIsSettingsOpen(true)}
-                title="Open settings"
-              >
-                <span className="sidebar-utility-left">
-                  <span className="user-icon" aria-hidden="true">
-                    <AccountIcon />
-                  </span>
-                  <span className="sidebar-utility-copy">
-                    <span className="sidebar-theme-label">Account</span>
-                  </span>
-                </span>
-                {!isSidebarVisuallyCollapsed && (
-                  <span className="sidebar-account-chevron">›</span>
-                )}
-              </button>
-            </TooltipTrigger>
-            {isSidebarVisuallyCollapsed ? <TooltipContent>Account</TooltipContent> : null}
-          </Tooltip>
-
-          <Tooltip side="right">
-            <TooltipTrigger asChild>
-              <button
-                className="sidebar-theme-row sidebar-utility-row"
-                onClick={() => setIsProviderHealthOpen(true)}
-                title="Provider Status"
-                aria-label="Open provider status"
-              >
-                <span className="sidebar-utility-left">
-                  <span className="sidebar-theme-icon" aria-hidden="true">⚙</span>
-                  <span className="sidebar-utility-copy">
-                    <span className="sidebar-theme-label">Provider Status</span>
-                  </span>
-                </span>
-                {!isSidebarVisuallyCollapsed ? <span className="sidebar-theme-arrow">›</span> : null}
-              </button>
-            </TooltipTrigger>
-            {isSidebarVisuallyCollapsed ? <TooltipContent>Provider Status</TooltipContent> : null}
-          </Tooltip>
-
-          <Tooltip side="right">
-            <TooltipTrigger asChild>
-              <button
                 className="sidebar-theme-row sidebar-utility-row sidebar-logout-row"
                 onClick={handleLogout}
                 title="Sign out"
@@ -7282,8 +7454,65 @@ const handleOptionTradeClosed = async (tradeId) => {
         </div>
         </TooltipProvider>
       </aside>
+      {isSidebarVisuallyCollapsed && viewportWidth <= 960 ? (
+        <button
+          type="button"
+          className="mobile-sidebar-launcher icon-button"
+          onClick={toggleSidebarFromNavbar}
+          aria-label="Open sidebar navigation"
+          aria-expanded="false"
+          aria-controls="zenin-primary-sidebar"
+        >
+          <Menu aria-hidden="true" />
+        </button>
+      ) : null}
 
-<main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
+      <div className="app-shell-main">
+        <header className="global-top-navbar" aria-label="Workspace controls">
+          <div className="global-top-navbar__context" aria-label={`Current section: ${activeSection}`}>
+            <span>Zenin workspace</span>
+            <strong>{activeSection}</strong>
+          </div>
+          <button
+            ref={globalSearchTriggerRef}
+            type="button"
+            className="global-top-navbar__search"
+            onClick={openGlobalSearch}
+            aria-label="Open global search for assets, pages, and actions"
+            aria-expanded={commandPaletteOpen}
+            aria-controls="zenin-command-palette"
+          >
+            <Search aria-hidden="true" />
+            <span>Search assets, pages, and actions…</span>
+            <kbd aria-hidden="true">⌘K</kbd>
+          </button>
+          <div className="global-top-navbar__actions">
+            <button
+              ref={notificationTriggerRef}
+              type="button"
+              className="global-top-navbar__icon icon-button global-top-navbar__notification"
+              onClick={isNotificationCenterOpen ? closeNotifications : openNotifications}
+              aria-label={isNotificationCenterOpen ? "Close notifications" : (unreadNotificationCount ? `Open notifications, ${unreadNotificationCount} unread` : "Open notifications")}
+              aria-expanded={isNotificationCenterOpen}
+              aria-controls="zenin-notification-center"
+            >
+              <Bell aria-hidden="true" />
+              {unreadNotificationCount ? <span className="global-top-navbar__badge" aria-hidden="true">{unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}</span> : null}
+            </button>
+            <button
+              ref={accountTriggerRef}
+              type="button"
+              className="global-top-navbar__icon icon-button"
+              onClick={openAccountSettings}
+              aria-label="Open account settings"
+              aria-expanded={isSettingsOpen}
+              aria-controls="zenin-workspace-settings"
+            >
+              <AccountIcon aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+        <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
         {routeState.indicatorContext && routeState.type !== "decisions" && routeState.type !== "portfolio" ? (
           <div className="indicator-context-banner route-context-banner">
             <span>Viewing from <b>{String(routeState.indicatorContext).toUpperCase()}</b> · source: {routeState.source || "indicator-modal"}</span>
@@ -7486,6 +7715,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 onSelectAsset={setSelectedAsset}
                 accountMetrics={accountMetrics}
                 calculatePortfolioValue={calculatePortfolioValue}
+                unifiedPortfolio={unified}
                 calculatePortfolioGain={calculatePortfolioGain}
                 balance={balance}
                 openMarketContextOnMount={homeSubview === "market-context"}
@@ -7497,7 +7727,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                   setHomeSubview("metrics");
                 }}
                 onOpenWatchlist={() => openWorkspaceSection("Watchlist")}
-                onOpenAnalytics={() => openWorkspaceSection("Analytics")}
+                onOpenAnalytics={(desk = null) => {
+                  setAnalyticsInitialTab(desk || null);
+                  openWorkspaceSection("Analytics");
+                }}
                 onOpenIntelligence={() => openWorkspaceSection("Intelligence")}
                 onOpenResearch={() => openWorkspaceSection("Research")}
                 brokerageSummary={brokerageSummary}
@@ -7505,27 +7738,6 @@ const handleOptionTradeClosed = async (tradeId) => {
               />
             )}
           </>
-        )}
-
-        {activeSection === "Briefing" && !shouldRenderGuestPreview && (
-          <div className="view-container">
-            {isExplicitGuestMode ? (
-              <GuestContextualSignupNudge section={activeSection} interaction={guestInteraction || "Briefing"} />
-            ) : null}
-            <BriefingModule
-              briefing={todayBriefing}
-              decisionThreads={decisionThreads}
-              isGuestUser={isGuestUser}
-              spotPrices={spotPrices}
-              onGenerate={(briefing) => setTodayBriefing(briefing)}
-              onMarkRead={(briefing) => setTodayBriefing(briefing)}
-              onMarkCompleted={(briefing) => setTodayBriefing(briefing)}
-              onCreateThread={() => {
-                void refreshBriefingAndThreads();
-              }}
-              onOpenSection={openWorkspaceSection}
-            />
-          </div>
         )}
 
         {activeSection === "Watchlist" && (
@@ -7627,99 +7839,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                   onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
                   currentUserId={authUserId}
                   hasDeskFeatureAccess={hasDeskFeatureAccess}
+                  sharedWatchlistLocked={sharedWatchlistLocked}
+                  lockedPlanLabel={lockedWatchlistPlanLabel}
+                  onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
                 />
               </>
             ) : (
               <>
-            <div className="search-section" ref={searchSectionRef}>
-              <div className="search-controls">
-                <input
-                  type="text"
-                  className="search-input"
-                  placeholder={
-                    searchType
-                      ? `Search ${
-                        searchType === "tradfi"
-                          ? "stocks"
-                          : searchType === "commodity"
-                            ? "commodities"
-                            : searchType === "indicator"
-                            ? "for Country"
-                              : searchType === "etf"
-                                ? "ETFs"
-                                : searchType === "currency"
-                                  ? "currencies or FX pairs"
-                                  : "crypto"
-                      }${searchType === "indicator" ? "" : " by symbol or name..."}`
-                      : "Select class and search assets..."
-                  }
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  aria-label="Search assets"
-                />
-                <label className="search-type-select-wrap">
-                  <span>Search in</span>
-                  <div className="search-type-select-shell">
-                    <select
-                      ref={searchTypeSelectRef}
-                      className="search-type-select"
-                      value={searchType}
-                      onChange={(event) => setSearchType(event.target.value)}
-                      aria-label="Choose asset class to search"
-                    >
-                      <option value="tradfi">Stocks</option>
-                      <option value="crypto">Crypto</option>
-                      <option value="indicator">Indicator</option>
-                      <option value="commodity">Commodities</option>
-                      <option value="etf">ETFs</option>
-                      <option value="currency">Currencies</option>
-                    </select>
-                    <span className="search-type-select-caret" aria-hidden="true">▾</span>
-                  </div>
-                </label>
-              </div>
-              {searchTerm && (
-                <div className="search-results">
-                  {searchLoading ? (
-                    <div className="search-loading">Searching...</div>
-                  ) : searchResults.length > 0 ? (
-                    <div className="search-results-list">
-                      {searchResults.map((asset) => {
-                        const inWatchlist = isInWatchlist(asset);
-                        return (
-                          <div
-                            key={getSearchResultKey(asset)}
-                            className="search-result-item clickable"
-                            onClick={() => selectSearchResult(asset)}
-                          >
-                            <div className="search-result-info">
-                              <div className="search-result-symbol">{asset.symbol}</div>
-                              <div className="search-result-name">{asset.name}</div>
-                              <div className="search-result-type">
-                                {asset.type?.toUpperCase()} · {inferAssetCurrency(asset)}
-                              </div>
-                            </div>
-                            <button
-                              className={`star-button ${inWatchlist ? "active" : ""}`}
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                await toggleWatchlistStar(asset);
-                              }}
-                              title={inWatchlist ? "Remove from watchlist" : "Add to watchlist"}
-                            >
-                              ★
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : searchHasSettled ? (
-                    <div className="search-no-results">No results found</div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-
             {watchlistStale && watchlistNotice ? (
               <div className="stale-banner">
                 <span className="status-icon">⚠</span>
@@ -7755,6 +7881,9 @@ const handleOptionTradeClosed = async (tradeId) => {
               onUpdateAlertAssignment={updateWorkspaceAlertAssignment}
               currentUserId={authUserId}
               hasDeskFeatureAccess={hasDeskFeatureAccess}
+              sharedWatchlistLocked={sharedWatchlistLocked}
+              lockedPlanLabel={lockedWatchlistPlanLabel}
+              onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
               onRefresh={handleRefreshWatchlist}
             />
               </>
@@ -7774,6 +7903,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 balance={balance}
                 accountMetrics={accountMetrics}
                 calculatePortfolioValue={calculatePortfolioValue}
+                unifiedPortfolio={unified}
                 calculatePortfolioGain={calculatePortfolioGain}
                 activeOptionsTrades={activeOptionsTrades}
                 setActiveOptionsTrades={setActiveOptionsTrades}
@@ -7815,7 +7945,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                 <SnapTradeConnectionFlow
                   open={showBrokerageFlow}
                   onClose={() => setShowBrokerageFlow(false)}
-                  onConnected={() => loadBrokerageSummary({ silent: true })}
+                  onConnected={async () => {
+                    await loadBrokerageSummary({ silent: true });
+                    await unified.refresh();
+                    void refreshWorkspaceNotifications({ toastNew: false });
+                  }}
                 />
               </Suspense>
 
@@ -7823,6 +7957,13 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
        {activeSection === "Analytics" && !shouldRenderGuestPreview && (
+        <PlanLockOverlay
+          locked={!!lockedFor("Analytics")}
+          requiredPlan={lockedFor("Analytics") || "pro"}
+          title="Analytics"
+          description="Advanced analytics and commodity intelligence are a Pro feature. Upgrade to unlock the full analytics workspace."
+          onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+        >
         <div className="view-container">
           <AnalyticsModule
           backendUrl={BACKEND_URL}
@@ -7837,11 +7978,20 @@ const handleOptionTradeClosed = async (tradeId) => {
           onOpenCommodityTransmission={(symbol) => { try { openTransmissionExplorer(String(symbol || "").toUpperCase()); } catch {} }}
           onAddCommodityToWatchlist={(symbol) => openWatchlistPrompt({ symbol, type: "commodity", marketType: "commodity", category: "commodities" })}
           onOpenResearch={() => openWorkspaceSection("Research", { geo: selectedGeoCode })}
+          initialTab={analyticsInitialTab}
         />
         </div>
+        </PlanLockOverlay>
       )}
 
         {activeSection === "Research" && !shouldRenderGuestPreview && (
+          <PlanLockOverlay
+            locked={!!lockedFor("Research")}
+            requiredPlan={lockedFor("Research") || "pro"}
+            title="Research"
+            description="Catalyst and research context is a Pro feature. Upgrade to unlock the research workspace."
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+          >
           <div className="view-container">
             <ResearchModule
               portfolio={portfolioWithEntry}
@@ -7851,9 +8001,17 @@ const handleOptionTradeClosed = async (tradeId) => {
               onPromoteToDecisionThread={promoteResearchToDecisionThread}
             />
           </div>
+          </PlanLockOverlay>
         )}
 
         {activeSection === "Options" && !shouldRenderGuestPreview && (
+          <PlanLockOverlay
+            locked={!!lockedFor("Options")}
+            requiredPlan={lockedFor("Options") || "desk"}
+            title="Options"
+            description="Options analytics and the strategy simulator are a Desk feature. Upgrade to unlock options trading intelligence."
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+          >
           <OptionsModule
             activeOptionsTrades={activeOptionsTrades}
             setActiveOptionsTrades={setActiveOptionsTrades}
@@ -7863,10 +8021,19 @@ const handleOptionTradeClosed = async (tradeId) => {
             spotPrices={spotPrices}
             showToast={showTradeToast}
           />
+          </PlanLockOverlay>
         )}
 
         {activeSection === "Predictions" && (
+          <PlanLockOverlay
+            locked={!!lockedFor("Predictions")}
+            requiredPlan={lockedFor("Predictions") || "desk"}
+            title="Predictions"
+            description="Prediction markets are a Desk feature. Upgrade to unlock Polymarket and Kalshi integration."
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+          >
           <PredictionMarketModule />
+          </PlanLockOverlay>
         )}
 
         {activeSection === "Intelligence" && !shouldRenderGuestPreview && (
@@ -7882,6 +8049,13 @@ const handleOptionTradeClosed = async (tradeId) => {
         )}
 
         {activeSection === "Journal" && !shouldRenderGuestPreview && (
+          <PlanLockOverlay
+            locked={!!lockedFor("Journal")}
+            requiredPlan={lockedFor("Journal") || "pro"}
+            title="Journal"
+            description="The decision journal and trade review workflow is a Pro feature. Upgrade to capture and review your decisions."
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+          >
           <JournalModule
             trades={trades}
             portfolio={portfolioWithEntry}
@@ -7891,7 +8065,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             multiChainCache={multiChainCache}
             spotPrices={spotPrices}
             journalThreadContext={journalThreadContext}
+            unifiedPortfolio={unifiedPortfolio}
           />
+          </PlanLockOverlay>
         )}
 
         {activeSection === "Tax Estimator" && !shouldRenderGuestPreview && (
@@ -7911,7 +8087,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               </button>
             </div>
             {taxSubView === "tax" ? (
-              <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} />
+              <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} unifiedPortfolio={unifiedPortfolio} />
             ) : (
               <PerpsCalculator />
             )}
@@ -7921,6 +8097,29 @@ const handleOptionTradeClosed = async (tradeId) => {
           </GenericErrorBoundary>
         )}
       </main>
+      </div>
+
+      {viewportWidth <= 960 && (
+      <nav className="mobile-bottom-nav" aria-label="Primary navigation">
+        {MOBILE_PRIMARY_NAV.map((section) => {
+          const isActive = activeSection === section;
+          const enabled = accessibleSections.includes(section);
+          return (
+            <button
+              key={section}
+              type="button"
+              className={`mobile-bottom-nav-item ${isActive ? "active" : ""}`}
+              aria-current={isActive ? "page" : undefined}
+              disabled={!enabled}
+              onClick={() => enabled && openWorkspaceSection(section)}
+            >
+              <span className="mobile-bottom-nav-icon" aria-hidden="true">{sectionIcon(section)}</span>
+              <span className="mobile-bottom-nav-label">{section}</span>
+            </button>
+          );
+        })}
+      </nav>
+      )}
 
       {showContextPanel && (
         <aside className="context-panel" aria-label="Context panel" />
@@ -8008,6 +8207,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
       {isSettingsOpen && (
         <div
+          id="zenin-workspace-settings"
           className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
           role="dialog"
           aria-modal="true"
@@ -8061,7 +8261,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               >
                 {activeSettingsPanel === "Profile" && (
                   <>
-                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
+                    <div className="p-4 mb-6 text-sm text-[var(--color-text-secondary)] bg-[var(--color-surface-elevated)] border border-[var(--color-border-subtle)] rounded-md">{settingsPreviewNote}</div>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
                       <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("profile-email")}>
                         <span>Email Address</span>
@@ -8925,7 +9125,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsPanel === "Workspace" && (
                   <>
-                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">
+                    <div className="p-4 mb-6 text-sm text-[var(--color-text-secondary)] bg-[var(--color-surface-elevated)] border border-[var(--color-border-subtle)] rounded-md">
                       Desk workspaces turn Zenin into a shared operating surface: members, seats, shared account ingestion, and recent desk activity all live here.
                     </div>
 
@@ -9156,7 +9356,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
                 {activeSettingsPanel === "Accounts" && (
                   <>
-                    <div className="p-4 mb-6 text-sm text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-md">{settingsPreviewNote}</div>
+                    <div className="p-4 mb-6 text-sm text-[var(--color-text-secondary)] bg-[var(--color-surface-elevated)] border border-[var(--color-border-subtle)] rounded-md">{settingsPreviewNote}</div>
                     <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
                       <button className="flex w-full justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] border-none cursor-pointer" onClick={() => toggleSettingsPanel("accounts-connected")}>
                         <span>Connected Accounts</span>
@@ -9172,10 +9372,10 @@ const handleOptionTradeClosed = async (tradeId) => {
                             >
                               Connect brokerage
                             </button>
-                            <span className="text-[12px] text-[var(--color-text-secondary)]">Read-only SnapTrade link. Zenin cannot trade or withdraw.</span>
+                            <span className="text-[12px] text-[var(--color-text-secondary)]">Read-only SnapTrade brokerage/aggregator link where supported. Zenin cannot trade or withdraw.</span>
                           </div>
                           {connectedAccounts.length === 0 ? (
-                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No saved CEX, DEX, brokerage, or prediction market sources yet. Add one read-only source to preserve portfolio context; only supported providers can live sync today.</p>
+                            <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No saved CEX, DEX, brokerage, or prediction market sources yet. Add a read-only API key, watch-only address, or SnapTrade link to preserve portfolio context; only supported providers can live sync today.</p>
                           ) : (
                             <div className="connected-accounts-list">
                               {connectedAccounts.map((acc) => {
@@ -9214,13 +9414,42 @@ const handleOptionTradeClosed = async (tradeId) => {
                                             {actionState === "verifying" ? "Verifying…" : "Re-verify scope"}
                                           </button>
                                         )}
-                                        <button
-                                          type="button"
-                                          className="settings-mini-btn settings-mini-btn-danger"
-                                          onClick={() => handleAccountRemove(acc)}
-                                        >
-                                          Remove
-                                        </button>
+                                        {confirmRemoveAccount?.id === acc.id ? (
+                                          <div className="connected-account-confirm" role="alertdialog" aria-label="Confirm remove account">
+                                            <p className="connected-account-confirm-copy">
+                                              Remove <strong>{acc.exchange || acc.venueType || "this account"}</strong>?
+                                              Synced holdings, trades, fills, journal entries, and related notifications for this source will be deleted. Manually entered data is kept.
+                                            </p>
+                                            <div className="connected-account-confirm-actions">
+                                              <button
+                                                type="button"
+                                                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+                                                onClick={() => setConfirmRemoveAccount(null)}
+                                              >
+                                                Cancel
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="settings-mini-btn settings-mini-btn-danger"
+                                                onClick={() => {
+                                                  const pending = confirmRemoveAccount;
+                                                  setConfirmRemoveAccount(null);
+                                                  handleAccountRemove(pending);
+                                                }}
+                                              >
+                                                Remove account &amp; synced data
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            className="settings-mini-btn settings-mini-btn-danger"
+                                            onClick={() => setConfirmRemoveAccount(acc)}
+                                          >
+                                            Remove
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                     <p className="connected-account-trust-meta">
@@ -9278,6 +9507,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Email notifications</span>
                           <Switch
+                            className="settings-notification-switch"
                             checked={effectiveEmailNotificationsEnabled}
                             disabled={!canUseEmailNotifications}
                             onCheckedChange={(v) => {
@@ -9288,6 +9518,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Browser notifications</span>
                           <Switch
+                            className="settings-notification-switch"
                             checked={effectiveBrowserNotificationsEnabled}
                             disabled={!browserNotificationsSupported || browserNotificationsBlocked}
                             onCheckedChange={(v) => {
@@ -9298,6 +9529,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Price alerts</span>
                           <Switch
+                            className="settings-notification-switch"
                             checked={preferences.notifyPriceAlerts}
                             onCheckedChange={(v) => {
                               void handleNotificationPreferenceToggle("notifyPriceAlerts", v);
@@ -9305,8 +9537,9 @@ const handleOptionTradeClosed = async (tradeId) => {
                           />
                         </label>
                         <label className="settings-toggle-row">
-                          <span>Order executions</span>
+                          <span>Trade &amp; account activity</span>
                           <Switch
+                            className="settings-notification-switch"
                             checked={preferences.notifyOrderEvents}
                             onCheckedChange={(v) => {
                               void handleNotificationPreferenceToggle("notifyOrderEvents", v);
@@ -9316,6 +9549,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <label className="settings-toggle-row">
                           <span>Market news digests</span>
                           <Switch
+                            className="settings-notification-switch"
                             checked={preferences.notifyNews}
                             onCheckedChange={(v) => {
                               void handleNotificationPreferenceToggle("notifyNews", v);
@@ -9332,6 +9566,13 @@ const handleOptionTradeClosed = async (tradeId) => {
                           Browser permission: {browserNotificationStatusLabel}
                           {!browserNotificationsSupported ? " · Not supported in this browser" : ""}
                         </p>
+                        <h4 className="settings-section-subtitle" style={{ marginTop: "18px" }}>
+                          Popup granularity
+                        </h4>
+                        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">
+                          Fine-tune which in-app popups appear for synced activity (separate from the delivery channels above).
+                        </p>
+                        <NotificationPreferences />
                         <div className="flex gap-3 mt-2" style={{ marginTop: "12px" }}>
                           <button
                             className={cn(buttonVariants({ variant: "secondary" }))}
@@ -9387,7 +9628,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       <div className="connect-account-kicker">Secure setup</div>
                       <h2>{connectPromptMode === "onboarding" ? "Add your first source" : "Add another source"}</h2>
                       <p>
-                        Save read-only credentials or watch-only addresses for workspace context. Supported providers can sync holdings and fills now; the rest are stored as metadata until adapters ship.
+                        Save centralized-exchange read-only API keys, Hyperliquid watch-only addresses, or brokerage links through SnapTrade where supported. Supported providers can sync holdings and fills now; the rest are stored as metadata until adapters ship.
                       </p>
                       <div className="connect-account-trust-grid">
                         <div className="connect-account-trust-card">
@@ -9398,7 +9639,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                         <div className="connect-account-trust-card">
                           <span>Coverage</span>
                           <strong>Sync where supported</strong>
-                          <em>Binance, Bybit, and Hyperliquid can import data today. Other venues are metadata only.</em>
+                          <em>Binance, Bybit, Hyperliquid, and IBKR can import data today. Other venues are metadata only.</em>
                         </div>
                       </div>
                       <div className="connect-account-security-list">
@@ -9557,9 +9798,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                               setConnectAccountFeedback("");
                             }}
                           >
-                            {venueOptions.map((venue) => (
-                              <option key={venue} value={venue}>{venue}</option>
-                            ))}
+                            {venueOptions.map((venue) => {
+                              const isComingSoon = COMING_SOON_PROVIDERS.has(normalizeProviderId(venue));
+                              return (
+                                <option key={venue} value={venue} disabled={isComingSoon}>
+                                  {venue}{isComingSoon ? " — Soon" : ""}
+                                </option>
+                              );
+                            })}
                           </select>
                         </label>
                         <label className="flex flex-col gap-2 w-full max-w-md">
@@ -9648,17 +9894,37 @@ const handleOptionTradeClosed = async (tradeId) => {
           </div>
         </div>
       )}
+      <NotificationCenter
+        open={isNotificationCenterOpen}
+        onOpenChange={(open) => {
+          if (open) setIsNotificationCenterOpen(true);
+          else closeNotifications();
+        }}
+        notifications={workspaceNotifications}
+        allOpen={isNotificationInboxOpen}
+        onAllOpenChange={(open) => {
+          if (open) openAllNotifications();
+          else closeAllNotifications();
+        }}
+        unreadCount={unreadNotificationCount}
+        loading={notificationCenterLoading}
+        error={notificationCenterError}
+        onRefresh={() => { void refreshWorkspaceNotifications(); }}
+        onMarkRead={(notification) => { void markWorkspaceNotificationRead(notification); }}
+        onMarkAllRead={() => { void markAllWorkspaceNotificationsRead(); }}
+        onNavigate={(notification) => { void navigateFromWorkspaceNotification(notification); }}
+      />
       <CommandPalette
         open={commandPaletteOpen}
-        onClose={() => setCommandPaletteOpen(false)}
+        onClose={closeGlobalSearch}
         commands={paletteCommands}
-        assetSearch={searchAssets}
+        assetSearch={debouncedSearchAssetsLive}
         onSelectAsset={(asset) => {
           if (!asset) return;
           const kind = String(asset.kind || "").toLowerCase();
           const sym = String(asset.symbol || "").toUpperCase();
           if (kind === "commodity") openCommodityResearch({ symbol: sym });
-          else if (kind === "company") openCompanyProfile({ symbol: sym });
+          else if (kind === "company" || kind === "stock") openCompanyProfile({ symbol: sym, name: asset.name, type: "stock" });
           else setSelectedAsset({ symbol: sym, type: kind, marketType: kind, category: asset.category });
         }}
       />
