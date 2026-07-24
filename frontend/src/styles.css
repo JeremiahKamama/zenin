@@ -37073,6 +37073,11 @@ body.light-theme-active .journal-review-mode-banner {
   color: var(--color-text-muted);
   font-style: italic;
 }
+.unified-source-manual-excluded {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  opacity: 0.8;
+}
 .unified-source-sync {
   margin-left: auto;
   padding: 4px 10px;
@@ -37243,7 +37248,7 @@ body.light-theme-active .journal-review-mode-banner {
 .pa-warn { font-size: 12px; color: var(--color-text-primary); }
 .pa-warn-tag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-secondary); margin-right: 6px; }
 .pa-warn-note { color: var(--color-text-muted); }
-.pa-list-wrap { border: 1px solid var(--workspace-border); border-radius: var(--workspace-radius); overflow: hidden; }
+.pa-list-wrap { border: 1px solid var(--workspace-border); border-radius: var(--workspace-radius); overflow: auto; max-height: 340px; }
 .pa-list-head { padding: 8px 12px; font-size: 12px; color: var(--color-text-muted); border-bottom: 1px solid var(--workspace-border); }
 .pa-empty { padding: 18px 12px; color: var(--color-text-muted); font-size: 13px; }
 .pa-list { list-style: none; margin: 0; padding: 0; }
@@ -38036,7 +38041,8 @@ section.portfolio-command-analysis .portfolio-command-tabs .portfolio-command-ta
 }
 
 .portfolio-command-table-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 520px;
   position: relative;
 }
 
@@ -48010,23 +48016,25 @@ body.light-theme-active {
 
 .global-top-navbar__badge {
   position: absolute;
-  top: -1px;
-  right: -1px;
-  display: grid;
-  min-width: 20px;
-  height: 20px;
+  top: -6px;
+  right: -10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
   padding: 0 5px;
-  place-items: center;
   border: 2px solid var(--color-bg-base);
-  border-radius: var(--radius-full);
+  border-radius: 9px;
   background: var(--color-danger);
   color: var(--color-bg-base);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: var(--fw-bold);
   line-height: 1;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
   z-index: 2;
 }
 
@@ -48279,4 +48287,66 @@ body.light-theme-active {
   .global-top-navbar__icon {
     transition: none !important;
   }
+}
+
+/* PlanLockOverlay — monochrome tier-gate (Brandv2). No color, no fabricated capability. */
+.plan-lock {
+  position: relative;
+}
+.plan-lock__content {
+  filter: grayscale(1) blur(1px);
+  opacity: 0.35;
+  pointer-events: none;
+  user-select: none;
+}
+.plan-lock__scrim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-scrim, rgba(10, 10, 10, 0.55));
+}
+.plan-lock__card {
+  max-width: 360px;
+  padding: 20px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface, #14151a);
+  text-align: center;
+}
+.plan-lock__badge {
+  display: inline-block;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-muted, #9aa0a6);
+}
+.plan-lock__title {
+  margin: 12px 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.plan-lock__desc {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--color-muted, #9aa0a6);
+  line-height: 1.5;
+}
+.plan-lock__cta {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-strong, #3a3d44);
+  background: var(--color-surface-raised, #1c1e24);
+  color: var(--color-text, #f2f3f5);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plan-lock__cta:hover {
+  border-color: var(--color-text, #f2f3f5);
 }

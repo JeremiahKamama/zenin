@@ -6,9 +6,9 @@ import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/acco
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { chartColors } from "../utils/chartTheme";
 import { formatCurrency, getCurrencySymbol, convertToUSD, convertFromUSD, DEFAULT_FX_RATES } from "../utils/currencyUtils";
-import { PortfolioDrillDown } from "./PortfolioDrillDown";
 import { PortfolioActivity } from "./PortfolioActivity";
 import { deriveBrokerageBadge, formatLastSync, maskAccountNumber, findDuplicateSymbols } from "../utils/brokerageStatus.js";
+import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "../utils/portfolioHeadline";
 import { classifyPortfolioInstrument, PORTFOLIO_BUCKETS } from "../utils/portfolioInstrumentClassifier.js";
 import { formatPercent } from "../utils/format";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
@@ -191,6 +191,44 @@ export function PortfolioModule({
   const [showDiversificationModal, setShowDiversificationModal] = useState(false);
   const [holdingsSortBy, setHoldingsSortBy] = useState("value");
   const [selectedHolding, setSelectedHolding] = useState(null);
+
+  // Unified read model is the single source of truth for positions when active
+  // (covers Hyperliquid + brokerage + exchanges + manual). Falls back to the legacy
+  // `portfolio` prop otherwise. Declared early so downstream memos can consume it.
+  const displayPositions = useMemo(
+    () => resolveDisplayPositions({ unified: unifiedPortfolio, legacyPortfolio: portfolio }),
+    [unifiedPortfolio, portfolio]
+  );
+
+  // Unified transactions (Hyperliquid + brokerage + exchanges + manual) mapped to
+  // the legacy trade/execution shape the Portfolio sub-sections expect. Falls back
+  // to the legacy `trades` / `apiTradeExecutions` props otherwise.
+  const displayTransactions = useMemo(() => {
+    if (unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0) {
+      return unifiedPortfolio.transactions.map((t) => ({
+        id: t.executedAt ? `${t.symbol}-${t.executedAt}` : `${t.symbol}-${Math.random()}`,
+        symbol: t.symbol,
+        asset: t.symbol,
+        side: String(t.side || t.type || "").toUpperCase() === "SELL" ? "sell" : "buy",
+        type: t.type || t.side || "fill",
+        quantity: Number(t.quantity || 0),
+        price: Number(t.unitPrice || 0),
+        notional: Number(t.notional || 0),
+        fee: Number(t.fee || 0),
+        feeCurrency: t.currency || "USD",
+        currency: t.currency || "USD",
+        executedAt: t.executedAt,
+        date: t.executedAt,
+        platform: t.provider || t.sourceType || "unknown",
+        provider: t.provider || t.sourceType || "unknown",
+        sourceAccountId: t.sourceType || "",
+        marketType: t.sourceType === "wallet" ? "perp" : "spot",
+        source: "unified"
+      }));
+    }
+    return Array.isArray(trades) ? trades : [];
+  }, [unifiedPortfolio, trades]);
+
   const [benchmarkSymbol, setBenchmarkSymbol] = useState("SPY");
   // Immutable snapshot history (single source of truth for the Performance
   // Curve). Fetched from GET /api/history/range — never reconstructed from trades.
@@ -257,10 +295,10 @@ export function PortfolioModule({
   }, [trades, assetClassFilter]);
 
   const apiExecutionRows = useMemo(() => {
-    const rows = Array.isArray(apiTradeExecutions) ? apiTradeExecutions : [];
-    return rows
-      .filter((execution) => execution && execution.source === "api_connection")
-      .filter((execution) => String(execution.platform || "").trim())
+    const isUnified = unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0;
+    const rows = (isUnified ? displayTransactions : (Array.isArray(apiTradeExecutions) ? apiTradeExecutions : []))
+      .filter((execution) => isUnified || String(execution.platform || execution.provider || execution.source || "").trim())
+      .filter((execution) => String(execution.platform || execution.provider || "").trim())
       .filter((execution) => {
         if (assetClassFilter === "all") return true;
         const marketType = String(execution.marketType || "").toLowerCase();
@@ -278,15 +316,18 @@ export function PortfolioModule({
         return String(execution.symbol || "").toUpperCase().includes(symbol);
       })
       .sort((a, b) => new Date(b.executedAt || 0).getTime() - new Date(a.executedAt || 0).getTime());
-  }, [apiTradeExecutions, assetClassFilter, historyFilters]);
+  }, [apiTradeExecutions, displayTransactions, unifiedPortfolio, assetClassFilter, historyFilters]);
 
   const executionPlatformOptions = useMemo(() => {
-    return [...new Set((Array.isArray(apiTradeExecutions) ? apiTradeExecutions : [])
-      .map((execution) => execution?.platform)
+    const execSource = (unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0)
+      ? displayTransactions
+      : (Array.isArray(apiTradeExecutions) ? apiTradeExecutions : []);
+    return [...new Set(execSource
+      .map((execution) => execution?.platform || execution?.provider)
       .filter(Boolean))]
       .sort()
       .map((platform) => ({ value: platform, label: formatVenueLabel(platform) }));
-  }, [apiTradeExecutions]);
+  }, [apiTradeExecutions, displayTransactions, unifiedPortfolio]);
 
   const recentExecutionNotifications = useMemo(() => {
     return (Array.isArray(workspaceNotifications) ? workspaceNotifications : [])
@@ -300,7 +341,8 @@ export function PortfolioModule({
   const filteredPortfolio = useMemo(() => {
     // When the unified read model is active and connected sources have data,
     // the legacy manual holdings are stale — exclude them from display.
-    if (unifiedPortfolio?.isUnified && (unifiedPortfolio.sources || []).some((s) => s.sourceType !== "manual" && s.positionCount > 0)) {
+    // Backend already strips manual from unified.positions; this is a thin guard.
+    if (hasConnectedSources(unifiedPortfolio)) {
       return [];
     }
     if (assetClassFilter === "all") return portfolio;
@@ -347,10 +389,8 @@ export function PortfolioModule({
     };
   }, [filteredPortfolio, portfolioValue, brokerageSummary]);
 
-// ✅ 2) compute metrics next — when unified is active, suppress stale legacy balance
-const effectiveBalance = unifiedPortfolio?.isUnified && (unifiedPortfolio.sources || []).some((s) => s.sourceType !== "manual" && s.positionCount > 0)
-  ? 0
-  : balance;
+// When unified is active with connected sources, suppress stale legacy balance.
+const effectiveBalance = hasConnectedSources(unifiedPortfolio) ? 0 : balance;
 const derivedAccountMetrics = useMemo(
   () =>
     calculateAccountSnapshot({
@@ -362,8 +402,9 @@ const derivedAccountMetrics = useMemo(
 );
 
 const activeAccountMetrics = accountMetrics || derivedAccountMetrics;
-const initialBalance =
-  Number(activeAccountMetrics?.initialBalance) || INITIAL_ACCOUNT_BALANCE;
+const initialBalance = activeAccountMetrics?.initialBalance != null
+  ? Number(activeAccountMetrics.initialBalance)
+  : (Number.isFinite(currentAccountEquity) && currentAccountEquity > 0 ? currentAccountEquity : INITIAL_ACCOUNT_BALANCE);
 
 const tradeTimeline = Array.isArray(activeAccountMetrics?.tradeTimeline)
   ? activeAccountMetrics.tradeTimeline
@@ -411,10 +452,8 @@ const totalAccountEquity =
 
 // Prefer the unified multi-source total when available (Hyperliquid perps +
 // cash). Falls back to the legacy snapshot only when unified is absent.
-const currentAccountEquity =
-  unifiedPortfolio?.isUnified && Number.isFinite(Number(unifiedPortfolio.totalValue))
-    ? Number(unifiedPortfolio.totalValue)
-    : totalAccountEquity;
+// Shared resolver so Home + Portfolio never disagree on the headline.
+const currentAccountEquity = resolveHeadlineValue({ unified: unifiedPortfolio, legacyEquity: totalAccountEquity });
 
 const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "var(--color-success)" : "var(--color-danger)") : "var(--color-data-primary)";
@@ -422,15 +461,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
   // Fetch immutable daily snapshots for the selected interval. Prefer unified
   // snapshots (connected sources) over the legacy portfolio_daily_snapshots.
   useEffect(() => {
-    // When the unified read model has daily snapshots from connected sources,
-    // use them directly — they reflect the real account history.
-    if (unifiedPortfolio?.isUnified && (unifiedPortfolio.snapshots || []).length > 0) {
+    // Unified read model wins when it has timeline history (snapshots or fill curve).
+    // Shared selector keeps Home + Portfolio in agreement on the timeline source.
+    const unifiedTimeline = resolvePerformanceTimeline({ unified: unifiedPortfolio, legacyTimeline: [] });
+    if (unifiedTimeline.length > 0 && (unifiedPortfolio.snapshots || []).length > 0) {
       const rows = (unifiedPortfolio.snapshots || [])
-        .filter((s) => s.snapshotDate && Number.isFinite(s.portfolioValue))
+        .filter((s) => (s.snapshotDate || s.snapshot_date) && Number.isFinite(Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value)))
         .map((s) => ({
-          date: s.snapshotDate,
-          ts: new Date(`${s.snapshotDate}T00:00:00Z`).getTime(),
-          portfolioValue: Number(s.portfolioValue),
+          date: s.snapshotDate || s.snapshot_date,
+          ts: new Date(`${s.snapshotDate || s.snapshot_date}T00:00:00Z`).getTime(),
+          portfolioValue: Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value),
           cash: 0,
           investedCapital: 0,
           dailyPnl: 0,
@@ -443,6 +483,26 @@ const isProfitable = currentAccountEquity >= initialBalance;
           source: "unified"
         }))
         .filter((r) => Number.isFinite(r.ts))
+        .sort((a, b) => a.ts - b.ts);
+      setSnapshotHistory(rows);
+      setHistoryStatus(rows.length ? "ready" : "empty");
+      return;
+    }
+
+    // Fall back to fill-reconstructed curve when no EOD snapshots exist yet.
+    // Shows full trading history since first trade, not just since first snapshot.
+    if (unifiedPortfolio?.isUnified && Array.isArray(unifiedPortfolio.fillEquityCurve) && unifiedPortfolio.fillEquityCurve.length > 1) {
+      const rows = unifiedPortfolio.fillEquityCurve
+        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity))
+        .map((p) => ({
+          date: new Date(p.t).toISOString().slice(0, 10),
+          ts: Number(p.t),
+          portfolioValue: Number(p.equity),
+          cash: 0, investedCapital: 0, dailyPnl: 0, dailyReturn: 0,
+          benchmarkValue: null, benchmarkReturn: null,
+          deposits: 0, withdrawals: 0, estimated: false,
+          source: "fill_curve"
+        }))
         .sort((a, b) => a.ts - b.ts);
       setSnapshotHistory(rows);
       setHistoryStatus(rows.length ? "ready" : "empty");
@@ -470,11 +530,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, [chartInterval, unifiedPortfolio?.isUnified, unifiedPortfolio?.snapshots]);
 
   // Base value = first snapshot's portfolio value (for %/PnL rebasing). Falls
-  // back to initialBalance when history is empty.
+  // back to currentAccountEquity when history is empty — never $10K.
   const historyBaseValue = useMemo(() => {
     if (snapshotHistory.length > 0) return snapshotHistory[0].portfolioValue;
-    return initialBalance;
-  }, [snapshotHistory, initialBalance]);
+    return Number.isFinite(currentAccountEquity) && currentAccountEquity > 0 ? currentAccountEquity : 0;
+  }, [snapshotHistory, currentAccountEquity]);
 
   const chartData = useMemo(() => {
     // Equity curve from immutable snapshots at REAL dates (no fake buckets).
@@ -523,7 +583,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const type = String(item?.type || "").trim().toLowerCase();
       return ["stock", "stocks", "equity", "etf", "etfs"].includes(type) || !!item?.theme;
     });
-    const source = stockLikeHoldings.length > 0 ? stockLikeHoldings : (Array.isArray(portfolio) ? portfolio : []);
+    const source = Array.isArray(displayPositions) && displayPositions.length > 0
+      ? displayPositions
+      : (stockLikeHoldings.length > 0 ? stockLikeHoldings : (Array.isArray(portfolio) ? portfolio : []));
     const totalExposure = source.reduce(
       (sum, item) => sum + ((Number(item?.price) || 0) * (Number(item?.quantity) || 0)),
       0
@@ -552,13 +614,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
         weight: totalExposure > 0 ? (row.value / totalExposure) * 100 : 0
       }))
       .sort((a, b) => b.value - a.value);
-  }, [portfolio]);
+  }, [displayPositions]);
 
   const attributionRows = useMemo(() => {
     const bySector = new Map();
     const byRegion = new Map();
     const byFactor = new Map();
-    (Array.isArray(filteredPortfolio) ? filteredPortfolio : []).forEach((item) => {
+    (Array.isArray(displayPositions) ? displayPositions : []).forEach((item) => {
       const qty = Number(item?.quantity || 0);
       const px = Number(item?.price || 0);
       const value = qty * px;
@@ -577,7 +639,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       region: toRows(byRegion, "Region"),
       factor: toRows(byFactor, "Factor")
     };
-  }, [portfolio]);
+  }, [displayPositions]);
 
   const exposureRows = useMemo(() => {
     const groups = {
@@ -586,7 +648,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       currency: new Map()
     };
     let total = 0;
-    (Array.isArray(portfolio) ? portfolio : []).forEach((item) => {
+    (Array.isArray(displayPositions) ? displayPositions : []).forEach((item) => {
       const value = (Number(item?.price || 0) * Number(item?.quantity || 0));
       total += value;
       const sector = String(item?.theme || item?.sector || "Unclassified");
@@ -606,7 +668,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         }))
         .sort((a, b) => b.weight - a.weight);
     return [...normalize(groups.sector, "Sector"), ...normalize(groups.country, "Country"), ...normalize(groups.currency, "Currency")];
-  }, [portfolio]);
+  }, [displayPositions]);
 
   // Rec 10 — derive portfolio gaps from current exposure vs the ETF
   // seed's exposure universe. Missing = seed exposure token not present
@@ -778,7 +840,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, [trades]);
 
   const combinedHoldings = useMemo(() => {
-    const spotRows = (Array.isArray(filteredPortfolio) ? filteredPortfolio : []).map((item, index) => {
+    const spotRows = (Array.isArray(displayPositions) ? displayPositions : []).map((item, index) => {
       const currency = item?.currency || item?.quotedCurrency || "USD";
       // MyStocks (African) rows carry priceUsd from the backend; prefer it so a
       // mixed-currency portfolio values correctly without relying on possibly
@@ -832,7 +894,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     });
 
     return [...spotRows, ...optionRows].sort((a, b) => (b.positionValue || 0) - (a.positionValue || 0));
-  }, [filteredPortfolio, filteredOptionsTrades, multiChainCache, spotPrices]);
+  }, [displayPositions, filteredOptionsTrades, multiChainCache, spotPrices]);
 
   const sortedHoldings = useMemo(() => {
     const score = (row) => {
@@ -1137,7 +1199,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
   }, [sortedHoldings, stablecoinSymbols]);
 
   const recentActivityRows = useMemo(() => {
-    const rows = (Array.isArray(trades) ? trades : [])
+    const useUnified = unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0;
+    const sourceRows = useUnified ? displayTransactions : (Array.isArray(trades) ? trades : []);
+    const rows = sourceRows
       .map((trade) => {
         const ts = new Date(trade?.executedAt || trade?.date || 0).getTime();
         const qty = Number(trade?.quantity || 0);
@@ -1155,8 +1219,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         };
       })
       .filter((row) => Number.isFinite(row.ts) && row.ts > 0)
-      .sort((a, b) => b.ts - a.ts)
-      .slice(0, 4);
+      .sort((a, b) => b.ts - a.ts);
 
     const now = Date.now();
     return rows.map((row) => {
@@ -1164,7 +1227,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const when = hours >= 24 ? `${Math.floor(hours / 24)}d ago` : hours >= 1 ? `${hours}h ago` : "just now";
       return { ...row, when };
     });
-  }, [trades]);
+  }, [trades, displayTransactions, unifiedPortfolio]);
 
   const feeDashboard = useMemo(() => {
     const normalizeSummary = (summary) => {
@@ -1200,7 +1263,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
     };
 
     const fallbackSummary = (() => {
-      const feeTrades = (Array.isArray(trades) ? trades : []).filter((trade) => Number(trade?.fee || 0) > 0);
+      const useUnified = unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0;
+      const feeTrades = (useUnified ? displayTransactions : (Array.isArray(trades) ? trades : [])).filter((trade) => Number(trade?.fee || 0) > 0);
       const currencyMap = new Map();
       const platformMap = new Map();
       const sourceMap = new Map();
@@ -1806,6 +1870,57 @@ const isProfitable = currentAccountEquity >= initialBalance;
     savedPortfolioQueue.length +
     savedPortfolioHistory.length +
     savedPortfolioExports.length;
+  // When unified transactions are available, map them into the execution shape
+  // that Execution/Events/Costs modules consume — so Hyperliquid fills appear
+  // in all intelligence tabs, not just Activity.
+  const unifiedExecutions = useMemo(() => {
+    const txns = unifiedPortfolio?.isUnified ? (unifiedPortfolio.transactions || []) : [];
+    if (!txns.length) return [];
+    return txns.map((t, i) => ({
+      symbol: t.symbol,
+      side: t.side,
+      quantity: Number(t.quantity || 0),
+      notional: Number(t.notional || 0),
+      price: Number(t.unitPrice || 0),
+      feeAmount: Number(t.fee || 0),
+      feeCurrency: t.currency || "USD",
+      platform: t.provider || "hyperliquid",
+      executedAt: t.executedAt,
+      marketType: t.type || "perp",
+      platformFillId: null,
+      id: `${t.sourceType || t.provider || "fill"}-${i}`,
+      source: t.sourceType || "wallet"
+    }));
+  }, [unifiedPortfolio?.isUnified, unifiedPortfolio?.transactions]);
+  const effectiveExecutions = unifiedExecutions.length > 0 ? unifiedExecutions : apiTradeExecutions;
+
+  // Derive a fee summary from unified transactions so Costs tab has data.
+  const unifiedFeeSummary = useMemo(() => {
+    if (!unifiedExecutions.length) return null;
+    let totalFees = 0, totalNotional = 0;
+    const byVenue = new Map();
+    unifiedExecutions.forEach((e) => {
+      totalFees += Number(e.feeAmount || 0);
+      totalNotional += Number(e.notional || 0);
+      const venue = e.platform || "unknown";
+      const v = byVenue.get(venue) || { venueName: venue, fills: 0, notional: 0, fees: 0 };
+      v.fills += 1;
+      v.notional += Number(e.notional || 0);
+      v.fees += Number(e.feeAmount || 0);
+      byVenue.set(venue, v);
+    });
+    return {
+      totalFees,
+      totalNotional,
+      blendedFeeBps: totalNotional ? (totalFees / totalNotional) * 10000 : 0,
+      venueComparison: Array.from(byVenue.values()).map((v) => ({
+        ...v,
+        avgFeeBps: v.notional ? (v.fees / v.notional) * 10000 : 0
+      })),
+      updatedAt: new Date().toISOString()
+    };
+  }, [unifiedExecutions]);
+  const effectiveFeeDashboard = unifiedFeeSummary || feeDashboard;
   const hasConnectedPortfolioAccounts =
     (Array.isArray(connectedAccounts) && connectedAccounts.length > 0) ||
     (Array.isArray(brokerageAccounts) && brokerageAccounts.length > 0) ||
@@ -2377,7 +2492,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 { key: "feeAmount", header: "Fee", sortable: false, cell: (e) => e.feeAmount ? `${formatExecutionQuantity(e.feeAmount)} ${e.feeCurrency}` : "N/A" },
                 { key: "source", header: "Source", sortable: false, cell: () => <span>API connection</span> },
               ]}
-              data={apiExecutionRows.slice(0, 5)}
+              data={apiExecutionRows.slice(0, 100)}
               getRowId={(e) => `${e.platform}-${e.platformFillId || e.id}`}
               onRowClick={(e) => setSelectedExecution(e)}
               emptyState={
@@ -3292,8 +3407,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
   // Normalized executions feed Order Desk metrics, Execution Analysis, Costs,
   // Events, and the Alert engine.
   const normalizedExecutions = useMemo(
-    () => normalizeExecutions(apiTradeExecutions),
-    [apiTradeExecutions]
+    () => normalizeExecutions(effectiveExecutions),
+    [effectiveExecutions]
   );
 
   // Portfolio health roll-up for drift + risk alerts.
@@ -3508,11 +3623,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
               onTabChange={(id) => openPortfolioTab(id, { scroll: false })}
               assetClassFilter={assetClassFilter}
               orders={orderLedger.orders}
-              rawExecutions={apiTradeExecutions}
-              feeDashboard={feeDashboard}
+              rawExecutions={effectiveExecutions}
+              feeDashboard={effectiveFeeDashboard}
               notifications={workspaceNotifications}
               onManageConnections={handleOpenConnections}
-              transactions={unifiedPortfolio?.transactions || []}
+              transactions={unifiedPortfolio?.transactions?.length ? unifiedPortfolio.transactions : displayTransactions}
               reconciliation={unifiedPortfolio?.reconciliation || null}
               syncStatus={unifiedPortfolio?.syncStatus || null}
               baseCurrency={unifiedPortfolio?.summary?.baseCurrency || "USD"}
@@ -3525,22 +3640,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
               }}
               rail={null}
             />
-            {unifiedPortfolio?.isUnified && (
-              <PortfolioDrillDown
-                sources={unifiedPortfolio.sources}
-                positions={unifiedPortfolio.positions}
-                summary={unifiedPortfolio.summary}
-                syncStatus={unifiedPortfolio.syncStatus}
-                duplicateInstruments={unifiedPortfolio.duplicateInstruments}
-                warnings={unifiedPortfolio.warnings}
-                unvaluedTotal={unifiedPortfolio.unvaluedTotal}
-                fxRates={unifiedPortfolio.fxRates}
-                snapshots={unifiedPortfolio.snapshots}
-                shadow={unifiedPortfolio.shadow}
-                baseCurrency={unifiedPortfolio.summary?.baseCurrency || "USD"}
-                onSync={unifiedPortfolio.triggerSync}
-                syncing={unifiedPortfolio.syncing}
-              />
             )}
           </div>
         }
