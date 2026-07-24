@@ -2,6 +2,8 @@ const { Pool } = require("pg");
 const { watchlistData } = require("./data");
 const crypto = require("crypto");
 const portfolioSnapshots = require("./portfolioSnapshots");
+const { ensureUnifiedPortfolioSchema } = require("./unifiedPortfolio");
+const { tagsForExchange } = require("./exchangeSync");
 
 const QTY_EPSILON = 1e-8;
 const DEFAULT_BALANCE = 10000;
@@ -355,8 +357,20 @@ function mapNotificationEventRow(row) {
     entityType: row.entityType || row.entity_type || null,
     entityId: row.entityId || row.entity_id || null,
     metadata: parseJsonPayload(row.metadata || row.metadata_json, {}),
+    category: String(row.category || "workspace").trim() || "workspace",
+    severity: String(row.severity || "info").trim() || "info",
+    action: parseJsonPayload(row.action || row.action_json, {}),
+    actionUrl: parseJsonPayload(row.action || row.action_json, {})?.actionUrl || parseJsonPayload(row.metadata || row.metadata_json, {})?.actionUrl || null,
+    requestedChannels: parseJsonPayload(row.requestedChannels || row.requested_channels_json, ["inApp"]),
+    deliveryResults: parseJsonPayload(row.deliveryResults || row.delivery_results_json, {}),
+    inAppDeliveredAt: toIsoString(row.inAppDeliveredAt || row.in_app_delivered_at),
+    emailDeliveredAt: toIsoString(row.emailDeliveredAt || row.email_delivered_at),
+    lastOccurredAt: toIsoString(row.lastOccurredAt || row.last_occurred_at),
+    dedupeKey: row.dedupeKey || row.dedupe_key || null,
+    occurrenceCount: Number(row.occurrenceCount || row.occurrence_count || 1),
     createdAt: toIsoString(row.createdAt || row.created_at),
-    readAt: toIsoString(row.readAt || row.read_at)
+    readAt: toIsoString(row.readAt || row.read_at),
+    updatedAt: toIsoString(row.updatedAt || row.updated_at)
   };
 }
 
@@ -1901,8 +1915,19 @@ async function initializeDatabase() {
         entity_type TEXT,
         entity_id TEXT,
         metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        category TEXT NOT NULL DEFAULT 'workspace',
+        severity TEXT NOT NULL DEFAULT 'info',
+        action_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        requested_channels_json JSONB NOT NULL DEFAULT '["inApp"]'::jsonb,
+        delivery_results_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        in_app_delivered_at TIMESTAMPTZ,
+        email_delivered_at TIMESTAMPTZ,
+        last_occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        dedupe_key TEXT,
+        occurrence_count INTEGER NOT NULL DEFAULT 1,
         read_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
@@ -1915,13 +1940,30 @@ async function initializeDatabase() {
       ADD COLUMN IF NOT EXISTS entity_type TEXT,
       ADD COLUMN IF NOT EXISTS entity_id TEXT,
       ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'workspace',
+      ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'info',
+      ADD COLUMN IF NOT EXISTS action_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS requested_channels_json JSONB NOT NULL DEFAULT '["inApp"]'::jsonb,
+      ADD COLUMN IF NOT EXISTS delivery_results_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS in_app_delivered_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS email_delivered_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS last_occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS dedupe_key TEXT,
+      ADD COLUMN IF NOT EXISTS occurrence_count INTEGER NOT NULL DEFAULT 1,
       ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
 
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_user_workspace_notifications_workspace_lookup
       ON user_workspace_notification_events (workspace_id, created_at DESC, id DESC);
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_notifications_dedupe
+      ON user_workspace_notification_events (workspace_id, user_id, dedupe_key)
+      WHERE dedupe_key IS NOT NULL;
     `);
 
     await client.query(`
@@ -2552,6 +2594,8 @@ async function initializeDatabase() {
         UNIQUE(provider, key)
       );
     `);
+
+    await ensureUnifiedPortfolioSchema(client);
 
     await client.query("COMMIT");
     console.log("PostgreSQL database initialized.");
@@ -5287,12 +5331,80 @@ const userWorkspace = {
       ]);
       return mapExchangeKeyRow(result.rows[0]);
     },
-    remove: async (userId, id, workspaceId = null) => {
+    // Cascade-removal of a connected exchange key.
+    //
+    // `exchange` is REQUIRED and must be read by the caller via exchangeKeys.getById
+    // before invoking this (the route handler does that). It is used to scope every
+    // downstream delete to data attributable to that exchange, never to manually
+    // entered ("zenin") data.
+    remove: async (userId, id, workspaceId = null, exchange = null) => {
       const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
-      await pool.query(`
-        DELETE FROM user_exchange_keys
-        WHERE id = $1 AND workspace_id = $2;
-      `, [id, Number(resolvedWorkspaceId)]);
+      const tags = tagsForExchange(exchange);
+      const platform = tags?.platform || String(exchange || "").trim().toLowerCase() || null;
+      const strategyNames = tags?.strategyNames || [];
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        // 1. Holdings — scoped by exact display-case strategy_name(s).
+        if (strategyNames.length) {
+          await client.query(`
+            DELETE FROM user_workspace_portfolio
+            WHERE workspace_id = $1 AND strategy_name = ANY($2::text[]);
+          `, [Number(resolvedWorkspaceId), strategyNames]);
+        }
+
+        // 2. Trades + 3. Trade fills — scoped by lowercase platform tag.
+        //    Manual trades/fills carry platform='zenin' and are never matched.
+        if (platform) {
+          await client.query(`
+            DELETE FROM user_workspace_trades
+            WHERE workspace_id = $1 AND platform = $2;
+          `, [Number(resolvedWorkspaceId), platform]);
+          await client.query(`
+            DELETE FROM user_workspace_trade_fills
+            WHERE workspace_id = $1 AND platform = $2;
+          `, [Number(resolvedWorkspaceId), platform]);
+
+          // 4. Journal events for this exchange (source='broker_sync') and their
+          //    reminder tasks (cascade via FK on journal_events(id)).
+          await client.query(`
+            DELETE FROM journal_events
+            WHERE workspace_id = $1 AND source = 'broker_sync' AND platform = $2;
+          `, [Number(resolvedWorkspaceId), platform]);
+
+          // 5. Synced transaction notifications for this exchange.
+          await client.query(`
+            DELETE FROM user_workspace_notification_events
+            WHERE workspace_id = $1
+              AND entity_type LIKE 'portfolio_transaction%'
+              AND metadata_json->>'provider' = $2;
+          `, [Number(resolvedWorkspaceId), platform]);
+        }
+
+        // 5b. Unified portfolio canonical layer — source + all child tables
+        // (positions, accounts, cash, transactions) cascade via FK ON DELETE CASCADE.
+        if (platform) {
+          await client.query(`
+            DELETE FROM portfolio_sources
+            WHERE workspace_id = $1 AND provider = $2;
+          `, [Number(resolvedWorkspaceId), platform]);
+        }
+
+        // 6. Finally the credential row itself.
+        await client.query(`
+          DELETE FROM user_exchange_keys
+          WHERE id = $1 AND workspace_id = $2;
+        `, [id, Number(resolvedWorkspaceId)]);
+
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
     getById: async (userId, id, workspaceId = null) => {
       const resolvedWorkspaceId = workspaceId || (await workspaces.ensurePersonalWorkspace(userId))?.id;
@@ -5313,7 +5425,9 @@ const userWorkspace = {
           scope_verification_message AS "scopeVerificationMessage",
           last_sync_at AS "lastSyncAt",
           last_sync_status AS "lastSyncStatus",
-          last_sync_meta AS "lastSyncMeta"
+          last_sync_meta AS "lastSyncMeta",
+          first_synced_at AS "firstSyncedAt",
+          created_at AS "createdAt"
         FROM user_exchange_keys
         WHERE id = $1 AND workspace_id = $2;
       `, [id, Number(resolvedWorkspaceId)]);
@@ -5326,6 +5440,7 @@ const userWorkspace = {
             last_sync_status = $4,
             last_sync_meta = $5::jsonb,
             ${reverified ? "scope_verified_at = NOW()," : ""}
+            first_synced_at = COALESCE(first_synced_at, $3),
             updated_at = NOW()
         WHERE workspace_id = $1 AND id = $2
         RETURNING
@@ -5480,7 +5595,7 @@ const userWorkspace = {
           legs_json AS "legsJson",
           date_added
         FROM user_workspace_portfolio
-        WHERE workspace_id = $1 AND quantity > $2
+        WHERE workspace_id = $1 AND ABS(quantity) > $2
         ORDER BY date_added DESC;
       `, [resolvedWorkspaceId, QTY_EPSILON]);
       return result.rows.map(mapPortfolioRow);
@@ -5490,11 +5605,18 @@ const userWorkspace = {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const strategyPrefix = `${exchange}%`;
-        await client.query(`
-          DELETE FROM user_workspace_portfolio
-          WHERE workspace_id = $1 AND strategy_name LIKE $2;
-        `, [resolvedWorkspaceId, strategyPrefix]);
+        // Pre-delete existing holdings for this exchange's strategy name(s) using the
+        // exact display-case names (e.g. 'Hyperliquid Perp'). A bare `${exchange}%` LIKE
+        // previously failed to match because exchange keys are lowercase ('hyperliquid')
+        // while strategy names are display-case — so it was a silent no-op.
+        const tags = tagsForExchange(exchange);
+        const strategyNames = tags?.strategyNames || [];
+        if (strategyNames.length) {
+          await client.query(`
+            DELETE FROM user_workspace_portfolio
+            WHERE workspace_id = $1 AND strategy_name = ANY($2::text[]);
+          `, [resolvedWorkspaceId, strategyNames]);
+        }
         for (const h of holdings) {
           await client.query(`
             INSERT INTO user_workspace_portfolio (
@@ -5504,7 +5626,7 @@ const userWorkspace = {
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             ON CONFLICT (workspace_id, symbol, market_type, strategy_name) DO UPDATE
             SET quantity = EXCLUDED.quantity, price = EXCLUDED.price, entry_price = EXCLUDED.entry_price,
-                funding_rate = EXCLUDED.funding_rate, open_interest = EXCLUDED.open_interest, updated_at = NOW();
+                funding_rate = EXCLUDED.funding_rate, open_interest = EXCLUDED.open_interest;
           `, [
             resolvedUserId, resolvedWorkspaceId, h.symbol, h.name, h.price || 0, h.quantity, h.entry_price || h.price || 0,
             h.opened_at || new Date().toISOString(), h.type, h.market_type, h.order_type, h.strategyName,
@@ -5519,6 +5641,43 @@ const userWorkspace = {
       } finally {
         client.release();
       }
+    },
+
+    // Remove placeholder / seed holdings that were added manually (strategy_name IS
+    // NULL) before a real account was connected. Synced positions always carry a
+    // strategy_name (e.g. 'Hyperliquid Perp'), so this never deletes real data.
+    // Called once an account (API key / Hyperliquid wallet / brokerage) successfully
+    // syncs, so Home/Portfolio stop showing dummy asset rows.
+    clearPlaceholders: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `DELETE FROM user_workspace_portfolio
+         WHERE workspace_id = $1 AND strategy_name IS NULL
+         RETURNING id, symbol`,
+        [resolvedWorkspaceId]
+      );
+      return { removed: result.rows };
+    },
+
+    // Safe demo-seed cleanup used on sign-in / account creation. Only strips
+    // NULL-strategy placeholder rows when the workspace has NO connected
+    // exchange keys yet -- i.e. it is still pure demo seed copied from the
+    // guest workspace. Once a real account is connected, clearPlaceholders
+    // (run after sync) handles any stragglers instead.
+    clearDemoPlaceholders: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const keyCheck = await pool.query(
+        `SELECT 1 FROM user_exchange_keys WHERE workspace_id = $1 LIMIT 1`,
+        [resolvedWorkspaceId]
+      );
+      if (keyCheck.rows.length) return { removed: [], skipped: true };
+      const result = await pool.query(
+        `DELETE FROM user_workspace_portfolio
+         WHERE workspace_id = $1 AND strategy_name IS NULL
+         RETURNING id, symbol`,
+        [resolvedWorkspaceId]
+      );
+      return { removed: result.rows };
     },
 
     add: async (userId, holding, workspaceId = null) => {
@@ -6014,21 +6173,12 @@ const userWorkspace = {
       const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const result = await pool.query(`
         INSERT INTO user_workspace_notification_events (
-          user_id, workspace_id, type, title, body, entity_type, entity_id, metadata_json
+          user_id, workspace_id, type, title, body, entity_type, entity_id, metadata_json,
+          category, severity, action_json, requested_channels_json, delivery_results_json,
+          in_app_delivered_at, email_delivered_at, last_occurred_at, dedupe_key, occurrence_count, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING
-          id,
-          user_id AS "userId",
-          workspace_id AS "workspaceId",
-          type,
-          title,
-          body,
-          entity_type AS "entityType",
-          entity_id AS "entityId",
-          metadata_json AS "metadata",
-          created_at AS "createdAt",
-          read_at AS "readAt";
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, NOW())
+        RETURNING *;
       `, [
         resolvedUserId,
         resolvedWorkspaceId,
@@ -6037,9 +6187,88 @@ const userWorkspace = {
         String(event.body || "").trim(),
         event.entityType || event.entity_type || null,
         event.entityId == null ? null : String(event.entityId),
-        JSON.stringify(parseJsonPayload(event.metadata || event.metadata_json, {}))
+        JSON.stringify(parseJsonPayload(event.metadata || event.metadata_json, {})),
+        String(event.category || "workspace").trim() || "workspace",
+        String(event.severity || "info").trim() || "info",
+        JSON.stringify(parseJsonPayload(event.action || event.action_json, {})),
+        JSON.stringify(Array.isArray(event.requestedChannels) ? event.requestedChannels : ["inApp"]),
+        JSON.stringify(parseJsonPayload(event.deliveryResults || event.delivery_results_json, {})),
+        event.inAppDeliveredAt || null,
+        event.emailDeliveredAt || null,
+        event.lastOccurredAt || new Date().toISOString(),
+        event.dedupeKey || null
       ]);
       return mapNotificationEventRow(result.rows[0]);
+    },
+
+    upsert: async (userId, event = {}, workspaceId = null) => {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const dedupeKey = event.dedupeKey == null ? null : String(event.dedupeKey).trim() || null;
+      if (!dedupeKey) return userWorkspace.notifications.create(resolvedUserId, event, resolvedWorkspaceId);
+      const result = await pool.query(`
+        INSERT INTO user_workspace_notification_events (
+          user_id, workspace_id, type, title, body, entity_type, entity_id, metadata_json,
+          category, severity, action_json, requested_channels_json, delivery_results_json,
+          in_app_delivered_at, email_delivered_at, last_occurred_at, dedupe_key, occurrence_count, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), $16, 1, NOW())
+        ON CONFLICT (workspace_id, user_id, dedupe_key) WHERE dedupe_key IS NOT NULL
+        DO UPDATE SET
+          type = EXCLUDED.type,
+          title = EXCLUDED.title,
+          body = EXCLUDED.body,
+          entity_type = EXCLUDED.entity_type,
+          entity_id = EXCLUDED.entity_id,
+          metadata_json = EXCLUDED.metadata_json,
+          category = EXCLUDED.category,
+          severity = EXCLUDED.severity,
+          action_json = EXCLUDED.action_json,
+          requested_channels_json = EXCLUDED.requested_channels_json,
+          delivery_results_json = EXCLUDED.delivery_results_json,
+          in_app_delivered_at = COALESCE(EXCLUDED.in_app_delivered_at, user_workspace_notification_events.in_app_delivered_at),
+          email_delivered_at = COALESCE(EXCLUDED.email_delivered_at, user_workspace_notification_events.email_delivered_at),
+          last_occurred_at = NOW(),
+          occurrence_count = user_workspace_notification_events.occurrence_count + 1,
+          updated_at = NOW()
+        RETURNING *;
+      `, [
+        resolvedUserId, resolvedWorkspaceId,
+        String(event.type || "workspace.event").trim(),
+        String(event.title || "Zenin update").trim(),
+        String(event.body || "").trim(),
+        event.entityType || event.entity_type || null,
+        event.entityId == null ? null : String(event.entityId),
+        JSON.stringify(parseJsonPayload(event.metadata || event.metadata_json, {})),
+        String(event.category || "workspace").trim() || "workspace",
+        String(event.severity || "info").trim() || "info",
+        JSON.stringify(parseJsonPayload(event.action || event.action_json, {})),
+        JSON.stringify(Array.isArray(event.requestedChannels) ? event.requestedChannels : ["inApp"]),
+        JSON.stringify(parseJsonPayload(event.deliveryResults || event.delivery_results_json, {})),
+        event.inAppDeliveredAt || new Date().toISOString(),
+        event.emailDeliveredAt || null,
+        dedupeKey
+      ]);
+      return mapNotificationEventRow(result.rows[0]);
+    },
+
+    updateDelivery: async (userId, notificationId, patch = {}, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(`
+        UPDATE user_workspace_notification_events
+        SET delivery_results_json = COALESCE(delivery_results_json, '{}'::jsonb) || $1::jsonb,
+            in_app_delivered_at = COALESCE($2, in_app_delivered_at),
+            email_delivered_at = COALESCE($3, email_delivered_at),
+            updated_at = NOW()
+        WHERE workspace_id = $4 AND id = $5
+        RETURNING *;
+      `, [
+        JSON.stringify(parseJsonPayload(patch.deliveryResults || patch.delivery_results_json, {})),
+        patch.inAppDeliveredAt || null,
+        patch.emailDeliveredAt || null,
+        resolvedWorkspaceId,
+        Number(notificationId)
+      ]);
+      return result.rows[0] ? mapNotificationEventRow(result.rows[0]) : null;
     },
 
     getAll: async (userId, options = {}, workspaceId = null) => {
@@ -6047,18 +6276,7 @@ const userWorkspace = {
       const safeLimit = Math.max(1, Math.min(200, Number(options.limit) || 50));
       const unreadOnly = String(options.unreadOnly || options.unread_only || "").toLowerCase() === "true" || options.unreadOnly === true;
       const result = await pool.query(`
-        SELECT
-          id,
-          user_id AS "userId",
-          workspace_id AS "workspaceId",
-          type,
-          title,
-          body,
-          entity_type AS "entityType",
-          entity_id AS "entityId",
-          metadata_json AS "metadata",
-          created_at AS "createdAt",
-          read_at AS "readAt"
+        SELECT *
         FROM user_workspace_notification_events
         WHERE workspace_id = $1
           AND ($2::boolean IS FALSE OR read_at IS NULL)
@@ -6067,6 +6285,14 @@ const userWorkspace = {
       `, [resolvedWorkspaceId, unreadOnly, safeLimit]);
       return result.rows.map(mapNotificationEventRow);
     },
+    getUnreadCount: async (userId, workspaceId = null) => {
+      const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const result = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM user_workspace_notification_events WHERE workspace_id = $1 AND read_at IS NULL`,
+        [resolvedWorkspaceId]
+      );
+      return result.rows[0]?.count || 0;
+    },
 
     markRead: async (userId, notificationId, workspaceId = null) => {
       const { resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
@@ -6074,18 +6300,7 @@ const userWorkspace = {
         UPDATE user_workspace_notification_events
         SET read_at = COALESCE(read_at, NOW())
         WHERE workspace_id = $1 AND id = $2
-        RETURNING
-          id,
-          user_id AS "userId",
-          workspace_id AS "workspaceId",
-          type,
-          title,
-          body,
-          entity_type AS "entityType",
-          entity_id AS "entityId",
-          metadata_json AS "metadata",
-          created_at AS "createdAt",
-          read_at AS "readAt";
+        RETURNING *;
       `, [resolvedWorkspaceId, Number(notificationId)]);
       return result.rows[0] ? mapNotificationEventRow(result.rows[0]) : null;
     },
@@ -6139,6 +6354,10 @@ const userWorkspace = {
       return result.rows.map(mapTradeRow);
     },
     sync: async (userId, trades, workspaceId = null) => {
+      return userWorkspace.trades.syncWithOptions(userId, trades, workspaceId, {});
+    },
+    syncWithOptions: async (userId, trades, workspaceId = null, opts = {}) => {
+      const { journalCutoff } = opts; // ISO string: only journal trades executed >= this date
       const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       for (const t of trades) {
         await pool.query(`
@@ -6147,7 +6366,7 @@ const userWorkspace = {
             quantity, price, notional, platform, fee, fee_currency, fee_source, slippage, reference_price, execution_meta_json, strategy_name, legs_json
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
-          ON CONFLICT (workspace_id, client_id) DO UPDATE
+          ON CONFLICT (workspace_id, client_id) WHERE client_id IS NOT NULL DO UPDATE
           SET
             date = EXCLUDED.date,
             executed_at = COALESCE(EXCLUDED.executed_at, user_workspace_trades.executed_at),
@@ -6185,7 +6404,12 @@ const userWorkspace = {
           t.strategyName,
           JSON.stringify(t.legsJson || {})
         ]);
-        await recordTradeJournalEvent(resolvedUserId, {
+        // Only create journal events for trades executed AFTER the cutoff (first sync
+        // or after the source was connected). Fail-closed: if no cutoff is known
+        // (e.g. a sync path that didn't pass one), do NOT journal — historical trades
+        // from before the account was linked to Zenin must never trigger reminders.
+        if (journalCutoff && t.executedAt && new Date(t.executedAt) >= new Date(journalCutoff)) {
+          await recordTradeJournalEvent(resolvedUserId, {
           source: normalizePlatformValue(t.platform, "zenin") === "zenin" ? "zenin_execution" : "broker_sync",
           clientId: t.clientId,
           platform: normalizePlatformValue(t.platform, "zenin"),
@@ -6201,6 +6425,7 @@ const userWorkspace = {
           executedAt: t.executedAt,
           occurredAt: t.executedAt,
         }, resolvedWorkspaceId);
+        } // journalCutoff gate
       }
     },
 
@@ -7678,6 +7903,29 @@ const userWorkspace = {
         [id, resolvedWorkspaceId, resolvedUserId]
       );
       return result.rows[0] ? this._map(result.rows[0]) : null;
+    },
+
+    // Bulk-dismiss journal events. Scope:
+    //   - ids: array of specific event ids (when provided, only these are dismissed)
+    //   - status: restrict to a status (default 'open')
+    //   - onlyOpen: when true, only 'open' events are touched (safe default)
+    // Used by the "Dismiss all" control to clear a historical reminder flood
+    // without looping N single-PATCH calls.
+    async bulkDismiss(userId, { ids = null, status = "open", onlyOpen = true } = {}, workspaceId = null) {
+      const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
+      const params = [resolvedWorkspaceId, resolvedUserId];
+      let sql = `UPDATE journal_events SET status = 'dismissed', updated_at = NOW() WHERE workspace_id = $1 AND user_id = $2`;
+      if (Array.isArray(ids) && ids.length) {
+        const placeholders = ids.map((_, i) => `$${i + 3}`).join(", ");
+        sql += ` AND id IN (${placeholders})`;
+        ids.forEach((id) => params.push(id));
+      } else if (onlyOpen) {
+        sql += ` AND status = $3`;
+        params.push(status || "open");
+      }
+      sql += ` RETURNING id`;
+      const result = await pool.query(sql, params);
+      return { dismissed: result.rowCount || 0, ids: result.rows.map((r) => r.id) };
     },
 
     async link(userId, id, { journalEntryId, decisionThreadId } = {}, workspaceId = null) {

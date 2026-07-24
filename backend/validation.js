@@ -135,7 +135,7 @@ const pricesQuerySchema = z.object({
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(100),
-  type: z.enum(["tradfi", "crypto", "indicator", "indicators", "commodity", "commodities", "etf", "etfs", "currency", "currencies", "forex"]).optional().default("tradfi"),
+  type: z.enum(["all", "tradfi", "stock", "stocks", "bond", "bonds", "fund", "funds", "crypto", "indicator", "indicators", "commodity", "commodities", "etf", "etfs", "currency", "currencies", "forex"]).optional().default("tradfi"),
 });
 
 const emailRequestSchema = z.object({
@@ -296,6 +296,12 @@ const journalEventLinkSchema = z.object({
   decisionThreadId: z.string().max(120).optional().nullable(),
 });
 
+const journalEventBulkDismissSchema = z.object({
+  ids: z.array(z.union([z.string(), z.number()])).max(500).optional().nullable(),
+  status: z.enum(["open", "snoozed", "journaled", "dismissed"]).optional().nullable(),
+  onlyOpen: z.boolean().optional().nullable()
+});
+
 // ── Trade journaling reports (Phase 4) ────────────────────────────────────
 const journalReportListSchema = z.object({
   cadence: z.enum(["daily", "weekly", "quarterly", "half_year", "yearly"]).optional(),
@@ -390,6 +396,7 @@ const supportedExchangeIds = [
   "okx",
   "coinbase_advanced",
   "hyperliquid",
+  "lighter",
   "dydx",
   "aevo",
   "lyra",
@@ -488,6 +495,7 @@ module.exports = {
   journalEventClassifySchema,
   journalEventSnoozeSchema,
   journalEventLinkSchema,
+  journalEventBulkDismissSchema,
   journalReportListSchema,
   journalReportGenerateSchema,
   journalPrefsSchema,

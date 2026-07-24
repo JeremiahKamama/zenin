@@ -181,6 +181,10 @@ async function ensureUnifiedPortfolioSchema(db) {
   // Workspace base currency (default USD; editable by owner/moderator only).
   await db.query(`ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS base_currency TEXT NOT NULL DEFAULT 'USD';`);
 
+  // first_synced_at tracks when a source was first successfully synced. Used as
+  // the journal cutoff to avoid reminding about pre-connection trades.
+  await db.query(`ALTER TABLE user_exchange_keys ADD COLUMN IF NOT EXISTS first_synced_at TIMESTAMPTZ;`);
+
   // Unified snapshot metadata on the immutable EOD history table.
   await db.query(`ALTER TABLE portfolio_daily_snapshots ADD COLUMN IF NOT EXISTS is_unified BOOLEAN NOT NULL DEFAULT FALSE;`);
   await db.query(`ALTER TABLE portfolio_daily_snapshots ADD COLUMN IF NOT EXISTS base_currency TEXT NOT NULL DEFAULT 'USD';`);
@@ -195,10 +199,11 @@ async function ensureUnifiedPortfolioSchema(db) {
       SELECT MIN(id) FROM portfolio_sources GROUP BY workspace_id, source_type, provider, COALESCE(external_connection_id, '')
     );
   `);
-  await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_source_position
-      ON portfolio_source_positions (source_id, COALESCE(account_id, 0), symbol);
-  `);
+  // NOTE: the unique position key is the WIDE key created above (173-178,
+  // source_id+account+symbol+instrument_type+position_type+side). A second,
+  // narrow CREATE UNIQUE INDEX on (source_id, account, symbol) previously
+  // lived here but was dead code (same index name -> IF NOT EXISTS no-op once
+  // the wide key exists). Removed to avoid signalling an unresolved schema.
   await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_source_cash
       ON portfolio_source_cash (source_id, currency);
@@ -379,7 +384,7 @@ function mapExchangeWalletToSource(output, { workspaceId, address, connectionId,
       collateralValue: sem.collateralValue,
       leverage: sem.leverage,
       liquidationPrice: sem.liquidationPrice,
-      unrealizedPnl: sem.unrealizedPnl,
+      unrealizedPnl: h.unrealized_pnl != null ? Number(h.unrealized_pnl) : (sem.unrealizedPnl != null ? sem.unrealizedPnl : null),
       currency: String(output.currency || "USDC").toUpperCase()
     };
   });
@@ -402,7 +407,18 @@ function mapExchangeWalletToSource(output, { workspaceId, address, connectionId,
     accounts: [{ externalAccountId: String(address || provider), label: `${normalizedProvider} ${normalizedSourceType === "exchange" ? "Exchange" : "Wallet"}`, nativeCurrency: String(output.currency || "USDC").toUpperCase() }],
     positions,
     cash,
-    transactions: []
+    transactions: (Array.isArray(output.trades) ? output.trades : []).map((t, idx) => ({
+      providerTxId: t.platformTradeId || t.id || `txn-${idx}`,
+      type: t.side || t.type || "trade",
+      side: t.side || null,
+      symbol: t.symbol || null,
+      quantity: t.quantity != null ? Number(t.quantity) : null,
+      unitPrice: t.price != null ? Number(t.price) : (t.unitPrice != null ? Number(t.unitPrice) : null),
+      notional: t.notional != null ? Number(t.notional) : null,
+      fee: t.fee != null ? Number(t.fee) : null,
+      currency: t.currency || t.feeCurrency || "USD",
+      executedAt: t.executedAt || t.executed_at || t.date || null
+    }))
   };
 }
 
@@ -673,7 +689,7 @@ async function recordSourceSync(db, workspaceId, source) {
            quantity, average_entry_price, cost_basis, current_price, market_value, notional_value, collateral_value,
            leverage, liquidation_price, unrealized_pnl, native_currency, base_currency)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'USD')
-          ON CONFLICT (source_id, COALESCE(account_id,0), symbol, instrument_type, position_type, side) DO UPDATE SET
+          ON CONFLICT (source_id, COALESCE(account_id,0), symbol, COALESCE(instrument_type,'spot'), COALESCE(position_type,'balance'), COALESCE(side,'balance')) DO UPDATE SET
             instrument_key=EXCLUDED.instrument_key, name=EXCLUDED.name, asset_type=EXCLUDED.asset_type,
             instrument_type=EXCLUDED.instrument_type, position_type=EXCLUDED.position_type, side=EXCLUDED.side,
             quantity=EXCLUDED.quantity, average_entry_price=EXCLUDED.average_entry_price,
@@ -846,31 +862,20 @@ async function getUnifiedSummary(pool, workspaceId) {
     [workspaceId]
   );
 
-  // Connected sources: SnapTrade / brokerage
-  const brokerage = await pool.query(
-    `SELECT bh.symbol, bh.name, bh.asset_type, bh.quantity, bh.current_price,
-            bh.market_value, bh.currency, bc.provider, ba.provider_account_id,
-            NULL AS instrument_type, NULL AS position_type, NULL AS side,
-            NULL AS notional_value, NULL AS collateral_value, NULL AS leverage, NULL AS liquidation_price,
-            bh.updated_at, NULL AS as_of, ba.account_type
-     FROM brokerage_holdings bh
-     JOIN brokerage_accounts ba ON ba.id = bh.account_id
-     JOIN brokerage_connections bc ON bc.id = ba.connection_id
-     WHERE bc.workspace_id = $1`,
-    [workspaceId]
-  );
-
-  // Wallet / prediction / exchange sources written to the canonical layer.
+  // Wallet / prediction / exchange / brokerage — all sources flow through the
+  // canonical layer (recordSourceSync writes all provider types). Single query,
+  // single processing loop — no separate legacy brokerage_holdings path.
   const canonicalConnected = await pool.query(
     `SELECT sp.symbol, sp.instrument_key, sp.name, sp.asset_type, sp.instrument_type,
             sp.position_type, sp.side, sp.quantity, sp.current_price, sp.market_value,
             sp.notional_value, sp.collateral_value, sp.leverage, sp.liquidation_price,
+            sp.unrealized_pnl,
             sp.native_currency AS currency, ps.provider, ps.source_type,
             sp.as_of, sp.updated_at, psa.account_type
      FROM portfolio_source_positions sp
      JOIN portfolio_sources ps ON ps.id = sp.source_id
      LEFT JOIN portfolio_source_accounts psa ON psa.id = sp.account_id
-     WHERE ps.workspace_id = $1 AND ps.source_type IN ('wallet', 'prediction', 'exchange')`,
+     WHERE ps.workspace_id = $1 AND ps.source_type IN ('wallet', 'prediction', 'exchange', 'brokerage')`,
     [workspaceId]
   );
 
@@ -948,19 +953,22 @@ async function getUnifiedSummary(pool, workspaceId) {
     let netExposureRaw;
 
     if (derivative) {
-      // Derivative portfolio value = explicitly reported collateral/margin PLUS
-      // unrealized P&L (this is the account equity the perp represents). The
-      // underlying margin (collateral_value) AND unrealized P&L are also reported
-      // as source cash (e.g. Hyperliquid accountValue already includes both), so
-      // to avoid DOUBLE-COUNTING the same USDC we return both a collateralOffset
-      // and a pnlOffset that the caller subtracts from cash.
-      // Exposure = notional (per Invariant 5, exposure != value).
       const rawPnl = row.unrealized_pnl != null ? Number(row.unrealized_pnl) : null;
       portfolioValueRaw = (rawCollateral || 0) + (rawPnl || 0);
       grossExposureRaw = rawNotional || Math.abs(rawMv || 0);
       netExposureRaw = sem.side === "short" ? -grossExposureRaw : grossExposureRaw;
       derivativeCollateralOffset = rawCollateral != null ? (rawCollateral || 0) : 0;
       derivativePnlOffset = rawPnl != null ? rawPnl : 0;
+    } else if (sem.positionType === "collateral" || sem.positionType === "liability") {
+      // Collateral/liability positions are cash proxies, not tradeable assets.
+      // The perp above already accounts for deployed margin (collateral+pnl),
+      // and the source cash row (portfolio_source_cash) tracks the total balance.
+      // Adding the collateral row's value to investedValue would double-count it.
+      portfolioValueRaw = 0;
+      grossExposureRaw = Math.abs(rawMv || 0);
+      netExposureRaw = sem.positionType === "liability" ? -grossExposureRaw : 0;
+      derivativeCollateralOffset = 0;
+      derivativePnlOffset = 0;
     } else {
       // Spot / holding / balance: value = market value; exposure = market value.
       portfolioValueRaw = rawMv;
@@ -1031,22 +1039,6 @@ async function getUnifiedSummary(pool, workspaceId) {
     }
     return sourceMap.get(key);
   };
-
-  for (const row of brokerage.rows) {
-    const provider = row.provider || "brokerage";
-    const src = ensureSource("brokerage", provider, provider);
-    const v = valueRow(row, provider);
-    if (v) {
-      if (addPosition(v)) {
-        src.positions.push(v);
-        investedValue += v.portfolioValue;
-        if (isDerivativePosition({ instrumentType: v.instrumentType, positionType: v.positionType })) {
-          derivativeGrossExposure += v.grossExposure;
-          derivativeNetExposure += v.netExposure;
-        }
-      }
-    }
-  }
 
   for (const row of canonicalConnected.rows) {
     const sourceType = row.source_type || "wallet";
@@ -1146,7 +1138,11 @@ async function getUnifiedSummary(pool, workspaceId) {
   }
 
   const totalValue = investedValue + cashValue + manualValue;
-  const isPartial = unvaluedTotal > 0 || warnings.length > 0;
+  // isPartial = REAL valuation gaps only (some positions we couldn't value).
+  // Routine manual-exclusion is informational, not a "partial" state — split it out
+  // so the "partial" badge doesn't fire on every workspace that mixes manual + connected.
+  const isPartial = unvaluedTotal > 0;
+  const hasManualExcluded = excludedManualValue > 0;
   const sourceCoverage = {
     total: sources.length,
     connected: sources.filter((s) => s.sourceType !== "manual").length,
@@ -1165,6 +1161,7 @@ async function getUnifiedSummary(pool, workspaceId) {
     baseCurrency,
     valuedAt: new Date().toISOString(),
     isPartial,
+    hasManualExcluded,
     warnings,
     sources,
     sourceCoverage,
@@ -1276,12 +1273,12 @@ async function getUnifiedSources(pool, workspaceId) {
   if (!isEnabled()) return summary.sources;
   try {
     const rows = await pool.query(
-      `SELECT DISTINCT ON (provider, source_type, COALESCE(external_connection_id, ''))
+      `SELECT DISTINCT ON (provider, source_type)
               id, source_type, provider, external_connection_id, label, native_currency,
               access_mode, connection_status, sync_status, capabilities, metadata,
               status, last_sync_at, last_attempted_sync_at, last_error
        FROM portfolio_sources WHERE workspace_id=$1
-       ORDER BY provider, source_type, COALESCE(external_connection_id, ''), last_sync_at DESC NULLS LAST, id DESC`,
+       ORDER BY provider, source_type, last_sync_at DESC NULLS LAST, id DESC`,
       [workspaceId]
     );
     if (!rows.rows.length) return summary.sources;
@@ -1527,14 +1524,51 @@ async function getUnifiedEquityCurveFromFills(pool, workspaceId, limit = 180) {
   return pts;
 }
 
+// Backfill immutable EOD snapshots from the reconstructed equity curve so the
+// performance chart shows REAL account history (e.g. June 2024 -> now) instead
+// of only "today". Day-buckets the fill-anchored curve; one row per UTC day.
+// Idempotent: a day that already has a snapshot is left untouched.
+async function backfillUnifiedSnapshotsFromFills(pool, workspaceId, limit = 365) {
+  if (!isEnabled()) return 0;
+  const curve = await getUnifiedEquityCurveFromFills(pool, workspaceId, limit);
+  if (!Array.isArray(curve) || curve.length === 0) return 0;
+  // Day-bucket: keep the latest point per UTC day.
+  const byDay = new Map();
+  for (const pt of curve) {
+    const d = new Date(pt.t);
+    if (!Number.isFinite(d.getTime())) continue;
+    const day = d.toISOString().slice(0, 10);
+    const prev = byDay.get(day);
+    if (!prev || pt.t > prev.t) byDay.set(day, { day, t: pt.t, equity: Number(pt.equity) || 0 });
+  }
+  let inserted = 0;
+  for (const { day, equity } of byDay.values()) {
+    try {
+      const existing = await pool.query(
+        `SELECT id FROM portfolio_daily_snapshots WHERE workspace_id=$1 AND snapshot_date=$2`,
+        [workspaceId, day]
+      );
+      if (existing.rows.length) continue; // immutable: never overwrite a real EOD row
+      await pool.query(
+        `INSERT INTO portfolio_daily_snapshots
+           (workspace_id, snapshot_date, portfolio_value, cash, invested_capital,
+            holdings_json, allocation_json, is_unified, base_currency, source_breakdown, estimated)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8,$9,TRUE)`,
+        [workspaceId, day, equity, 0, equity, JSON.stringify([]), JSON.stringify([]), "USD", JSON.stringify([])]
+      );
+      inserted++;
+    } catch (_) { /* best-effort per-day */ }
+  }
+  return inserted;
+}
+
 // Mark a sync attempt start (for freshness/error tracking). Best-effort.
 async function recordSyncStart(db, workspaceId, { provider, sourceType, connectionId }) {
   const result = await db.query(
     `UPDATE portfolio_sources
      SET last_attempted_sync_at=NOW(), sync_status='syncing', status='syncing', updated_at=NOW()
-     WHERE workspace_id=$1 AND provider=$2 AND source_type=$3
-       AND COALESCE(external_connection_id,'')=COALESCE($4,'')`,
-    [workspaceId, provider, sourceType, connectionId || null]
+     WHERE workspace_id=$1 AND provider=$2 AND source_type=$3`,
+    [workspaceId, provider, sourceType]
   );
   if (result && result.rowCount === 0) {
     await db.query(
@@ -1591,9 +1625,12 @@ async function runWorkspaceSync(pool, workspaceId) {
     throw err;
   }
   const summary = await getUnifiedSummary(pool, workspaceId);
-  // Immutable EOD unified snapshot (first completed sync of the day wins).
+  // Immutable EOD unified snapshot (first completed sync of the day wins) +
+  // historical backfill from the reconstructed equity curve so the performance
+  // chart shows real account history, not just today.
   if (isEnabled()) {
     try { await recordUnifiedSnapshot(pool, workspaceId, summary); } catch (_) { /* history is best-effort */ }
+    try { await backfillUnifiedSnapshotsFromFills(pool, workspaceId); } catch (_) { /* history is best-effort */ }
   }
   return { runId, perSource, summary };
 }

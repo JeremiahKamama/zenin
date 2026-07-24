@@ -133,6 +133,7 @@ const {
   journalEventClassifySchema,
   journalEventSnoozeSchema,
   journalEventLinkSchema,
+  journalEventBulkDismissSchema,
   journalReportListSchema,
   journalReportGenerateSchema,
   journalPrefsSchema,
@@ -153,14 +154,14 @@ function resolvePythonBinary() {
   return "python3";
 }
 const pythonBinary = resolvePythonBinary();
-const { syncBinance, syncHyperliquid, syncBybit, verifyExchangeCredentialScope } = require("./exchangeSync");
+const { syncBinance, syncHyperliquid, syncLighter, syncBybit, syncIbkr, verifyExchangeCredentialScope } = require("./exchangeSync");
 const unifiedPortfolio = require("./unifiedPortfolio");
 const orchestrator = require("./portfolioSyncOrchestrator");
 const unifiedNotifications = require("./unifiedNotifications");
 const portfolioTransactions = require("./portfolioTransactions");
 const notificationPublisher = require("./notificationPublisher");
 
-const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid"]);
+const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid", "lighter", "interactive_brokers"]);
 
 const rpName = "Zenin Capital";
 const DEFAULT_PUBLIC_APP_ORIGIN = "https://www.zenin.capital";
@@ -5229,6 +5230,22 @@ app.post("/api/journal-events/:id/dismiss", requireSignedIn, attachActiveWorkspa
   }
 });
 
+// Bulk-dismiss journal events (e.g. clearing a historical reminder flood).
+// Pass { ids: [...] } to dismiss specific events, or {} to dismiss all open
+// events for the workspace.
+app.post("/api/journal-events/bulk-dismiss", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalEventBulkDismissSchema), async (req, res) => {
+  try {
+    const result = await userWorkspace.journalEvents.bulkDismiss(req.auth.userId, {
+      ids: req.body.ids || null,
+      status: req.body.status || "open",
+      onlyOpen: req.body.onlyOpen !== false
+    }, req.workspace.workspace.id);
+    res.json({ dismissed: result.dismissed, ids: result.ids });
+  } catch (err) {
+    handleServerError(res, "Failed to bulk-dismiss journal events", err);
+  }
+});
+
 app.post("/api/journal-events/:id/snooze", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, validate(journalEventSnoozeSchema), async (req, res) => {
   try {
     const event = await userWorkspace.journalEvents.snooze(req.auth.userId, req.params.id, req.body.until, req.workspace.workspace.id);
@@ -5564,25 +5581,28 @@ function normalizeLastSyncStatus(status) {
 function buildConnectionCapability(exchange) {
   const normalizedExchange = String(exchange || "").trim().toLowerCase();
   const syncAvailable = SYNC_ENABLED_EXCHANGES.has(normalizedExchange);
-  const watchOnly = normalizedExchange === "hyperliquid";
+  const watchOnly = normalizedExchange === "hyperliquid" || normalizedExchange === "lighter";
+  const gateway = normalizedExchange === "interactive_brokers";
   return {
-    accessMode: watchOnly ? "watch_only" : (syncAvailable ? "read_only_key" : "read_only_metadata"),
+    accessMode: watchOnly ? "watch_only" : (gateway ? "gateway_local" : (syncAvailable ? "read_only_key" : "read_only_metadata")),
     syncAvailable,
     syncStatus: syncAvailable ? "sync_supported" : "metadata_only",
     nextAction: syncAvailable
-      ? (watchOnly ? "Run sync to import holdings, balances, and fills." : "Provide a provider-side read-only API key, then run sync to import holdings, balances, and fills.")
+      ? (watchOnly ? "Run sync to import holdings, balances, and fills."
+        : gateway ? "Start the IBKR Client Portal Gateway, authenticate via browser, then sync."
+        : "Provide a provider-side read-only API key, then run sync to import holdings, balances, and fills.")
       : "Saved for workspace context. Live sync is not available for this provider yet.",
     supportMessage: syncAvailable
-      ? (watchOnly
-          ? "Zenin can import live portfolio data from this public watch-only address."
-          : "Zenin can import live portfolio data after you provide provider-side read-only credentials.")
+      ? (watchOnly ? "Zenin can import live portfolio data from this public watch-only address."
+        : gateway ? "Zenin syncs from your local IBKR Client Portal Gateway. The gateway must be running and authenticated."
+        : "Zenin can import live portfolio data after you provide provider-side read-only credentials.")
       : "Zenin stores this source as read-only metadata until a provider adapter is available."
   };
 }
 
 async function buildCredentialScopeState(exchange, apiKey, apiSecret) {
   const normalizedExchange = String(exchange || "").trim().toLowerCase();
-  if (normalizedExchange === "hyperliquid" && !apiSecret) {
+  if ((normalizedExchange === "hyperliquid" || normalizedExchange === "lighter") && !apiSecret) {
     return {
       permissionScope: "read_only",
       canTrade: false,
@@ -5853,10 +5873,14 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
     let result;
     if (keyRecord.exchange === "hyperliquid") {
       result = await syncHyperliquid(apiKey, extraData, syncContext);
+    } else if (keyRecord.exchange === "lighter") {
+      result = await syncLighter(apiKey, extraData, syncContext);
     } else if (keyRecord.exchange === "binance") {
       result = await syncBinance(apiKey, apiSecret, syncContext);
     } else if (keyRecord.exchange === "bybit") {
       result = await syncBybit(apiKey, apiSecret, syncContext);
+    } else if (keyRecord.exchange === "interactive_brokers") {
+      result = await syncIbkr(apiKey, apiSecret, syncContext);
     } else {
       return res.status(400).json({ error: "Unsupported exchange" });
     }
@@ -5877,7 +5901,9 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       if (Array.isArray(result.tradeFills) && result.tradeFills.length) {
         fillSyncResult = await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills, req.workspace.workspace.id);
       }
-      await userWorkspace.trades.sync(req.auth.userId, result.trades, req.workspace.workspace.id);
+      await userWorkspace.trades.syncWithOptions(req.auth.userId, result.trades, req.workspace.workspace.id, {
+        journalCutoff: keyRecord.firstSyncedAt || keyRecord.createdAt || new Date().toISOString()
+      });
       if (result.currency && result.cashBalance != null) {
         await userWorkspace.cash.set(req.auth.userId, result.currency, result.cashBalance, req.workspace.workspace.id);
       }
@@ -5888,10 +5914,10 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
           canonicalSource = unifiedPortfolio.mapExchangeWalletToSource(result, {
             workspaceId: req.workspace.workspace.id,
             address: apiKey,
-            connectionId: String(id),
+            connectionId: apiKey,
             provider: keyRecord.exchange,
-            accessMode: keyRecord.exchange === "hyperliquid" ? "watch_only" : "read_only_key",
-            sourceType: keyRecord.exchange === "hyperliquid" ? "wallet" : "exchange"
+            accessMode: (keyRecord.exchange === "hyperliquid" || keyRecord.exchange === "lighter") ? "watch_only" : "read_only_key",
+            sourceType: (keyRecord.exchange === "hyperliquid" || keyRecord.exchange === "lighter") ? "wallet" : "exchange"
           });
           await unifiedPortfolio.recordSourceSync(pool, req.workspace.workspace.id, canonicalSource);
           canonicalSyncStatus = "synced";
@@ -13430,6 +13456,43 @@ app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWork
   }
 });
 
+// Daily portfolio history (unified EOD snapshots) for the calendar heatmap.
+// Serves portfolio_daily_snapshots (written by recordUnifiedSnapshot on each
+// workspace sync). dailyPnl is computed as the day-over-day delta of
+// portfolio_value since the unified snapshots don't store it directly.
+app.get("/api/history/daily", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const year = String(req.query.year || new Date().getFullYear());
+    const month = req.query.month ? String(req.query.month) : null;
+    const rows = await pool.query(
+      `SELECT snapshot_date, portfolio_value, cash, invested_capital, base_currency
+       FROM portfolio_daily_snapshots
+       WHERE workspace_id=$1 AND is_unified=TRUE
+         AND snapshot_date >= $2
+       ORDER BY snapshot_date ASC`,
+      [workspaceId, month ? `${year}-${String(month).padStart(2, "0")}-01` : `${year}-01-01`]
+    );
+    const list = rows.rows.map((r, i) => {
+      const prev = i > 0 ? Number(rows.rows[i - 1].portfolio_value) : null;
+      const value = Number(r.portfolio_value);
+      const dailyPnl = prev != null ? value - prev : 0;
+      return {
+        date: r.snapshot_date,
+        ts: new Date(`${r.snapshot_date}T00:00:00Z`).getTime(),
+        portfolioValue: value,
+        dailyPnl,
+        cash: Number(r.cash || 0),
+        investedCapital: Number(r.invested_capital || 0),
+        currency: r.base_currency || "USD"
+      };
+    });
+    res.json({ snapshots: list });
+  } catch (error) {
+    handleServerError(res, "History daily failed", error);
+  }
+});
+
 // Shadow-compare (staged rollout validation): unified-vs-legacy headline
 // divergence report. Read-only, owner/mod scoped. Never affects production reads.
 app.get("/api/portfolio/unified/shadow-compare", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
@@ -13484,9 +13547,9 @@ async function orchestrateWorkspaceUnifiedSync(workspaceId, userId) {
   }
   for (const keyRecord of keys || []) {
     const exchange = String(keyRecord.exchange || "").toLowerCase();
-    if (!["hyperliquid", "binance", "bybit"].includes(exchange)) continue;
-    const sourceType = exchange === "hyperliquid" ? "wallet" : "exchange";
-    const accessMode = exchange === "hyperliquid" ? "watch_only" : "read_only_key";
+    if (!["hyperliquid", "binance", "bybit", "lighter", "interactive_brokers"].includes(exchange)) continue;
+    const sourceType = exchange === "hyperliquid" || exchange === "lighter" ? "wallet" : exchange === "interactive_brokers" ? "brokerage" : "exchange";
+    const accessMode = (exchange === "hyperliquid" || exchange === "lighter") ? "watch_only" : exchange === "interactive_brokers" ? "read_only_key" : "read_only_key";
     const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.api_key);
     const apiSecret = keyRecord.api_secret ? workspaceSecretProvider.decryptSecret(keyRecord.api_secret) : null;
     const extraData = parseExchangeExtraData(keyRecord.extra_data);
@@ -13503,14 +13566,56 @@ async function orchestrateWorkspaceUnifiedSync(workspaceId, userId) {
         };
         let result;
         if (exchange === "hyperliquid") result = await syncHyperliquid(apiKey, extraData, syncContext);
+        else if (exchange === "lighter") result = await syncLighter(apiKey, extraData, syncContext);
         else if (exchange === "binance") result = await syncBinance(apiKey, apiSecret, syncContext);
-        else result = await syncBybit(apiKey, apiSecret, syncContext);
+        else if (exchange === "bybit") result = await syncBybit(apiKey, apiSecret, syncContext);
+        else if (exchange === "interactive_brokers") result = await syncIbkr(apiKey, apiSecret, syncContext);
         if (result && unifiedPortfolio.isEnabled()) {
           await unifiedPortfolio.recordSourceSync(
             pool,
             workspaceId,
-            unifiedPortfolio.mapExchangeWalletToSource(result, { workspaceId, address: apiKey, connectionId: String(keyId), provider: exchange, accessMode, sourceType })
+            unifiedPortfolio.mapExchangeWalletToSource(result, { workspaceId, address: apiKey, connectionId: apiKey, provider: exchange, accessMode, sourceType })
           ).catch((err) => console.warn(`[unified-portfolio] ${exchange} dual-write skipped:`, err.message));
+        }
+        // Sync trade fills + create execution notifications (same pattern as the
+        // per-exchange manual sync route). Fires for all 4 exchange types.
+        if (result && Array.isArray(result.tradeFills) && result.tradeFills.length) {
+          try {
+            const fillResult = await userWorkspace.tradeFills.sync(userId, result.tradeFills, workspaceId);
+            if (fillResult.inserted && fillResult.inserted.length) {
+              await portfolioTransactions.createPortfolioTransactionNotifications(
+                {
+                  userId: null,
+                  workspaceId,
+                  source: { provider: exchange, connectionId: String(keyId), sourceAccountId: String(keyId) },
+                  transactions: fillResult.inserted.map((f) => ({
+                    type: f.side || "fill",
+                    symbol: f.symbol,
+                    quantity: f.quantity,
+                    unitPrice: f.unitPrice,
+                    notional: f.notional,
+                    fee: f.fee,
+                    currency: f.currency,
+                    executedAt: f.executedAt
+                  })),
+                  opts: { buildActivityUrl: getFrontendAppUrl }
+                },
+                async (nArgs) => {
+                  const members = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id=$1", [workspaceId]);
+                  const userIds = members.rows.map((m) => m.user_id);
+                  if (!userIds.length) return [];
+                  const out = [];
+                  for (const uid of userIds) {
+                    const evt = await dispatchWorkspaceNotification({ userId: uid, workspaceId, event: nArgs.event });
+                    out.push(evt);
+                  }
+                  return out;
+                }
+              ).catch((err) => console.warn(`[notifications] ${exchange} trade notifications skipped:`, err.message));
+            }
+          } catch (err) {
+            console.warn(`[notifications] ${exchange} fill sync skipped:`, err.message);
+          }
         }
         return result;
       }
@@ -13686,7 +13791,7 @@ app.get("/api/notifications", requireSignedIn, attachActiveWorkspace, requireWor
       return res.status(400).json({ error: "limit must be a positive integer." });
     }
     const notifications = await userWorkspace.notifications.getAll(req.auth.userId, options, req.workspace?.workspace?.id || null);
-    const unreadCount = notifications.filter((item) => !item.readAt).length;
+    const unreadCount = await userWorkspace.notifications.getUnreadCount(req.auth.userId, req.workspace?.workspace?.id || null);
     res.json({ notifications, unreadCount });
   } catch (error) {
     handleServerError(res, "Notifications read failed", error);
