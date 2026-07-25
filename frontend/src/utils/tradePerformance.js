@@ -3,15 +3,16 @@
 // analytics memo. Both Journal and the Portfolio "Performance" tab use this as
 // the single source of truth for closed-trade analytics.
 //
-// Input: unified/exchange transactions shaped like PortfolioModule's
-// `displayTransactions` mapping (type BUY/SELL, asset/symbol, quantity, price,
-// notional, executedAt/date, platform/provider, sourceAccountId, marketType).
+// Input transactions: shaped like PortfolioModule's `displayTransactions`
+// mapping (type BUY/SELL, asset/symbol, quantity, price, notional,
+// executedAt/date, platform/provider, sourceAccountId, marketType).
 //
 // Output:
-//   - realizedTrades[]: one entry per closed round-trip lot match
-//   - assetReport[]: per-symbol rollup (wins/losses/volume/pnl)
-//   - aggregate: { winRate, realizedPnl, largestGain, largestLoss, totalTrades,
-//       wins, losses, breakevens, avgHoldDays }
+//   - realizedTrades[]: one entry per closed round-trip lot match, with
+//     connection attribution + asset-class classification.
+//   - assetReport[]: per-symbol rollup, including byConnection breakdown.
+//   - aggregate: winRate, realizedPnl, largestGain, largestLoss, totalTrades,
+//       wins, losses, breakevens, avgHoldDays.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EPS = 1e-8;
@@ -36,8 +37,53 @@ const normalizeMarketType = (trade) => {
   return "spot";
 };
 
-// FIFO key: keep spot/perp/options for the same symbol separate so a perp
-// round-trip doesn't net against a spot lot (matches Journal's reportKey split).
+const OCC_RE = /^[A-Z]{1,6}\s+\d{6}[CP]\d{8}$/;
+
+// Asset-class detection (fixes the unified mapper's "everything non-wallet = spot").
+// `ctx` carries the resolved connection type/provider so we can tell stocks apart.
+export function detectAssetClass(symbol, marketType, ctx = {}) {
+  const sym = String(symbol || "").trim().toUpperCase();
+  if (OCC_RE.test(sym)) return "OPTIONS";
+  if (ctx?.hasLegs) return "OPTIONS";
+  if (sym.includes("/")) return "FX";
+  const mt = normalizeMarketType({ marketType });
+  if (mt === "perp") return "PERP";
+  if (ctx?.connectionType === "broker" || ctx?.isBrokerage) return "STOCKS";
+  if (mt === "options") return "OPTIONS";
+  // alpha-only, no slash, not perp, not a broker -> treat as equities
+  if (/^[A-Z]{1,6}$/.test(sym) && !ctx?.isCrypto) return "STOCKS";
+  return "SPOT";
+}
+
+// Build a connection registry from connectedAccounts + brokerageAccounts so
+// each trade can be attributed to a stable { id, label }.
+export function buildConnectionRegistry({ connectedAccounts = [], brokerageAccounts = [] } = {}) {
+  const map = new Map();
+  const add = (id, label, type, provider) => {
+    if (!id) return;
+    if (map.has(id)) return;
+    map.set(String(id), { id: String(id), label: String(label || id), type, provider: String(provider || id) });
+  };
+  for (const a of connectedAccounts || []) {
+    const id = a.sourceAccountId || a.provider || a.exchange || a.id;
+    add(id, a.label || a.provider || a.exchange || id, a.venueType || a.type, a.provider || a.exchange);
+  }
+  for (const b of brokerageAccounts || []) {
+    const id = b.id || b.sourceAccountId || b.provider || b.accountId;
+    add(id, b.name || b.label || b.provider || id, "broker", b.provider || b.brokerage);
+  }
+  // Resolver: match a trade to a registry entry by sourceAccountId, then provider.
+  const resolve = (trade) => {
+    if (!trade) return null;
+    const ids = [trade.sourceAccountId, trade.provider, trade.platform].filter(Boolean).map(String);
+    for (const id of ids) {
+      if (map.has(id)) return map.get(id);
+    }
+    return null;
+  };
+  return { map, resolve, list: [...map.values()] };
+}
+
 const buildLotKey = (asset, trade) => `${asset}::${normalizeMarketType(trade)}`;
 
 const formatCloseDate = (trade, dateObj) => {
@@ -48,8 +94,9 @@ const formatCloseDate = (trade, dateObj) => {
   return "";
 };
 
-export function analyzeTradePerformance({ transactions = [], livePriceBySymbol = {} } = {}) {
+export function analyzeTradePerformance({ transactions = [], livePriceBySymbol = {}, connections = null } = {}) {
   const nowTs = Date.now();
+  const registry = connections || { map: new Map(), resolve: () => null, list: [] };
 
   const sorted = [...transactions].sort((a, b) => {
     const ta = parseTradeDate(a.executedAt || a.date)?.getTime() ?? 0;
@@ -58,7 +105,7 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
     return (a.id || 0) - (b.id || 0);
   });
 
-  const lotsByKey = new Map(); // lotKey -> array of open lots
+  const lotsByKey = new Map();
   const realized = [];
   let totalHoldQty = 0;
   let totalHoldQtyDays = 0;
@@ -79,95 +126,53 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
     const notional = Math.abs(notionalRaw > 0 ? notionalRaw : price * qty);
     totalVolume += notional;
 
-    // direction we are opening if no opposite lot exists to close
-    const openingDirection = type === "BUY" ? "long" : "short";
-    // lots of the OPPOSITE direction get closed by this trade
-    const oppositeDirection = type === "BUY" ? "short" : "long";
+    const conn = registry.resolve(trade) || null;
+    const connectionId = conn ? conn.id : String(trade.platform || trade.provider || "unknown");
+    const connectionLabel = conn ? conn.label : String(trade.platform || trade.provider || "unknown");
+    const assetClass = detectAssetClass(asset, trade.marketType, {
+      hasLegs: !!trade.legs && typeof trade.legs === "object",
+      connectionType: conn?.type,
+      isBrokerage: conn?.type === "broker",
+      isCrypto: conn?.provider === "hyperliquid" || conn?.provider === "lighter" || conn?.type === "dex" || conn?.type === "cex",
+    });
 
     const lots = lotsByKey.get(lotKey) || [];
 
     if (type === "BUY") {
-      // First, close any open shorts (buy-to-cover).
       let remaining = qty;
       while (remaining > 0 && lots.length > 0 && lots[0].direction === "short") {
         const lot = lots[0];
         const matchedQty = Math.min(remaining, lot.qty);
-        const pnl = (lot.price - price) * matchedQty; // short: profit when price falls
+        const pnl = (lot.price - price) * matchedQty;
         const holdDays = lot.date && dateObj ? Math.max(0, (dateObj.getTime() - lot.date.getTime()) / DAY_MS) : 0;
-        realized.push({
-          asset,
-          symbol: asset,
-          side: "Short",
-          direction: "short",
-          entryPrice: lot.price,
-          exitPrice: price,
-          entryAt: lot.date ? lot.date.getTime() : null,
-          exitAt: dateObj ? dateObj.getTime() : null,
-          holdMs: lot.date && dateObj ? Math.max(0, dateObj.getTime() - lot.date.getTime()) : 0,
-          holdDays,
-          qty: matchedQty,
-          volume: price * matchedQty,
-          pnl,
-          closeDate: formatCloseDate(trade, dateObj),
-          platform: trade.platform || trade.provider || "unknown",
-          provider: trade.provider || trade.platform || "unknown",
-          sourceAccountId: trade.sourceAccountId || "",
-          marketType: normalizeMarketType(trade),
-        });
+        realized.push(mkTrade({ asset, side: "Short", direction: "short", lot, price, dateObj, matchedQty, pnl, trade, connectionId, connectionLabel, assetClass }));
         totalHoldQty += matchedQty;
         totalHoldQtyDays += holdDays * matchedQty;
         lot.qty -= matchedQty;
         remaining -= matchedQty;
         if (lot.qty <= 0) lots.shift();
       }
-      // Remaining quantity opens a new long lot.
-      if (remaining > 0) {
-        lots.push({ direction: "long", qty: remaining, price, date: dateObj });
-      }
+      if (remaining > 0) lots.push({ direction: "long", qty: remaining, price, date: dateObj });
       lotsByKey.set(lotKey, lots);
     } else {
-      // SELL: first close open longs (sell-to-close).
       let remaining = qty;
       while (remaining > 0 && lots.length > 0 && lots[0].direction === "long") {
         const lot = lots[0];
         const matchedQty = Math.min(remaining, lot.qty);
-        const pnl = (price - lot.price) * matchedQty; // long: profit when price rises
+        const pnl = (price - lot.price) * matchedQty;
         const holdDays = lot.date && dateObj ? Math.max(0, (dateObj.getTime() - lot.date.getTime()) / DAY_MS) : 0;
-        realized.push({
-          asset,
-          symbol: asset,
-          side: "Long",
-          direction: "long",
-          entryPrice: lot.price,
-          exitPrice: price,
-          entryAt: lot.date ? lot.date.getTime() : null,
-          exitAt: dateObj ? dateObj.getTime() : null,
-          holdMs: lot.date && dateObj ? Math.max(0, dateObj.getTime() - lot.date.getTime()) : 0,
-          holdDays,
-          qty: matchedQty,
-          volume: price * matchedQty,
-          pnl,
-          closeDate: formatCloseDate(trade, dateObj),
-          platform: trade.platform || trade.provider || "unknown",
-          provider: trade.provider || trade.platform || "unknown",
-          sourceAccountId: trade.sourceAccountId || "",
-          marketType: normalizeMarketType(trade),
-        });
+        realized.push(mkTrade({ asset, side: "Long", direction: "long", lot, price, dateObj, matchedQty, pnl, trade, connectionId, connectionLabel, assetClass }));
         totalHoldQty += matchedQty;
         totalHoldQtyDays += holdDays * matchedQty;
         lot.qty -= matchedQty;
         remaining -= matchedQty;
         if (lot.qty <= 0) lots.shift();
       }
-      // Remaining quantity opens a new short lot.
-      if (remaining > 0) {
-        lots.push({ direction: "short", qty: remaining, price, date: dateObj });
-      }
+      if (remaining > 0) lots.push({ direction: "short", qty: remaining, price, date: dateObj });
       lotsByKey.set(lotKey, lots);
     }
   }
 
-  // Aggregate open lots into hold-duration stats (unchanged from Journal).
   for (const lots of lotsByKey.values()) {
     for (const lot of lots) {
       const lotQty = Math.max(0, safeNum(lot.qty));
@@ -188,34 +193,57 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
   const avgHoldDays = totalHoldQty > EPS ? totalHoldQtyDays / totalHoldQty : 0;
   const winRate = decisive ? (wins.length / decisive) * 100 : 0;
 
-  // Per-asset rollup
+  // Per-symbol + per-symbol×connection rollup.
   const bySymbol = new Map();
+  const bySymbolConn = new Map();
   for (const r of realized) {
-    const sym = r.symbol;
-    const row = bySymbol.get(sym) || {
-      symbol: sym,
-      asset: sym,
-      trades: 0,
-      wins: 0,
-      losses: 0,
-      breakevens: 0,
-      volume: 0,
-      pnl: 0,
-      totalQty: 0,
+    const symKey = r.symbol;
+    let row = bySymbol.get(symKey) || {
+      symbol: symKey, asset: symKey, assetClass: r.assetClass,
+      trades: 0, wins: 0, losses: 0, breakevens: 0, volume: 0, pnl: 0,
     };
     row.trades += 1;
     row.volume += r.volume;
     row.pnl += r.pnl;
-    row.totalQty += r.qty;
     if (r.pnl > EPS) row.wins += 1;
     else if (r.pnl < -EPS) row.losses += 1;
     else row.breakevens += 1;
-    bySymbol.set(sym, row);
+    if (!row.assetClass || row.assetClass === "SPOT") row.assetClass = r.assetClass;
+    bySymbol.set(symKey, row);
+
+    const scKey = `${symKey}::${r.connectionId}`;
+    let sc = bySymbolConn.get(scKey) || {
+      connectionId: r.connectionId, connectionLabel: r.connectionLabel, symbol: symKey,
+      trades: 0, wins: 0, losses: 0, breakevens: 0, volume: 0, pnl: 0,
+    };
+    sc.trades += 1;
+    sc.volume += r.volume;
+    sc.pnl += r.pnl;
+    if (r.pnl > EPS) sc.wins += 1;
+    else if (r.pnl < -EPS) sc.losses += 1;
+    else sc.breakevens += 1;
+    bySymbolConn.set(scKey, sc);
   }
+
   const assetReport = [...bySymbol.values()].map((row) => {
     const decisiveSym = row.wins + row.losses;
     const winRateSym = decisiveSym ? (row.wins / decisiveSym) * 100 : 0;
-    return { ...row, winRate: winRateSym, netPosition: row.totalQty };
+    const byConnection = [...bySymbolConn.values()]
+      .filter((sc) => sc.symbol === row.symbol)
+      .map((sc) => {
+        const d = sc.wins + sc.losses;
+        return {
+          connectionId: sc.connectionId,
+          connectionLabel: sc.connectionLabel,
+          trades: sc.trades,
+          wins: sc.wins,
+          losses: sc.losses,
+          winRate: d ? (sc.wins / d) * 100 : 0,
+          volume: sc.volume,
+          pnl: sc.pnl,
+        };
+      });
+    return { ...row, winRate: winRateSym, netPosition: row.volume, byConnection };
   });
 
   return {
@@ -233,6 +261,32 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
       avgHoldDays,
       totalVolume,
     },
+  };
+}
+
+function mkTrade({ asset, side, direction, lot, price, dateObj, matchedQty, pnl, trade, connectionId, connectionLabel, assetClass }) {
+  return {
+    asset,
+    symbol: asset,
+    assetClass,
+    connectionId,
+    connectionLabel,
+    side,
+    direction,
+    entryPrice: lot.price,
+    exitPrice: price,
+    entryAt: lot.date ? lot.date.getTime() : null,
+    exitAt: dateObj ? dateObj.getTime() : null,
+    holdMs: lot.date && dateObj ? Math.max(0, dateObj.getTime() - lot.date.getTime()) : 0,
+    holdDays: lot.date && dateObj ? Math.max(0, (dateObj.getTime() - lot.date.getTime()) / DAY_MS) : 0,
+    qty: matchedQty,
+    volume: price * matchedQty,
+    pnl,
+    closeDate: formatCloseDate(trade, dateObj),
+    platform: trade.platform || trade.provider || "unknown",
+    provider: trade.provider || trade.platform || "unknown",
+    sourceAccountId: trade.sourceAccountId || "",
+    marketType: normalizeMarketType(trade),
   };
 }
 

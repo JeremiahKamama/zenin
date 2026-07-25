@@ -1,18 +1,17 @@
 // components/portfolioIntelligence/modules/PerformanceModule.jsx
 // Replaces the old "attribution" (sector/region/factor) Portfolio sub-tab with a
 // closed-trade analytics view: Best Trades (per-trade realized P&L) and
-// Asset Performance (per-symbol win-rate / volume / P&L rollup), covering every
-// connected broker, exchange, and wallet. Filtering is applied upstream of
-// DataTable (DataTable has no built-in filter), per codebase convention.
+// Asset Performance (per-symbol / per-symbol×connection win-rate / volume / P&L),
+// covering every connected broker, exchange, wallet, and stock brokerage.
+// Filtering is applied upstream of DataTable (DataTable has no built-in filter).
 
 import React, { useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { DataTable } from "../../data-table/DataTable";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Popover, PopoverTrigger, PopoverContent } from "../../ui/popover";
 import { Checkbox } from "../../ui/checkbox";
 import { formatCurrency, formatPercent } from "../../../utils/format";
-import { analyzeTradePerformance } from "../../../utils/tradePerformance";
+import { analyzeTradePerformance, buildConnectionRegistry, detectAssetClass } from "../../../utils/tradePerformance";
 
 const TIME_RANGES = [
   { key: "24H", label: "24H", ms: 24 * 60 * 60 * 1000 },
@@ -21,9 +20,10 @@ const TIME_RANGES = [
   { key: "ALL", label: "ALL", ms: null },
 ];
 
+const ASSET_CLASSES = ["SPOT", "PERP", "OPTIONS", "STOCKS", "FX"];
 const sideTone = (value) => (value >= 0 ? "positive" : "negative");
 
-// ----- per-column bucket definitions (drives per-header dropdown options) -----
+// ----- per-column bucket helpers -----
 const priceBuckets = (v) => {
   const n = Math.abs(Number(v) || 0);
   if (n < 1000) return "< $1K";
@@ -53,30 +53,9 @@ const yearBucket = (ts) => {
   return Number.isNaN(d.getTime()) ? "Unknown" : String(d.getFullYear());
 };
 
-// Each filterable column: key + bucket(row) -> label used for options/filtering.
-const BEST_TRADES_FILTERS = {
-  asset: (t) => t.symbol,
-  side: (t) => t.side,
-  entry: (t) => priceBuckets(t.entryPrice),
-  exit: (t) => priceBuckets(t.exitPrice),
-  duration: (t) => durationBuckets(t.holdDays),
-  date: (t) => yearBucket(t.exitAt),
-  pnl: (t) => pnlSignBucket(t.pnl),
-};
-const ASSET_FILTERS = {
-  asset: (r) => r.symbol,
-  winRate: (r) => winRateBuckets(r.winRate),
-  volume: (r) => priceBuckets(r.volume),
-  pnl: (r) => pnlSignBucket(r.pnl),
-};
-
-function fmtMoney(v, currency) {
-  return formatCurrency(v, { currency, symbol: "$" });
-}
-function fmtSigned(v, currency) {
-  return formatCurrency(v, { currency, sign: true, symbol: "$" });
-}
-function fmtDuration(ms) {
+const fmtMoney = (v, currency) => formatCurrency(v, { currency, symbol: "$" });
+const fmtSigned = (v, currency) => formatCurrency(v, { currency, sign: true, symbol: "$" });
+const fmtDuration = (ms) => {
   if (!ms || ms < 0) return "—";
   const totalH = ms / (60 * 60 * 1000);
   const d = Math.floor(totalH / 24);
@@ -84,16 +63,15 @@ function fmtDuration(ms) {
   if (d > 0) return `${d}d ${h}h`;
   const m = Math.floor(totalH % 1 * 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-function fmtDate(ts) {
+};
+const fmtDate = (ts) => {
   if (!ts) return "—";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "—";
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
-}
+};
 
-// Header cell with caret + Popover checkbox filter.
 function PerformanceColumnHeader({ label, columnKey, filterDef, rows, selected, onToggle, onClear }) {
   const options = useMemo(() => {
     if (!filterDef) return [];
@@ -113,13 +91,9 @@ function PerformanceColumnHeader({ label, columnKey, filterDef, rows, selected, 
   const [search, setSearch] = useState("");
   const filteredOptions = options.filter((o) => o.toLowerCase().includes(search.toLowerCase()));
   const activeCount = selected?.size || 0;
-
-  if (!filterDef) {
-    return <span>{label}</span>;
-  }
+  if (!filterDef) return <span>{label}</span>;
 
   const isChecked = (opt) => selected?.has(opt);
-
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -157,21 +131,43 @@ function PerformanceColumnHeader({ label, columnKey, filterDef, rows, selected, 
   );
 }
 
-function ConnectionFilter({ value, onChange, accountOptions }) {
+function ConnectionMultiSelect({ options, selected, onToggle, onClearAll }) {
+  const [open, setOpen] = React.useState(false);
+  const label = selected.size === 0
+    ? "All Connections"
+    : selected.size === 1
+      ? options.find((o) => o.value === [...selected][0])?.label || "1 connection"
+      : `${selected.size} connections`;
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="portfolio-performance-conn-trigger">
-        <SelectValue placeholder="All Connections" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">All Connections</SelectItem>
-        {accountOptions.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value}>
-            {opt.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" className="portfolio-performance-conn-trigger">
+          <span>{label}</span>
+          <ChevronDown className="portfolio-performance-col-caret" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="portfolio-performance-filter-pop">
+        <div className="portfolio-performance-filter-head">
+          <span className="portfolio-performance-filter-title">Connections</span>
+          {selected.size > 0 && (
+            <button type="button" className="portfolio-performance-filter-clear" onClick={onClearAll}>
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="portfolio-performance-filter-list">
+          {options.map((opt) => (
+            <label key={opt.value} className="portfolio-performance-filter-item">
+              <Checkbox
+                checked={selected.has(opt.value)}
+                onCheckedChange={() => onToggle(opt.value)}
+              />
+              <span>{opt.label}</span>
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -185,52 +181,38 @@ export default function PerformanceModule({
   onManageConnections,
 }) {
   const [subTab, setSubTab] = useState("bestTrades");
-  const [connection, setConnection] = useState("all");
+  const [byConnection, setByConnection] = useState(false);
+  const [selectedConns, setSelectedConns] = useState(() => new Set());
   const [timeRange, setTimeRange] = useState("30D");
+  const [assetClass, setAssetClass] = useState("all");
   const [bestFilters, setBestFilters] = useState({});
   const [assetFilters, setAssetFilters] = useState({});
 
-  const analysis = useMemo(
-    () => analyzeTradePerformance({ transactions: displayTransactions, livePriceBySymbol }),
-    [displayTransactions, livePriceBySymbol]
+  const registry = useMemo(
+    () => buildConnectionRegistry({ connectedAccounts, brokerageAccounts }),
+    [connectedAccounts, brokerageAccounts]
   );
 
-  const accountOptions = useMemo(() => {
-    const seen = new Set();
-    const opts = [];
-    const push = (label, value) => {
-      if (!value || seen.has(value)) return;
-      seen.add(value);
-      opts.push({ label, value });
-    };
-    for (const a of connectedAccounts || []) {
-      const v = a.platform || a.provider || a.exchange || a.venueType;
-      push(a.label || a.provider || a.exchange || v || "Connection", String(v));
-    }
-    for (const b of brokerageAccounts || []) {
-      const v = b.platform || b.provider || b.brokerage || b.name;
-      push(b.name || b.label || v || "Brokerage", String(v));
-    }
-    return opts;
-  }, [connectedAccounts, brokerageAccounts]);
+  const analysis = useMemo(
+    () => analyzeTradePerformance({ transactions: displayTransactions, livePriceBySymbol, connections: registry }),
+    [displayTransactions, livePriceBySymbol, registry]
+  );
 
-  // Apply global Connection + Time-range filters to realizedTrades.
-  const filteredRealized = useMemo(() => {
+  const allTrades = analysis.realizedTrades;
+
+  // Global Connection + Time-range + Asset-class filters.
+  const filteredTrades = useMemo(() => {
     const now = Date.now();
     const range = TIME_RANGES.find((r) => r.key === timeRange);
-    return analysis.realizedTrades.filter((t) => {
-      if (connection !== "all") {
-        const conn = String(t.platform || t.provider || "");
-        if (conn !== connection) return false;
-      }
-      if (range && range.ms != null) {
-        if (!t.exitAt || now - t.exitAt > range.ms) return false;
-      }
+    return allTrades.filter((t) => {
+      if (selectedConns.size > 0 && !selectedConns.has(t.connectionId)) return false;
+      if (range && range.ms != null && (!t.exitAt || now - t.exitAt > range.ms)) return false;
+      if (assetClass !== "all" && t.assetClass !== assetClass) return false;
       return true;
     });
-  }, [analysis.realizedTrades, connection, timeRange]);
+  }, [allTrades, selectedConns, timeRange, assetClass]);
 
-  const toggleFilter = (store, setStore, key) => (opt) =>
+  const toggleSet = (store, setStore, key) => (opt) =>
     setStore((prev) => {
       const next = { ...prev };
       const cur = new Set(next[key] || []);
@@ -240,8 +222,7 @@ export default function PerformanceModule({
       else next[key] = cur;
       return next;
     });
-
-  const clearFilter = (setStore, key) => () =>
+  const clearSet = (setStore, key) => () =>
     setStore((prev) => {
       const next = { ...prev };
       delete next[key];
@@ -261,59 +242,76 @@ export default function PerformanceModule({
     );
   };
 
+  const bestDefs = {
+    asset: (t) => t.symbol,
+    class: (t) => t.assetClass,
+    connection: (t) => t.connectionLabel,
+    side: (t) => t.side,
+    entry: (t) => priceBuckets(t.entryPrice),
+    exit: (t) => priceBuckets(t.exitPrice),
+    duration: (t) => durationBuckets(t.holdDays),
+    date: (t) => yearBucket(t.exitAt),
+    pnl: (t) => pnlSignBucket(t.pnl),
+  };
+  const assetDefs = {
+    asset: (r) => r.symbol,
+    class: (r) => r.assetClass,
+    winRate: (r) => winRateBuckets(r.winRate),
+    volume: (r) => priceBuckets(r.volume),
+    pnl: (r) => pnlSignBucket(r.pnl),
+  };
+
   const bestRows = useMemo(() => {
-    const filtered = applyColumnFilters(filteredRealized, BEST_TRADES_FILTERS, bestFilters);
+    const filtered = applyColumnFilters(filteredTrades, bestDefs, bestFilters);
     return [...filtered].sort((a, b) => b.pnl - a.pnl);
-  }, [filteredRealized, bestFilters]);
+  }, [filteredTrades, bestFilters]);
 
   const assetRows = useMemo(() => {
-    const bySymbol = new Map();
-    for (const t of filteredRealized) {
-      const r = bySymbol.get(t.symbol) || { symbol: t.symbol, asset: t.symbol, trades: 0, wins: 0, losses: 0, breakevens: 0, volume: 0, pnl: 0 };
-      r.trades += 1;
-      r.volume += t.volume;
-      r.pnl += t.pnl;
-      if (t.pnl > 1e-8) r.wins += 1;
-      else if (t.pnl < -1e-8) r.losses += 1;
-      else r.breakevens += 1;
-      bySymbol.set(t.symbol, r);
-    }
-    const rows = [...bySymbol.values()].map((r) => {
-      const decisive = r.wins + r.losses;
-      return { ...r, winRate: decisive ? (r.wins / decisive) * 100 : 0, total: r.wins + r.losses };
-    });
-    const filtered = applyColumnFilters(rows, ASSET_FILTERS, assetFilters);
+    const source = byConnection
+      ? analysis.assetReport.flatMap((a) => a.byConnection.map((sc) => ({ ...sc, assetClass: a.assetClass })))
+      : analysis.assetReport.map((a) => ({
+          symbol: a.symbol,
+          assetClass: a.assetClass,
+          trades: a.trades,
+          wins: a.wins,
+          losses: a.losses,
+          breakevens: a.breakevens,
+          volume: a.volume,
+          pnl: a.pnl,
+          winRate: a.winRate,
+        }));
+    const filtered = applyColumnFilters(source, assetDefs, assetFilters);
     return [...filtered].sort((a, b) => b.pnl - a.pnl);
-  }, [filteredRealized, assetFilters]);
+  }, [analysis.assetReport, byConnection, assetFilters]);
 
-  const header = (label, key, defs, store, setStore) => ({
+  const header = (label, key, defs, store, setStore, rowset) => ({
     key,
     header: (
       <PerformanceColumnHeader
         label={label}
         columnKey={key}
         filterDef={defs[key]}
-        rows={key === "asset" || key === "side" || key === "entry" || key === "exit" || key === "duration" || key === "date" || key === "pnl"
-          ? bestRows
-          : assetRows}
+        rows={rowset}
         selected={store[key]}
-        onToggle={toggleFilter(store, setStore, key)}
-        onClear={clearFilter(setStore, key)}
+        onToggle={toggleSet(store, setStore, key)}
+        onClear={clearSet(setStore, key)}
       />
     ),
     sortable: false,
   });
 
   const bestColumns = [
-    header("Asset", "asset", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
-    header("Side", "side", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
-    header("Entry", "entry", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
-    header("Exit", "exit", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
-    header("Duration", "duration", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
-    header("Date", "date", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
-    header("PnL", "pnl", BEST_TRADES_FILTERS, bestFilters, setBestFilters),
+    header("Asset", "asset", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Class", "class", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Connection", "connection", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Side", "side", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Entry", "entry", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Exit", "exit", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Duration", "duration", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("Date", "date", bestDefs, bestFilters, setBestFilters, bestRows),
+    header("PnL", "pnl", bestDefs, bestFilters, setBestFilters, bestRows),
   ].map((c, i) => {
-    const aligns = ["left", "left", "right", "right", "right", "left", "right"];
+    const aligns = ["left", "left", "left", "left", "right", "right", "right", "left", "right"];
     return {
       ...c,
       align: aligns[i],
@@ -321,6 +319,10 @@ export default function PerformanceModule({
         switch (c.key) {
           case "asset":
             return <strong className="portfolio-performance-asset">{row.symbol}</strong>;
+          case "class":
+            return <span className="portfolio-performance-badge">{row.assetClass}</span>;
+          case "connection":
+            return <span className="portfolio-performance-conn-label">{row.connectionLabel}</span>;
           case "side":
             return <span className={row.side === "Long" ? "positive" : "negative"}>{row.side}</span>;
           case "entry":
@@ -341,13 +343,14 @@ export default function PerformanceModule({
   });
 
   const assetColumns = [
-    header("Asset", "asset", ASSET_FILTERS, assetFilters, setAssetFilters),
+    header("Asset", "asset", assetDefs, assetFilters, setAssetFilters, assetRows),
+    header("Class", "class", assetDefs, assetFilters, setAssetFilters, assetRows),
     { key: "trades", header: "Trades", sortable: false, align: "left", cell: (row) => <WinLossBar row={row} /> },
-    header("Win Rate", "winRate", ASSET_FILTERS, assetFilters, setAssetFilters),
-    header("Volume", "volume", ASSET_FILTERS, assetFilters, setAssetFilters),
-    header("PnL", "pnl", ASSET_FILTERS, assetFilters, setAssetFilters),
+    header("Win Rate", "winRate", assetDefs, assetFilters, setAssetFilters, assetRows),
+    header("Volume", "volume", assetDefs, assetFilters, setAssetFilters, assetRows),
+    header("PnL", "pnl", assetDefs, assetFilters, setAssetFilters, assetRows),
   ].map((c, i) => {
-    const aligns = ["left", "left", "right", "right", "right"];
+    const aligns = ["left", "left", "left", "right", "right", "right"];
     return {
       ...c,
       align: aligns[i],
@@ -355,6 +358,8 @@ export default function PerformanceModule({
         switch (c.key) {
           case "asset":
             return <strong className="portfolio-performance-asset">{row.symbol}</strong>;
+          case "class":
+            return <span className="portfolio-performance-badge">{row.assetClass}</span>;
           case "winRate":
             return <span className={row.winRate >= 50 ? "positive" : "negative"}>{formatPercent(row.winRate, { sign: false })}</span>;
           case "volume":
@@ -368,8 +373,16 @@ export default function PerformanceModule({
     };
   });
 
-  const activeCount = (subTab === "bestTrades" ? bestFilters : assetFilters);
-  const hasActiveFilters = Object.keys(activeCount).length > 0;
+  const activeStore = subTab === "bestTrades" ? bestFilters : assetFilters;
+  const hasActiveFilters = Object.keys(activeStore).length > 0 || selectedConns.size > 0 || assetClass !== "all";
+  const resetAll = () => {
+    setBestFilters({});
+    setAssetFilters({});
+    setSelectedConns(new Set());
+    setAssetClass("all");
+  };
+
+  const connOptions = registry.list.map((c) => ({ value: c.id, label: c.label }));
 
   return (
     <div className="portfolio-command-tab-panel">
@@ -378,7 +391,7 @@ export default function PerformanceModule({
           <h3>Performance</h3>
           <p>Closed-trade analytics across every connected broker, exchange, and wallet.</p>
         </div>
-        {accountOptions.length === 0 && onManageConnections && (
+        {registry.list.length === 0 && onManageConnections && (
           <button type="button" className="portfolio-v2-link" onClick={onManageConnections}>
             Manage Connections
           </button>
@@ -387,7 +400,19 @@ export default function PerformanceModule({
 
       <div className="portfolio-performance-controls">
         <div className="portfolio-performance-conn">
-          <ConnectionFilter value={connection} onChange={setConnection} accountOptions={accountOptions} />
+          <ConnectionMultiSelect
+            options={connOptions}
+            selected={selectedConns}
+            onToggle={(v) =>
+              setSelectedConns((prev) => {
+                const next = new Set(prev);
+                if (next.has(v)) next.delete(v);
+                else next.add(v);
+                return next;
+              })
+            }
+            onClearAll={() => setSelectedConns(new Set())}
+          />
         </div>
         <div className="research-view-subtabs portfolio-performance-timerange" role="tablist" aria-label="Time range">
           {TIME_RANGES.map((r) => (
@@ -402,6 +427,14 @@ export default function PerformanceModule({
               {r.label}
             </button>
           ))}
+        </div>
+        <div className="portfolio-performance-assetclass">
+          <ConnectionMultiSelect
+            options={ASSET_CLASSES.map((c) => ({ value: c, label: c }))}
+            selected={assetClass === "all" ? new Set() : new Set([assetClass])}
+            onToggle={(v) => setAssetClass((prev) => (prev === v ? "all" : v))}
+            onClearAll={() => setAssetClass("all")}
+          />
         </div>
       </div>
 
@@ -424,12 +457,18 @@ export default function PerformanceModule({
         >
           Asset Performance
         </button>
-        {hasActiveFilters && (
+        {subTab === "assetPerformance" && (
           <button
             type="button"
-            className="portfolio-performance-reset"
-            onClick={() => (subTab === "bestTrades" ? setBestFilters({}) : setAssetFilters({}))}
+            className={`portfolio-performance-conn-toggle ${byConnection ? "active" : ""}`}
+            aria-pressed={byConnection}
+            onClick={() => setByConnection((v) => !v)}
           >
+            By connection
+          </button>
+        )}
+        {hasActiveFilters && (
+          <button type="button" className="portfolio-performance-reset" onClick={resetAll}>
             Reset filters
           </button>
         )}
@@ -441,7 +480,7 @@ export default function PerformanceModule({
             <DataTable
               columns={bestColumns}
               data={bestRows}
-              getRowId={(row, i) => `${row.symbol}-${row.exitAt}-${i}`}
+              getRowId={(row, i) => `${row.symbol}-${row.connectionId}-${row.exitAt}-${i}`}
               className="portfolio-command-table compact"
               emptyState="No closed trades match the current filters."
             />
@@ -449,7 +488,7 @@ export default function PerformanceModule({
             <DataTable
               columns={assetColumns}
               data={assetRows}
-              getRowId={(row) => row.symbol}
+              getRowId={(row) => (byConnection ? `${row.symbol}-${row.connectionId}` : row.symbol)}
               className="portfolio-command-table compact"
               emptyState="No assets match the current filters."
             />

@@ -48503,3 +48503,48 @@ body.light-theme-active {
   color: var(--color-text-muted);
   white-space: nowrap;
 }
+/* Class badge + connection label */
+.portfolio-performance-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--color-surface-hover);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-default);
+}
+.portfolio-performance-conn-label {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+}
+/* "By connection" pill toggle (Asset Performance only) */
+.portfolio-performance-conn-toggle {
+  margin-left: auto;
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-depth);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.portfolio-performance-conn-toggle.active {
+  background: var(--color-selected);
+  color: var(--color-text-inverse);
+  border-color: var(--color-selected);
+}
+.portfolio-performance-assetclass {
+  flex: 0 0 auto;
+}
+.portfolio-performance-filter-title {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
