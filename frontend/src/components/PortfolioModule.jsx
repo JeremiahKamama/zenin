@@ -23,6 +23,7 @@ import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
 // Portfolio Intelligence — feature modules + normalized data layer.
 import { PortfolioOverview } from "./portfolioIntelligence/PortfolioOverview";
 import { PortfolioAnalysis, PORTFOLIO_ANALYSIS_TABS } from "./portfolioIntelligence/PortfolioAnalysis";
+import PerformanceModule from "./portfolioIntelligence/modules/PerformanceModule";
 import { useRegimeIntelligence } from "./portfolioIntelligence/useRegimeIntelligence";
 import { deriveOrderLedgerFromConnections } from "./portfolioIntelligence/services/OrderNormalizationService";
 import { normalizeExecutions } from "./portfolioIntelligence/services/ExecutionService";
@@ -2286,68 +2287,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
 
   const renderPortfolioTabContent = () => {
     if (activePortfolioTab === "attribution") {
-      const groups = [
-        { key: "sector", label: "Sectors" },
-        { key: "region", label: "Regions" },
-        { key: "factor", label: "Factors" },
-      ];
       return (
-        <div className="portfolio-command-tab-panel">
-          <div className="portfolio-command-panel-head">
-            <div>
-              <h3>What Drove Performance</h3>
-              <p>Contribution by sector, region, and factor so you can see what really moved the book.</p>
-            </div>
-            <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution")}>Open Attribution Flow</button>
-          </div>
-          <div className="portfolio-command-card-grid three portfolio-command-attribution-grid">
-            {groups.map((group) => {
-              const row = attributionRows?.[group.key]?.[0] || null;
-              return (
-                <button
-                  key={group.key}
-                  type="button"
-                  className="portfolio-command-mini-card"
-                  onClick={() => {
-                    if (row) {
-                      setFlowSelection(row);
-                    }
-                    openInsightFlow("attribution", row);
-                  }}
-                >
-                  <span>{group.label}</span>
-                  <strong>{row?.name || "No lead contributor"}</strong>
-                  <em className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>
-                    {row ? formatSignedMoney(row.pnl) : "$0.00"}
-                  </em>
-                </button>
-              );
-            })}
-          </div>
-          <div className="portfolio-command-table-wrap">
-            <DataTable
-              columns={[
-                { key: "bucket", header: "Bucket", sortable: false },
-                { key: "name", header: "Leader", sortable: false },
-                {
-                  key: "pnl",
-                  header: "Contribution",
-                  sortable: false,
-                  cell: (row) => <span className={Number(row?.pnl || 0) >= 0 ? "positive" : "negative"}>{formatSignedMoney(row.pnl)}</span>,
-                },
-                {
-                  key: "action",
-                  header: "Action",
-                  sortable: false,
-                  cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openInsightFlow("attribution", row)}>Review</button>,
-                },
-              ]}
-              data={groups.flatMap((group) => (attributionRows?.[group.key] || []).slice(0, 3).map((row) => ({ ...row, bucket: group.label })))}
-              getRowId={(row) => `${row.bucket}-${row.name}`}
-              className="portfolio-command-table compact"
-            />
-          </div>
-        </div>
+        <PerformanceModule
+          displayTransactions={displayTransactions}
+          displayPositions={displayPositions}
+          connectedAccounts={connectedAccounts}
+          brokerageAccounts={brokerageAccounts}
+          livePriceBySymbol={spotPrices}
+          baseCurrency={displayCurrency}
+          onManageConnections={handleOpenConnections}
+        />
       );
     }
 

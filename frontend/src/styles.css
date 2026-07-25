@@ -48350,3 +48350,156 @@ body.light-theme-active {
 .plan-lock__cta:hover {
   border-color: var(--color-text, #f2f3f5);
 }
+
+/* Performance tab (replaces attribution) — Best Trades + Asset Performance */
+.portfolio-performance-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.portfolio-performance-conn {
+  min-width: 220px;
+  flex: 0 0 auto;
+}
+.portfolio-performance-conn-trigger {
+  width: 100%;
+}
+.portfolio-performance-timerange {
+  flex: 0 0 auto;
+}
+.portfolio-performance-reset {
+  margin-left: auto;
+  align-self: center;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.portfolio-performance-scroll {
+  max-height: calc(5 * var(--table-row-height));
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+}
+.portfolio-performance-scroll .portfolio-command-table.compact {
+  margin: 0;
+}
+.portfolio-performance-asset {
+  font-weight: 600;
+}
+/* per-column header dropdown caret */
+.portfolio-performance-col-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.portfolio-performance-col-header.is-active {
+  color: var(--color-interactive);
+}
+.portfolio-performance-col-caret {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+.portfolio-performance-col-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--color-interactive);
+  color: var(--color-text-inverse);
+  font-size: 9px;
+  line-height: 1;
+}
+.portfolio-performance-filter-pop {
+  width: 240px;
+  padding: 10px;
+}
+.portfolio-performance-filter-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.portfolio-performance-filter-search {
+  flex: 1 1 auto;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-depth);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+.portfolio-performance-filter-clear {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.portfolio-performance-filter-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.portfolio-performance-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.portfolio-performance-filter-item:hover {
+  background: var(--color-surface-hover);
+}
+.portfolio-performance-filter-empty {
+  padding: 8px 6px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+/* win/loss split bar (Asset Performance) */
+.portfolio-performance-winloss {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.portfolio-performance-winloss-bar {
+  position: relative;
+  flex: 0 0 90px;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-surface-hover);
+  display: flex;
+}
+.portfolio-performance-winloss-bar > .win {
+  background: var(--color-success);
+}
+.portfolio-performance-winloss-bar > .loss {
+  background: var(--color-danger);
+}
+.portfolio-performance-winloss-text {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
