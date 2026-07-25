@@ -131,13 +131,13 @@ function PerformanceColumnHeader({ label, columnKey, filterDef, rows, selected, 
   );
 }
 
-function ConnectionMultiSelect({ options, selected, onToggle, onClearAll }) {
+function ConnectionMultiSelect({ options, selected, onToggle, onClearAll, placeholder = "All Connections" }) {
   const [open, setOpen] = React.useState(false);
   const label = selected.size === 0
-    ? "All Connections"
+    ? placeholder
     : selected.size === 1
-      ? options.find((o) => o.value === [...selected][0])?.label || "1 connection"
-      : `${selected.size} connections`;
+      ? options.find((o) => o.value === [...selected][0])?.label || "1 selected"
+      : `${selected.size} selected`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -434,6 +434,7 @@ export default function PerformanceModule({
             selected={assetClass === "all" ? new Set() : new Set([assetClass])}
             onToggle={(v) => setAssetClass((prev) => (prev === v ? "all" : v))}
             onClearAll={() => setAssetClass("all")}
+            placeholder="Asset type"
           />
         </div>
       </div>

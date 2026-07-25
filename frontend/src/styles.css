@@ -48357,6 +48357,7 @@ body.light-theme-active {
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+  justify-content: flex-end;
   margin-bottom: 12px;
 }
 .portfolio-performance-conn {

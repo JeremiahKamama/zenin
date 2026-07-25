@@ -112,8 +112,16 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
   let totalVolume = 0;
 
   for (const trade of sorted) {
-    const type = String(trade.type || trade.side || "").toUpperCase();
-    if (type !== "BUY" && type !== "SELL") continue;
+    // Normalize direction from type OR side (unified mapper yields lowercase
+    // "buy"/"sell"/"trade"/"fill", so accept any casing + B/S/LONG/SHORT).
+    const rawType = String(trade.type || "").toUpperCase();
+    const rawSide = String(trade.side || "").toUpperCase();
+    let direction;
+    if (["BUY", "B", "LONG"].includes(rawType)) direction = "BUY";
+    else if (["SELL", "S", "SHORT"].includes(rawType)) direction = "SELL";
+    else if (["SELL", "S", "SHORT"].includes(rawSide)) direction = "SELL";
+    else if (["BUY", "B", "LONG"].includes(rawSide)) direction = "BUY";
+    if (!direction) continue;
 
     const asset = normalizeSymbol(trade.asset || trade.symbol);
     const lotKey = buildLotKey(asset, trade);
@@ -138,7 +146,7 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
 
     const lots = lotsByKey.get(lotKey) || [];
 
-    if (type === "BUY") {
+    if (direction === "BUY") {
       let remaining = qty;
       while (remaining > 0 && lots.length > 0 && lots[0].direction === "short") {
         const lot = lots[0];
