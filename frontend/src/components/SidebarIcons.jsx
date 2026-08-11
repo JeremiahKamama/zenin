@@ -13,6 +13,7 @@ import {
   Search,
   Activity,
   Settings as OptionsIconLucide,
+  Settings2 as Settings2Icon,
   Target,
   NotebookText,
   LayoutDashboard,
@@ -22,6 +23,7 @@ import {
   Moon,
   Sun,
   User,
+  Bell,
   LogOut,
   Star,
   TrendingUp,
@@ -62,7 +64,10 @@ export function MetricsIcon() {
 }
 
 export function OptionsIcon() {
-  return <OptionsIconLucide {...iconProps} />;
+  return <OptionsIconLucide {...iconProps} />;}
+
+export function SettingsIcon() {
+  return <Settings2Icon {...iconProps} />;
 }
 
 export function PredictionsIcon() {
@@ -105,6 +110,10 @@ export function AccountIcon() {
   return <User {...iconProps} />;
 }
 
+export function NotificationIcon() {
+  return <Bell {...iconProps} />;
+}
+
 export function LogoutIcon() {
   return <LogOut {...iconProps} />;
 }
@@ -139,9 +148,11 @@ export default {
   ThemeDarkIcon,
   ThemeLightIcon,
   AccountIcon,
+  NotificationIcon,
   LogoutIcon,
   StarIcon,
   TrendingUpIcon,
   FileTextIcon,
-  IntelligenceIcon
+  IntelligenceIcon,
+  SettingsIcon
 };

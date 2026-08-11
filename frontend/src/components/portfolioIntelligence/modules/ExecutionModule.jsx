@@ -10,6 +10,7 @@ import { useMemo } from "react";
 import { DataTable } from "../../data-table/DataTable";
 import { normalizeExecutions, deriveExecutionIntelligence } from "../services/ExecutionService";
 import { formatMoney, formatBps, formatQuantity, formatTimestamp, formatRelativeTime } from "../formatters";
+import { AssetLogo } from "../../../components/AssetLogo";
 
 export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
   const executions = useMemo(() => normalizeExecutions(rawExecutions), [rawExecutions]);
@@ -59,7 +60,7 @@ export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
   ];
 
   const slipColumns = [
-    { key: "symbol", header: "Symbol", cell: (x) => x.execution.symbol },
+    { key: "symbol", header: "Symbol", cell: (x) => (<><AssetLogo asset={x.execution} size="xs" /> {x.execution.symbol}</>) },
     {
       key: "side",
       header: "Side",
@@ -77,7 +78,7 @@ export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
 
   const timelineColumns = [
     { key: "executedAt", header: "Time", sortValue: (e) => new Date(e.executedAt).getTime(), cell: (e) => formatTimestamp(e.executedAt) },
-    { key: "symbol", header: "Symbol", cell: (e) => e.symbol },
+    { key: "symbol", header: "Symbol", cell: (e) => (<><AssetLogo asset={e} size="xs" /> {e.symbol}</>) },
     {
       key: "side",
       header: "Side",
@@ -88,7 +89,7 @@ export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
     { key: "venue", header: "Venue", cell: (e) => String(e.raw?.platformName || e.platform).toUpperCase() },
     { key: "quantity", header: "Qty", align: "right", sortValue: (e) => e.quantity, cell: (e) => formatQuantity(e.quantity) },
     { key: "price", header: "Price", align: "right", sortValue: (e) => e.price, cell: (e) => formatMoney(e.price) },
-    { key: "role", header: "Role", cell: (e) => (e.liquidityRole ? <span className="capitalize">{e.liquidityRole}</span> : "—") },
+    { key: "liquidityRole", header: "Role", cell: (e) => (e.liquidityRole ? <span className="capitalize">{e.liquidityRole}</span> : <span className="text-[var(--color-text-muted)]">—</span>) },
   ];
 
   return (
@@ -165,6 +166,7 @@ export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
           columns={venueColumns}
           data={intel.venueComparison}
           getRowId={(v) => v.venue}
+          className="portfolio-command-table compact"
           emptyState={<div className="portfolio-command-empty"><h3>No venue data</h3></div>}
         />
       </div>
@@ -180,6 +182,7 @@ export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
           columns={slipColumns}
           data={intel.largestSlippageEvents}
           getRowId={(x) => x.execution.platformFillId || x.execution.id}
+          className="portfolio-command-table compact"
           emptyState={<div className="portfolio-command-empty"><h3>No slippage events</h3></div>}
         />
       </div>
@@ -194,7 +197,10 @@ export function ExecutionModule({ rawExecutions = [], onManageConnections }) {
         <DataTable
           columns={timelineColumns}
           data={intel.timeline}
-          getRowId={(e) => e.platformFillId || e.id}
+          getRowId={(e, i) => (e.platformFillId ? String(e.platformFillId) : `row-${i}`)}
+          className="portfolio-command-table compact"
+          virtual
+          rowHeight={44}
           emptyState={<div className="portfolio-command-empty"><h3>No executions</h3></div>}
         />
       </div>

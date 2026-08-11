@@ -1,4 +1,110 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { CircleHelp, MoreHorizontal } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { getMetricGlossaryEntry } from "../utils/metricGlossary";
+
+/** @typedef {"neutral"|"info"|"success"|"warning"|"risk"|"stale"} SemanticTone */
+
+/** A dashboard header with an explicit primary action and compact secondary actions. */
+export function WorkspacePageHeader({
+  eyebrow,
+  title,
+  description,
+  status,
+  primaryAction,
+  secondaryActions,
+  className = "",
+}) {
+  return (
+    <header className={`workspace-page-header ${className}`.trim()}>
+      <div className="workspace-page-header__copy">
+        {eyebrow ? <span className="workspace-page-header__eyebrow">{eyebrow}</span> : null}
+        <h1>{title}</h1>
+        {description ? <p>{description}</p> : null}
+        {status ? <div className="workspace-page-header__status">{status}</div> : null}
+      </div>
+      {(primaryAction || secondaryActions) ? (
+        <div className="workspace-page-header__actions">
+          {primaryAction ? <div className="workspace-page-header__primary">{primaryAction}</div> : null}
+          {secondaryActions ? <div className="workspace-page-header__secondary">{secondaryActions}</div> : null}
+        </div>
+      ) : null}
+    </header>
+  );
+}
+
+/** Inline metrics; one item may be marked `featured` to prevent equal-card noise. */
+export function WorkspaceMetricStrip({ items = [], className = "", label = "Summary metrics" }) {
+  return (
+    <section className={`workspace-metric-strip ${className}`.trim()} aria-label={label}>
+      {items.map((item) => (
+        <article key={item.label} className={`workspace-metric-strip__item tone-${item.tone || "neutral"} ${item.featured ? "is-featured" : ""}`.trim()}>
+          <div className="workspace-metric-strip__label-row">
+            <span>{item.label}</span>
+            {item.glossaryKey ? <MetricHelp metric={item.glossaryKey} /> : null}
+          </div>
+          <strong>{item.value}</strong>
+          {item.helper ? <small>{item.helper}</small> : null}
+        </article>
+      ))}
+    </section>
+  );
+}
+
+/** Ranked, action-first alerts. Secondary actions remain available without competing with the CTA. */
+export function AttentionList({ items = [], className = "", emptyMessage = "No active items." }) {
+  if (!items.length) return <p className="workspace-attention-empty">{emptyMessage}</p>;
+  return (
+    <ol className={`workspace-attention-list ${className}`.trim()}>
+      {items.map((item) => (
+        <li key={item.id || item.title} className={`workspace-attention-list__item tone-${item.tone || "info"}`}>
+          <div className="workspace-attention-list__copy">
+            <span className="workspace-attention-list__tone">{item.label || item.tone || "Info"}</span>
+            <strong>{item.title}</strong>
+            {item.description ? <p>{item.description}</p> : null}
+            {item.meta ? <small>{item.meta}</small> : null}
+          </div>
+          <div className="workspace-attention-list__actions">
+            {item.action ? <button type="button" className="workspace-attention-list__primary" onClick={item.action.onClick}>{item.action.label}</button> : null}
+            {item.secondaryAction ? <button type="button" className="workspace-attention-list__secondary" onClick={item.secondaryAction.onClick} aria-label={item.secondaryAction.ariaLabel || item.secondaryAction.label}><MoreHorizontal size={18} aria-hidden="true" /></button> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** A context surface that becomes an ordered disclosure after the main content on small screens. */
+export function ContextRail({ title = "Context", children, className = "" }) {
+  return (
+    <aside className={`workspace-context-rail ${className}`.trim()} aria-label={title}>
+      <div className="workspace-context-rail__heading">{title}</div>
+      <div className="workspace-context-rail__body">{children}</div>
+    </aside>
+  );
+}
+
+/** Accessible inline definition for finance-specific metrics. */
+export function MetricHelp({ metric, entry, className = "" }) {
+  const definition = entry || getMetricGlossaryEntry(metric);
+  if (!definition) return null;
+  return (
+    <TooltipProvider delayDuration={180}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" className={`metric-help ${className}`.trim()} aria-label={`About ${definition.label}`}>
+            <CircleHelp size={14} aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="metric-help__content" side="top">
+          <strong>{definition.label}</strong>
+          <span>{definition.definition}</span>
+          <span>{definition.whyItMatters}</span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 export function CompactPageHeader({
   eyebrow,
@@ -9,17 +115,14 @@ export function CompactPageHeader({
   className = "",
 }) {
   return (
-    <header className={`compact-page-header ${className}`.trim()}>
-      <div className="compact-page-header-copy">
-        {eyebrow ? <div className="compact-page-eyebrow">{eyebrow}</div> : null}
-        <div className="compact-page-title-row">
-          <h2>{title}</h2>
-          {meta ? <div className="compact-page-meta">{meta}</div> : null}
-        </div>
-        {description ? <p>{description}</p> : null}
-      </div>
-      {actions ? <div className="compact-page-actions">{actions}</div> : null}
-    </header>
+    <WorkspacePageHeader
+      eyebrow={eyebrow}
+      title={title}
+      description={description}
+      status={meta ? <div className="compact-page-meta">{meta}</div> : null}
+      secondaryActions={actions}
+      className={`compact-page-header ${className}`.trim()}
+    />
   );
 }
 
@@ -152,6 +255,7 @@ export function FilterPopover({
 }
 
 export function RightRailDrawer({
+  id,
   open,
   onClose,
   title,
@@ -159,6 +263,7 @@ export function RightRailDrawer({
   actions,
   children,
   className = "",
+  overlayClassName = "",
 }) {
   const [isMounted, setIsMounted] = useState(open);
   const [isClosing, setIsClosing] = useState(false);
@@ -194,8 +299,9 @@ export function RightRailDrawer({
 
   if (!isMounted) return null;
   return (
-    <div className={`right-rail-drawer-overlay ${isClosing ? "is-closing" : ""}`.trim()} onMouseDown={onClose}>
+    <div className={`right-rail-drawer-overlay ${isClosing ? "is-closing" : ""} ${overlayClassName}`.trim()} onMouseDown={onClose}>
       <aside
+        id={id}
         className={`right-rail-drawer ${isClosing ? "is-closing" : ""} ${className}`.trim()}
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"

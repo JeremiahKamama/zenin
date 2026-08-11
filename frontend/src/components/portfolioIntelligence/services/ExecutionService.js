@@ -19,9 +19,24 @@ import { createExecution } from "../models/domainModels";
  */
 export function normalizeExecutions(rawExecutions = []) {
   const list = Array.isArray(rawExecutions) ? rawExecutions : [];
+  const seen = new Set();
   return list
     .map((raw) => createExecution(raw))
-    .filter((exec) => exec.platform && exec.quantity > 0);
+    .filter((exec) => exec.platform && exec.quantity > 0)
+    .filter((exec) => {
+      // Drop duplicate fills (the sync can insert the same fill twice, sharing
+      // a platformFillId). Duplicate rows collide on getRowId in the virtualized
+      // DataTable and render as blank rows.
+      // Prefer the authoritative platformFillId; never collapse distinct fills
+      // that share a timestamp/symbol/side — include price+notional in the
+      // heuristic fallback so genuine same-timestamp fills remain visible.
+      const key =
+        exec.platformFillId ||
+        `${exec.platform}|${exec.symbol}|${exec.side}|${exec.quantity}|${exec.price}|${exec.notional}|${exec.executedAt}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 /** Heuristic execution score (0..100) from slippage + fee + latency signals. */
@@ -125,9 +140,12 @@ export function deriveExecutionIntelligence(executions = []) {
     .sort((a, b) => Math.abs(b.slippageBps) - Math.abs(a.slippageBps))
     .slice(0, 8);
 
-  // Timeline (sorted newest first)
+  // Timeline (sorted newest first). Reject phantom rows: records with no
+  // valid timestamp, or zero/negative notional AND quantity, cannot be
+  // meaningful executions and must not render as blank rows.
   const timeline = [...list]
     .filter((e) => e.executedAt)
+    .filter((e) => Number(e.notional || 0) > 0 || Number(e.quantity || 0) > 0)
     .sort((a, b) => new Date(b.executedAt) - new Date(a.executedAt))
     .slice(0, 50);
 

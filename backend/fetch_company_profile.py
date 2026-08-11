@@ -11,6 +11,8 @@ import requests
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from posthog_client import posthog_client
+
 REQUEST_TIMEOUT_SECONDS = 12
 SEC_RECENT_FORMS_LIMIT = 12
 REGULATOR_BULLET_LIMIT = 4
@@ -1237,7 +1239,18 @@ def fetch_company_profile(symbol, theme=None, category=None):
     payload["research"] = {k: _compact_unique_strings(v) for k, v in research.items() if v}
     payload["sources"] = sources
 
-    return _normalize_json(payload)
+    normalized_payload = _normalize_json(payload)
+    if posthog_client:
+        posthog_client.capture(
+            event="company_profile_loaded",
+            properties={
+                "has_fallback": bool(yahoo_error),
+                "has_regulatory_data": bool(normalized_payload.get("regulators")),
+                "has_sec_filings": bool(normalized_payload.get("filings")),
+            },
+        )
+
+    return normalized_payload
 
 
 if __name__ == "__main__":

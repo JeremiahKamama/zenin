@@ -14,9 +14,8 @@ echo "Upgrading pip..."
 ./venv/bin/python3 -m pip install --upgrade pip
 
 # 3. Install compatible versions
-# Note: We use specific versions for Python 3.8 compatibility
 echo "Installing dependencies..."
-./venv/bin/pip install multitasking==0.0.11 yfinance==0.2.40 requests beautifulsoup4 pandas
+./venv/bin/pip install -r requirements.txt || exit 1
 
 echo "--- Setup Complete ---"
 echo "To use this environment manually: source venv/bin/activate"

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { DensePanelHeader, GuidedEmptyState, InlineControlGroup, RightRailDrawer } from "./CompactWorkspaceUI";
+import { DensePanelHeader, GuidedEmptyState, InlineControlGroup, RightRailDrawer, WorkspacePageHeader } from "./CompactWorkspaceUI";
 import { zeninFetchJson } from "../utils/zeninFetch";
 
 const CRYPTO_ASSETS = ["BTC", "ETH", "SOL", "HYPE", "BNB"];
@@ -54,7 +54,7 @@ function FieldSelect({ value, onChange, options }) {
 
 function ResultTile({ label, value, tone = "neutral", helper }) {
   return (
-    <div className={`perps-result-tile tone-${tone}`}>
+    <div className={`perps-result-tile tone-${tone}`} aria-label={`${label}: ${value}${helper ? `, ${helper}` : ""}`}>
       <span className="perps-tile-label">{label}</span>
       <strong className="perps-tile-value">{value}</strong>
       {helper ? <em className="perps-tile-helper">{helper}</em> : null}
@@ -64,7 +64,7 @@ function ResultTile({ label, value, tone = "neutral", helper }) {
 
 function VerdictBanner({ profitable, children }) {
   const tone = profitable === null ? "neutral" : profitable ? "profit" : "loss";
-  return <div className={`perps-verdict-banner ${tone}`}>{children}</div>;
+  return <div className={`perps-verdict-banner ${tone}`} role="status" aria-live="polite">{children}</div>;
 }
 
 // ── Latency Monitor tab ──────────────────────────────────────────────────────
@@ -127,6 +127,7 @@ function LatencyMonitorTab() {
   const bestP50 = venues.filter(v => v.p50 != null).sort((a, b) => a.p50 - b.p50)[0];
   const activeCount = venues.filter(v => v.enabled).length;
   const errorCount = venues.filter(v => v.lastError).length;
+  const hasSamples = venues.some((venue) => Number(venue.samples) > 0);
 
   return (
     <div className="perps-latency-monitor">
@@ -137,6 +138,21 @@ function LatencyMonitorTab() {
         <ResultTile label="Errors (24h)" value={String(errorCount)} tone={errorCount === 0 ? "profit" : "loss"} helper={errorCount === 0 ? "cleanup success: 100%" : `${errorCount} venue(s) with errors`} />
       </div>
 
+      {!hasSamples ? (
+        <GuidedEmptyState
+          className="perps-latency-empty"
+          eyebrow="Latency monitor"
+          title={data.runnerDeployed ? "Waiting for the first benchmark samples" : "Benchmark runner is not deployed"}
+          description={data.runnerDeployed
+            ? "Venues are configured, but no confirmed latency samples exist yet. This table will populate as the next scheduled run completes."
+            : "Deploy the benchmark runner to collect venue latency before using this monitor to make routing decisions."}
+          steps={data.runnerDeployed
+            ? ["Keep this monitor open or return after the next run.", "Use Fee Comparator for a decision that does not depend on latency samples."]
+            : ["Deploy the perps benchmark worker.", "Enable at least one venue, then return here for measured data."]}
+          cta="Open Fee Comparator"
+          onAction={() => { window.dispatchEvent(new CustomEvent("perps-calculator-switch-tab", { detail: "fees" })); }}
+        />
+      ) : (
       <div className="perps-venue-matrix">
         <DensePanelHeader
           title="Venue Performance"
@@ -182,6 +198,7 @@ function LatencyMonitorTab() {
           <span>Runner: {data.runnerDeployed ? "● deployed" : "○ not deployed"}</span>
         </div>
       </div>
+      )}
 
       {venues.some(v => v.lastError) && (
         <div className="perps-error-log">
@@ -813,11 +830,12 @@ export function PerpsCalculator() {
 
   return (
     <div className="perps-calculator-module">
-      <DensePanelHeader
+      <WorkspacePageHeader
+        eyebrow="Execution planning"
         title="Calculator"
-        subtitle="Carry, arbitrage, and fee modeling across crypto perps venues and stock brokers"
-        meta="All plans · live data"
-        actions={
+        description="Carry, arbitrage, fee, and venue-latency modeling across crypto perps and stock brokers."
+        status={<span className="perps-header-status">All plans · live data</span>}
+        primaryAction={
           <button className="perps-secondary-btn" onClick={() => setDrawerOpen(true)}>
             Saved Scenarios ({savedScenarios.length})
           </button>

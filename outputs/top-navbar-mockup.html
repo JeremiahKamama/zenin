@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zenin Top Navbar Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0a0a;
+      --surface: #111111;
+      --elevated: #171717;
+      --border: #262626;
+      --border-strong: #3a3a3a;
+      --text: #ffffff;
+      --text-secondary: #a3a3a3;
+      --text-muted: #737373;
+      --focus: #ffffff;
+      --selected: rgba(255, 255, 255, 0.08);
+      --success: #10b981;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+
+    button, a, input { -webkit-tap-highlight-color: transparent; }
+
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    .page {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 52% -20%, rgba(255, 255, 255, 0.055), transparent 36rem),
+        var(--bg);
+    }
+
+    .workspace-body { display: grid; grid-template-columns: 228px minmax(0, 1fr); min-height: calc(100vh - 76px); }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      min-height: calc(100vh - 76px);
+      padding: 22px 14px 16px;
+      background: #0f0f0f;
+      border-right: 1px solid var(--border);
+    }
+
+    .sidebar-kicker { margin: 0 10px 12px; color: var(--text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; }
+    .sidebar-nav { display: grid; gap: 4px; }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
+      gap: 11px;
+      padding: 0 11px;
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 13px;
+      transition: color 150ms cubic-bezier(0.23, 1, 0.32, 1), background 150ms cubic-bezier(0.23, 1, 0.32, 1), border-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+
+    .nav-item:hover { color: var(--text); background: rgba(255, 255, 255, 0.045); }
+    .nav-item.active { color: var(--text); background: var(--selected); border-color: #303030; }
+    .nav-icon { display: grid; place-items: center; width: 20px; color: var(--text-muted); }
+    .nav-item.active .nav-icon { color: var(--text); }
+    .nav-icon svg { width: 16px; height: 16px; }
+    .nav-label { flex: 1; }
+    .nav-code { color: #555; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+    .sidebar-status { margin-top: auto; padding: 14px 10px 0; border-top: 1px solid var(--border); }
+    .status-line { display: flex; align-items: center; justify-content: space-between; color: var(--text-muted); font-size: 11px; }
+    .status-value { color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .status-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; background: var(--success); border-radius: 50%; }
+
+    .topbar {
+      position: relative;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(280px, 560px) minmax(220px, 1fr);
+      align-items: center;
+      gap: 24px;
+      min-height: 76px;
+      padding: 14px 24px;
+      background: rgba(17, 17, 17, 0.94);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand-cluster, .actions, .search-shell, .search-field, .search-result, .help-link {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand-cluster { gap: 16px; min-width: 0; }
+
+    .icon-button, .avatar-button, .upgrade-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 40px;
+      min-height: 40px;
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+    }
+
+    .icon-button:hover, .avatar-button:hover, .help-link:hover {
+      color: var(--text);
+      background: var(--selected);
+    }
+
+    .menu-icon { width: 19px; height: 19px; }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+      text-decoration: none;
+      letter-spacing: 0.18em;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      color: var(--bg);
+      background: var(--text);
+      border-radius: 50%;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .search-wrap { position: relative; min-width: 0; }
+
+    .search-shell {
+      min-height: 46px;
+      gap: 12px;
+      padding: 0 12px 0 15px;
+      background: var(--elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 9px;
+      transition: border-color 140ms ease, background 140ms ease;
+    }
+
+    .search-shell:focus-within {
+      border-color: #666;
+      background: #1b1b1b;
+    }
+
+    .search-icon { width: 18px; height: 18px; color: var(--text-muted); flex: 0 0 auto; }
+
+    .search-field { flex: 1; min-width: 0; gap: 10px; }
+
+    .search-input {
+      width: 100%;
+      min-width: 0;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      outline: 0;
+      font-size: 14px;
+    }
+
+    .search-input::placeholder { color: var(--text-muted); }
+
+    .shortcut {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 25px;
+      height: 25px;
+      flex: 0 0 auto;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .actions { justify-content: flex-end; gap: 8px; min-width: 0; }
+
+    .upgrade-button {
+      gap: 8px;
+      min-width: auto;
+      padding: 0 15px;
+      color: var(--bg);
+      background: var(--text);
+      border-color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .upgrade-button:hover { background: #e5e5e5; border-color: #e5e5e5; }
+
+    .help-link {
+      min-height: 40px;
+      gap: 7px;
+      padding: 0 10px;
+      color: var(--text-secondary);
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .help-icon, .expand-icon { width: 17px; height: 17px; }
+
+    .avatar-button {
+      color: var(--text);
+      border-color: var(--border-strong);
+      border-radius: 50%;
+    }
+
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      color: var(--bg);
+      background: var(--text);
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .search-popover {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      left: 0;
+      padding: 8px;
+      background: #151515;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.44);
+    }
+
+    .search-popover[hidden] { display: none; }
+
+    .results-label {
+      padding: 8px 10px 6px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .search-result {
+      width: 100%;
+      gap: 12px;
+      padding: 10px;
+      color: var(--text);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    .search-result:hover, .search-result:focus-visible { background: var(--selected); outline-offset: -2px; }
+
+    .result-symbol {
+      min-width: 48px;
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .result-copy { display: grid; gap: 3px; }
+    .result-name { font-size: 13px; }
+    .result-meta { color: var(--text-muted); font-size: 11px; }
+
+    .demo-content {
+      display: grid;
+      place-items: center;
+      min-height: calc(100vh - 76px);
+      padding: 48px 24px;
+      text-align: center;
+    }
+
+    .demo-content p { max-width: 520px; margin: 10px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.6; }
+    .eyebrow { color: var(--text-muted); font-size: 11px; font-weight: 650; letter-spacing: 0.12em; text-transform: uppercase; }
+    h1 { margin: 10px 0 0; font-size: clamp(24px, 4vw, 42px); letter-spacing: -0.04em; }
+
+    @media (max-width: 900px) {
+      .workspace-body { grid-template-columns: 68px minmax(0, 1fr); }
+      .sidebar { align-items: center; padding-inline: 10px; }
+      .sidebar-kicker, .nav-label, .nav-code, .sidebar-status { display: none; }
+      .nav-item { justify-content: center; width: 46px; padding: 0; }
+      .topbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; padding-inline: 16px; }
+      .brand-name, .help-link span, .expand-button { display: none; }
+      .actions { gap: 4px; }
+      .upgrade-button { padding-inline: 12px; }
+    }
+
+    @media (max-width: 560px) {
+      .workspace-body { display: block; min-height: calc(100vh - 68px); }
+      .sidebar { display: none; }
+      .topbar { min-height: 68px; padding: 10px 12px; }
+      .brand-cluster { gap: 6px; }
+      .brand-mark { width: 28px; height: 28px; }
+      .upgrade-button { width: 40px; padding: 0; font-size: 0; }
+      .upgrade-button svg { width: 17px; }
+      .search-shell { min-height: 42px; padding-inline: 11px; }
+      .shortcut { display: none; }
+      .demo-content { min-height: calc(100vh - 68px); padding-inline: 20px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar" aria-label="Zenin workspace navigation">
+      <div class="brand-cluster">
+        <button class="icon-button" type="button" aria-label="Open workspace menu" title="Open workspace menu">
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <a class="brand" href="#" aria-label="Zenin home">
+          <span class="brand-mark" aria-hidden="true">Z</span>
+          <span class="brand-name">ZENIN</span>
+        </a>
+      </div>
+
+      <div class="search-wrap">
+        <div class="search-shell">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5" stroke-linecap="round"/></svg>
+          <label class="search-field">
+            <span class="visually-hidden" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">Search assets</span>
+            <input id="asset-search" class="search-input" type="search" autocomplete="off" placeholder="Search for a name, ticker, or function" aria-controls="search-results" aria-expanded="false">
+          </label>
+          <kbd class="shortcut" aria-hidden="true">/</kbd>
+        </div>
+        <div id="search-results" class="search-popover" role="listbox" aria-label="Suggested assets" hidden>
+          <div class="results-label">Suggested assets</div>
+          <button class="search-result" type="button" role="option">
+            <span class="result-symbol">AAPL</span>
+            <span class="result-copy"><span class="result-name">Apple Inc.</span><span class="result-meta">Company · NASDAQ</span></span>
+          </button>
+          <button class="search-result" type="button" role="option">
+            <span class="result-symbol">BTC</span>
+            <span class="result-copy"><span class="result-name">Bitcoin</span><span class="result-meta">Crypto · Global</span></span>
+          </button>
+          <button class="search-result" type="button" role="option">
+            <span class="result-symbol">GLD</span>
+            <span class="result-copy"><span class="result-name">SPDR Gold Shares</span><span class="result-meta">ETF · NYSE Arca</span></span>
+          </button>
+        </div>
+      </div>
+
+      <nav class="actions" aria-label="Workspace actions">
+        <button class="upgrade-button" type="button">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></svg>
+          <span>Upgrade</span>
+        </button>
+        <a class="help-link" href="#help">
+          <svg class="help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.8 9.4a2.4 2.4 0 1 1 3.8 1.9c-1 .7-1.6 1.1-1.6 2.4"/><path d="M12 16.8h.01" stroke-linecap="round"/></svg>
+          <span>Help Center</span>
+        </a>
+        <button class="icon-button expand-button" type="button" aria-label="Expand workspace" title="Expand workspace">
+          <svg class="expand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 4H4v4M4 4l6 6M16 4h4v4M20 4l-6 6M8 20H4v-4M4 20l6-6M16 20h4v-4M20 20l-6-6"/></svg>
+        </button>
+        <button class="avatar-button" type="button" aria-label="Open account menu" title="Open account menu"><span class="avatar" aria-hidden="true">J</span></button>
+      </nav>
+    </header>
+
+    <div class="workspace-body">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <p class="sidebar-kicker">Workspace</p>
+        <nav class="sidebar-nav">
+          <a class="nav-item active" href="#home" aria-current="page"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Z"/><path d="M9 20v-6h6v6"/></svg></span><span class="nav-label">Home</span><span class="nav-code">01</span></a>
+          <a class="nav-item" href="#portfolio"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V5M4 19h16"/><path d="m7 15 3-4 3 2 5-7"/></svg></span><span class="nav-label">Portfolio</span><span class="nav-code">02</span></a>
+          <a class="nav-item" href="#watchlist"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 4 2.3 4.7 5.2.8-3.8 3.7.9 5.2-4.6-2.4-4.6 2.4.9-5.2-3.8-3.7 5.2-.8L12 4Z"/></svg></span><span class="nav-label">Watchlist</span><span class="nav-code">03</span></a>
+          <a class="nav-item" href="#research"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 5h14v14H5z"/><path d="M8 9h8M8 12h8M8 15h5"/></svg></span><span class="nav-label">Research</span><span class="nav-code">04</span></a>
+          <a class="nav-item" href="#analytics"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19V9M12 19V5M19 19v-7"/></svg></span><span class="nav-label">Analytics</span><span class="nav-code">05</span></a>
+          <a class="nav-item" href="#journal"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span><span class="nav-label">Journal</span><span class="nav-code">06</span></a>
+        </nav>
+        <div class="sidebar-status">
+          <div class="status-line"><span><span class="status-dot"></span>Market feed</span><span class="status-value">LIVE</span></div>
+        </div>
+      </aside>
+      <main class="demo-content">
+        <div>
+          <div class="eyebrow">Workspace shell preview</div>
+          <h1>Search from anywhere in Zenin.</h1>
+          <p>Use the navbar search to find a ticker, company, ETF, commodity, currency, or workspace action without leaving the current view.</p>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const input = document.querySelector('#asset-search');
+    const popover = document.querySelector('#search-results');
+
+    function showResults() {
+      popover.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function hideResults() {
+      popover.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+
+    input.addEventListener('focus', showResults);
+    input.addEventListener('input', showResults);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        hideResults();
+        input.blur();
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      const typing = tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable;
+      if (event.key === '/' && !typing) {
+        event.preventDefault();
+        input.focus();
+        showResults();
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest('.search-wrap')) hideResults();
+    });
+  </script>
+</body>
+</html>

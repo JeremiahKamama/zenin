@@ -19,6 +19,7 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { useIntelligenceBusEvents } from "../../utils/useIntelligenceBus";
+import { AssetLogo } from "../AssetLogo";
 
 const CATEGORY_META = {
   macro: { label: "MACRO", desk: "macro", workspace: "macro" },
@@ -56,6 +57,32 @@ function freshness(updated) {
   if (ageH > 24) return { key: "expired", label: "Expired" };
   if (ageH > 12) return { key: "expiring", label: "Expiring" };
   return { key: "fresh", label: "Fresh" };
+}
+
+function assetKey(asset) {
+  if (asset && typeof asset === "object") {
+    return String(asset.symbol || asset.ticker || asset.name || asset.label || "asset");
+  }
+  return String(asset || "asset");
+}
+
+function assetLabel(asset) {
+  if (asset && typeof asset === "object") {
+    return String(asset.name || asset.label || asset.symbol || asset.ticker || "Asset");
+  }
+  return String(asset || "Asset");
+}
+
+function assetPayload(asset) {
+  if (asset && typeof asset === "object") {
+    return asset.raw || {
+      symbol: asset.symbol || asset.ticker || asset.label || asset.name,
+      name: asset.name || asset.label,
+      type: asset.type || asset.marketType || asset.category,
+      marketType: asset.marketType || asset.type || asset.category
+    };
+  }
+  return asset;
 }
 
 // Derive importance from impact + category (spec §3). Typography/spacing only.
@@ -130,7 +157,7 @@ function buildSignals({ busEvents, gainers, losers, calendarEvents, earningsEven
       updated: null,
       latency: "—",
       fallback: "Backend cache",
-      assets: [sym],
+      assets: [{ symbol: sym, name: m?.name || sym, type, raw: m }],
       transmissionPath: null,
       desk: cat,
     });
@@ -158,12 +185,14 @@ function buildSignals({ busEvents, gainers, losers, calendarEvents, earningsEven
   });
 
   (earningsEvents || []).slice(0, 2).forEach((ev, i) => {
-    const sym = String(ev?.symbol || ev?.title || "");
+    const sym = String(ev?.symbol || ev?.ticker || "").trim();
+    const title = String(ev?.title || ev?.event || ev?.period || "Upcoming corporate earnings.");
+    const label = String(ev?.name || ev?.company || title || sym).trim();
     out.push({
-      id: `sig-earn-${i}-${sym}`,
+      id: `sig-earn-${i}-${sym || label}`,
       category: "equities",
-      headline: sym ? `${sym} earnings` : "Earnings event",
-      summary: String(ev?.title || ev?.event || ev?.period || "Upcoming corporate earnings."),
+      headline: label ? `${label} earnings` : "Earnings event",
+      summary: title,
       why: "Earnings reset single-name and sector expectations; watch guidance and reaction.",
       impact: ev?.impact || "Watch",
       confidence: null,
@@ -172,7 +201,7 @@ function buildSignals({ busEvents, gainers, losers, calendarEvents, earningsEven
       updated: null,
       latency: "—",
       fallback: "Backend cache",
-      assets: sym ? [sym] : [],
+      assets: sym || label ? [{ symbol: sym || label, name: label || sym, type: "equity", raw: ev }] : [],
       transmissionPath: null,
       desk: "equities",
     });
@@ -220,7 +249,7 @@ function SignalCard({ s, onOpenWorkspace, onSelectAsset }) {
   const meta = CATEGORY_META[s.category] || { label: String(s.category || "SIGNAL").toUpperCase() };
   const imp = importance(s);
   const fresh = freshness(s.updated);
-  const nav = s.navigation || { workspace: meta.workspace, panel: null, tab: null, entity: s.assets?.[0] || null, filters: null };
+  const nav = s.navigation || { workspace: meta.workspace, panel: null, tab: null, entity: s.assets?.[0] ? assetPayload(s.assets[0]) : null, filters: null };
 
   return (
     <div className={`market-signal-card imp-${imp} fresh-${fresh.key}`}>
@@ -245,8 +274,16 @@ function SignalCard({ s, onOpenWorkspace, onSelectAsset }) {
       {s.assets && s.assets.length ? (
         <div className="msc-assets">
           <span className="msc-label">Affected</span>
-          {s.assets.slice(0, 6).map((a) => (
-            <button key={a} type="button" className="market-signal-asset" onClick={() => onSelectAsset?.(a)}>{a}</button>
+          {s.assets.slice(0, 6).map((asset) => (
+            <button
+              key={assetKey(asset)}
+              type="button"
+              className="market-signal-asset"
+              onClick={() => onSelectAsset?.(assetPayload(asset))}
+            >
+              <AssetLogo asset={asset} size="xs" />
+              {assetLabel(asset)}
+            </button>
           ))}
         </div>
       ) : null}
@@ -261,7 +298,7 @@ function SignalCard({ s, onOpenWorkspace, onSelectAsset }) {
       <div className="msc-actions">
         <button type="button" className="market-signal-btn" onClick={() => onOpenWorkspace?.({ ...nav, action: "research" })}>Open Research</button>
         <button type="button" className="market-signal-btn" onClick={() => onOpenWorkspace?.({ ...nav, action: "workspace" })}>Open Workspace</button>
-        {s.assets?.[0] ? <button type="button" className="market-signal-btn" onClick={() => onSelectAsset?.(s.assets[0])}>Open Asset</button> : null}
+        {s.assets?.[0] ? <button type="button" className="market-signal-btn" onClick={() => onSelectAsset?.(assetPayload(s.assets[0]))}>Open Asset</button> : null}
       </div>
     </div>
   );

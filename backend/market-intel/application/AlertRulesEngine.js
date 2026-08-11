@@ -27,17 +27,44 @@ class AlertRulesEngine {
    * @param {Object} [deps.eventBus]
    */
   constructor(deps = {}) {
-    this._db = deps.db || null;
-    this._notificationService = deps.notificationService || null;
-    this._eventBus = deps.eventBus || null;
-  }
+       this._db = deps.db || null;
+       this._notificationService = deps.notificationService || null;
+       this._eventBus = deps.eventBus || null;
+       // Per-(symbol,ruleId) last-fired timestamps to avoid alert-storming on every
+       // websocket tick. A matched rule fires at most once per REARM_MS while the
+       // condition holds.
+       this._lastFired = new Map();
+       this._rearmMs = 60 * 1000;
+     }
 
-  // -----------------------------------------------------------------------
-  // CRUD
-  // -----------------------------------------------------------------------
+     /**
+      * Feed a live price tick from the realtime quote stream. Builds a PRICE_CHANGE
+      * MarketEvent and evaluates all enabled rules for the symbol, throttling each
+      * (symbol, rule) pair to at most one notification per _rearmMs.
+      * @param {string} symbol
+      * @param {{ price: number, changePercent?: number|null }} quote
+      * @returns {Promise<Object[]>}
+      */
+     async feedPriceEvent(symbol, quote) {
+       if (!symbol || !quote || typeof quote.price !== "number" || Number.isNaN(quote.price)) return [];
+       const sym = String(symbol).toUpperCase();
+       const changePercent = quote.changePercent == null ? null : Number(quote.changePercent);
+       return this.evaluateEvent({
+         type: "PRICE_CHANGE",
+         symbol: sym,
+         payload: { price: quote.price, changePercent }
+       });
+     }
+
+     // -----------------------------------------------------------------------
+     // CRUD
 
   async createRule(userId, workspaceId, rule) {
     if (!this._db) throw new Error("Database not configured");
+    // Only the inApp channel is wired (no push/email provider registered). Coerce
+    // any client-supplied channels to the supported set so we never request a
+    // phantom "push" delivery.
+    const channels = ["inApp"];
     const result = await this._db.query(
       `INSERT INTO market_alert_rules
        (user_id, workspace_id, name, event_type, symbol, conditions, channels, enabled)
@@ -51,7 +78,7 @@ class AlertRulesEngine {
         rule.eventType,
         rule.symbol || null,
         JSON.stringify(rule.conditions || {}),
-        JSON.stringify(rule.channels || ["inApp", "push"]),
+        JSON.stringify(channels),
         rule.enabled !== false
       ]
     );
@@ -135,12 +162,19 @@ class AlertRulesEngine {
       );
 
       const matches = [];
+      const now = Date.now();
       for (const ruleRow of result.rows) {
         const rule = mapAlertRuleRow(ruleRow);
-        if (this._matchRule(event, rule)) {
-          matches.push(rule);
-          // Trigger notification if service available
-          if (this._notificationService) {
+        if (!this._matchRule(event, rule)) continue;
+        matches.push(rule);
+        // Throttle: a matched rule fires at most once per _rearmMs per symbol so a
+        // continuously-held condition doesn't storm notifications on every tick.
+        const throttleKey = `${(event.symbol || "").toUpperCase()}:${rule.id}`;
+        const last = this._lastFired.get(throttleKey) || 0;
+        if (now - last < this._rearmMs) continue;
+        this._lastFired.set(throttleKey, now);
+        // Trigger notification if service available
+        if (this._notificationService) {
             const title = this._buildNotificationTitle(rule, event);
             const body = this._buildNotificationBody(rule, event);
             this._notificationService.send(
@@ -150,7 +184,6 @@ class AlertRulesEngine {
               { channels: rule.channels, category: rule.eventType }
             ).catch(() => {});
           }
-        }
       }
       return matches;
     } catch (_) {

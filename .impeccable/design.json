@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-18T00:00:00+03:00",
+  "title": "Design System: Zenin",
+  "extensions": {
+    "colorMeta": {
+      "base": { "role": "neutral", "displayName": "Decision Black", "canonical": "#0A0A0A", "tonalRamp": ["#0A0A0A", "#111111", "#171717", "#262626", "#404040", "#808080", "#A3A3A3", "#FFFFFF"] },
+      "interactive": { "role": "primary", "displayName": "Ledger White", "canonical": "#FFFFFF", "tonalRamp": ["#111111", "#262626", "#404040", "#666666", "#808080", "#A3A3A3", "#E5E5E5", "#FFFFFF"] },
+      "success": { "role": "success", "displayName": "Verified Green", "canonical": "#10B981", "tonalRamp": ["#06281F", "#07543D", "#087A59", "#0B9B70", "#10B981", "#34D399", "#6EE7B7", "#D1FAE5"] },
+      "danger": { "role": "danger", "displayName": "Risk Red", "canonical": "#EF4444", "tonalRamp": ["#3A0808", "#6A1010", "#991B1B", "#C62D2D", "#EF4444", "#F87171", "#FCA5A5", "#FEE2E2"] },
+      "warning": { "role": "warning", "displayName": "Attention Amber", "canonical": "#F59E0B", "tonalRamp": ["#3B2202", "#6A3C03", "#924F04", "#C56A06", "#F59E0B", "#FBBF24", "#FCD34D", "#FEF3C7"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Decision Title", "purpose": "Primary page task and current decision context." },
+      "body": { "displayName": "Operational Body", "purpose": "Readable research, explanation, and decision context." },
+      "mono": { "displayName": "Financial Mono", "purpose": "Tabular values, prices, identifiers, and technical data." }
+    },
+    "shadows": [
+      { "name": "surface-detail", "value": "0 1px 2px rgba(0, 0, 0, 0.32)", "purpose": "Restrained local lift for compact interactive elements." },
+      { "name": "overlay", "value": "0 6px 14px rgba(0, 0, 0, 0.44)", "purpose": "Menus and controlled transient layers." },
+      { "name": "modal", "value": "0 24px 64px rgba(0, 0, 0, 0.62)", "purpose": "Dialogs and primary overlays only." }
+    ],
+    "motion": [
+      { "name": "fast", "value": "120ms cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Hover and small state changes." },
+      { "name": "base", "value": "180ms cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Opening and closing local interface layers." },
+      { "name": "slow", "value": "240ms cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Larger controlled transitions." }
+    ],
+    "breakpoints": [
+      { "name": "mobile", "value": "640px" },
+      { "name": "compact", "value": "960px" },
+      { "name": "desktop", "value": "1600px" },
+      { "name": "ultrawide", "value": "2560px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "One clear action within a decision context.",
+      "html": "<button class=\"ds-btn-primary\">Save decision</button>",
+      "css": ".ds-btn-primary { min-height: 40px; padding: 0 16px; border: 1px solid #FFFFFF; border-radius: 4px; background: #FFFFFF; color: #0A0A0A; font: 600 14px Geist, Inter, sans-serif; cursor: pointer; transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1), color 120ms cubic-bezier(0.4, 0, 0.2, 1); } .ds-btn-primary:hover { background: #E5E5E5; } .ds-btn-primary:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 3px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Supporting action that remains clear without competing with the primary action.",
+      "html": "<button class=\"ds-btn-secondary\">Review details</button>",
+      "css": ".ds-btn-secondary { min-height: 40px; padding: 0 16px; border: 1px solid #404040; border-radius: 4px; background: #171717; color: #FFFFFF; font: 600 14px Geist, Inter, sans-serif; cursor: pointer; transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1), border-color 120ms cubic-bezier(0.4, 0, 0.2, 1); } .ds-btn-secondary:hover { background: #262626; border-color: #808080; } .ds-btn-secondary:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 3px; }"
+    },
+    {
+      "name": "Data Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A compact field for research and account input.",
+      "html": "<label class=\"ds-field\"><span>Symbol</span><input value=\"AAPL\" /></label>",
+      "css": ".ds-field { display: grid; gap: 6px; color: #A3A3A3; font: 600 11px Geist, Inter, sans-serif; letter-spacing: .06em; text-transform: uppercase; } .ds-field input { height: 40px; border: 1px solid #404040; border-radius: 4px; background: #171717; color: #FFFFFF; padding: 0 12px; font: 400 14px Geist, Inter, sans-serif; } .ds-field input:focus { outline: 2px solid #FFFFFF; outline-offset: 2px; }"
+    },
+    {
+      "name": "Semantic Status",
+      "kind": "chip",
+      "refersTo": "success",
+      "description": "A semantic financial state with text, not color alone.",
+      "html": "<span class=\"ds-status\"><span aria-hidden=\"true\">↑</span> Healthy</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 8px; border: 1px solid rgba(16,185,129,.45); border-radius: 4px; background: rgba(16,185,129,.14); color: #34D399; font: 600 12px Geist, Inter, sans-serif; }"
+    },
+    {
+      "name": "Workspace Metric",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Inline metric content; use as a strip rather than a repeated equal-card grid.",
+      "html": "<article class=\"ds-metric\"><span>Portfolio return</span><strong>+4.82%</strong><small>Since opening balance</small></article>",
+      "css": ".ds-metric { display: grid; gap: 6px; min-width: 180px; padding: 16px; border: 1px solid #262626; border-radius: 4px; background: #111111; } .ds-metric span { color: #A3A3A3; font: 600 11px Geist, Inter, sans-serif; letter-spacing: .06em; text-transform: uppercase; } .ds-metric strong { color: #10B981; font: 600 22px Geist, Inter, sans-serif; font-variant-numeric: tabular-nums; } .ds-metric small { color: #A3A3A3; font: 400 12px Geist, Inter, sans-serif; }"
+    },
+    {
+      "name": "Active Navigation",
+      "kind": "nav",
+      "refersTo": "interactive",
+      "description": "The selected workspace destination uses inversion for immediate location awareness.",
+      "html": "<nav class=\"ds-nav\"><a>Portfolio</a><a class=\"is-active\">Research</a><a>Journal</a></nav>",
+      "css": ".ds-nav { display: grid; gap: 4px; width: 220px; padding: 8px; background: #111111; font: 500 14px Geist, Inter, sans-serif; } .ds-nav a { padding: 10px 12px; border-radius: 4px; color: #A3A3A3; } .ds-nav a.is-active { background: #FFFFFF; color: #0A0A0A; font-weight: 600; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Decision Ledger",
+    "overview": "Zenin is a dark-first product workspace that turns fragmented market signals into an inspectable decision trail. It uses a near-black surface hierarchy, compact geometric corners, and purposeful semantic color so portfolio performance, risk, freshness, and warnings communicate quickly without becoming visual decoration.",
+    "keyCharacteristics": ["Dense but legible workspace geometry built on a four-pixel spacing scale.", "Semantic color reserved for financial meaning, state, and actionability.", "Low-radius controls and containers with crisp borders rather than soft, decorative elevation.", "One consistent workflow: observe, investigate, decide, journal, review."],
+    "rules": [
+      { "name": "Meaning-Only Color Rule", "body": "Neutral controls, inactive navigation, and ordinary structure stay monochrome. Color must identify performance, risk, warning, freshness, or a direct state—not add atmosphere.", "section": "colors" },
+      { "name": "Evidence-First Type Rule", "body": "Use strong type to identify decisions and financial values, not to give every panel a headline.", "section": "typography" },
+      { "name": "Flat-By-Default Rule", "body": "Cards and sections communicate grouping with surface tone, border, and spacing. Shadow signals a layer that has left the page plane.", "section": "elevation" }
+    ],
+    "dos": ["Do keep the decision path visible: context first, analysis next, and a route into journaling or review where appropriate.", "Do use semantic color only for clear financial or operational meaning."],
+    "donts": ["Don't make Zenin resemble a decorative crypto dashboard with glow, ornamental charts, or speculative visual effects.", "Don't add colored side stripes thicker than 1px.", "Don't turn every metric or section into an equal-weight card."]
+  }
+}

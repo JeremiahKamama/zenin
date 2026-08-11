@@ -6,6 +6,7 @@ import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 import { zeninFetch } from "../utils/zeninFetch";
 import { Sparkline } from "./Sparkline";
+import { SortableHeader } from "./data-table/SortableHeader";
 const PREDICTION_REFRESH_MS = 21600000; // 6 hours
 
 export function PredictionMarketModule() {
@@ -207,9 +208,12 @@ const computeWhalePnl = (item, options = {}) => {
 
   const toggleWhaleSort = (key) => {
     setWhaleSort((prev) => {
-      if (prev.key === key) {
-        return { key, direction: prev.direction === "desc" ? "asc" : "desc" };
+      if (prev.key !== key) {
+        return { key, direction: "desc" };
       }
+      // 3-state cycle: desc → asc → null (reset to default order) → desc
+      if (prev.direction === "desc") return { key, direction: "asc" };
+      if (prev.direction === "asc") return { key: null, direction: null };
       return { key, direction: "desc" };
     });
   };
@@ -232,6 +236,8 @@ const computeWhalePnl = (item, options = {}) => {
       return Number(item?.transactionSize || 0) >= whaleMinSize;
     });
     const sorted = [...rows].sort((a, b) => {
+      // If no sort key is active (3rd click reset), preserve original order.
+      if (!whaleSort.key || !whaleSort.direction) return 0;
       const aVal = whaleSort.key === "pnl" ? Number(a?._pnl) : Number(a?.transactionSize);
       const bVal = whaleSort.key === "pnl" ? Number(b?._pnl) : Number(b?.transactionSize);
       const aNum = Number.isFinite(aVal) ? aVal : Number.NEGATIVE_INFINITY;
@@ -563,12 +569,20 @@ const computeWhalePnl = (item, options = {}) => {
                   <th>Market</th>
                   <th>Type</th>
                   <th>Avg Price</th>
-                  <th style={{ cursor: "pointer" }} onClick={() => toggleWhaleSort("transactionSize")}>
-                    Transaction Size{whaleSortArrow("transactionSize")}
-                  </th>
-                  <th style={{ cursor: "pointer" }} onClick={() => toggleWhaleSort("pnl")}>
-                    PnL{whaleSortArrow("pnl")}
-                  </th>
+                  <SortableHeader
+                    label="Transaction Size"
+                    active={whaleSort.key === "transactionSize"}
+                    direction={whaleSort.key === "transactionSize" ? whaleSort.direction : null}
+                    align="right"
+                    onClick={() => toggleWhaleSort("transactionSize")}
+                  />
+                  <SortableHeader
+                    label="PnL"
+                    active={whaleSort.key === "pnl"}
+                    direction={whaleSort.key === "pnl" ? whaleSort.direction : null}
+                    align="right"
+                    onClick={() => toggleWhaleSort("pnl")}
+                  />
                 </tr>
               </thead>
               <tbody>

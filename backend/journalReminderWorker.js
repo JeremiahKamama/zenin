@@ -22,8 +22,8 @@ const TICK_TIMEOUT_MS = 30 * 1000;
 // requirePlan() so the worker honours the same tier rules: in-app reminders
 // are allowed on every plan, but email delivery requires a paid plan. This
 // keeps free-tier users from being emailed while still getting in-app nudges.
-const PLAN_RANK = { starter: 0, pro: 1, desk: 2, enterprise: 3 };
-const EMAIL_MIN_PLAN = "pro";
+const PLAN_RANK = { starter: 0, plus: 1, premium: 2, enterprise: 3 };
+const EMAIL_MIN_PLAN = "plus";
 function planRank(plan) { return PLAN_RANK[String(plan || "starter").trim().toLowerCase()] || 0; }
 
 async function fetchEffectivePlan(userId, workspaceId) {

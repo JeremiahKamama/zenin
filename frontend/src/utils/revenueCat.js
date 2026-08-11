@@ -4,23 +4,27 @@ export const REVENUECAT_WEB_API_KEY =
   String(import.meta.env.VITE_REVENUECAT_WEB_API_KEY || "").trim();
 
 export const REVENUECAT_RECOMMENDED_SETUP = {
+  // NOTE: these are EXTERNAL RevenueCat dashboard identifiers (entitlement +
+  // product ids). They are intentionally left as zenin_pro/zenin_desk to avoid
+  // a RevenueCat dashboard migration; detectPlanFromIdentifier maps them to the
+  // internal tier ids (plus/premium) above.
   entitlementIds: {
-    pro: "zenin_pro",
-    desk: "zenin_desk"
+    plus: "zenin_pro",
+    premium: "zenin_desk"
   },
   products: {
-    proMonthly: "zenin.pro.monthly",
-    proYearly: "zenin.pro.yearly",
-    deskMonthly: "zenin.desk.monthly",
-    deskYearly: "zenin.desk.yearly"
+    plusMonthly: "zenin.pro.monthly",
+    plusYearly: "zenin.pro.yearly",
+    premiumMonthly: "zenin.desk.monthly",
+    premiumYearly: "zenin.desk.yearly"
   },
   offeringId: "default"
 };
 
 const PLAN_PRIORITY = {
   starter: 0,
-  pro: 1,
-  desk: 2
+  plus: 1,
+  premium: 2
 };
 
 let purchasesInstance = null;
@@ -33,19 +37,24 @@ function normalizeId(value) {
 function detectPlanFromIdentifier(identifier) {
   const normalized = normalizeId(identifier);
   if (!normalized) return null;
+  // Premium tier (legacy id: "desk"). RevenueCat entitlement/product ids
+  // (zenin.desk.*, zenin_desk) are external dashboard identifiers — kept stable —
+  // but resolve to the internal "premium" plan.
   if (
+    normalized.includes("premium") ||
     normalized.includes("desk") ||
     normalized.includes("team") ||
     normalized.includes("enterprise")
   ) {
-    return "desk";
+    return "premium";
   }
+  // Plus tier (legacy id: "pro"). RevenueCat ids (zenin.pro.*, zenin_pro) kept
+  // stable; resolve to the internal "plus" plan.
   if (
-    normalized.includes("pro") ||
-    normalized.includes("premium") ||
-    normalized.includes("plus")
+    normalized.includes("plus") ||
+    normalized.includes("pro")
   ) {
-    return "pro";
+    return "plus";
   }
   if (normalized.includes("starter") || normalized.includes("free")) {
     return "starter";

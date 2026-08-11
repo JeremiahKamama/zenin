@@ -10,43 +10,43 @@ const PUBLIC_RUNTIME_CONFIG = {
     enableAppleOAuth: false
   },
   subscription: {
-    validPlans: ['starter', 'pro', 'desk'],
+    validPlans: ['starter', 'plus', 'premium'],
     validBillingCycles: ['monthly', 'yearly'],
     yearlyDiscountRate: 0.2,
     monthlyPrices: {
       starter: 0,
-      pro: 29,
-      desk: 99
+      plus: 29,
+      premium: 99
     }
   }
 };
 
 const APP_RUNTIME_CONFIG = {
   subscription: {
-    validPlans: ['starter', 'pro', 'desk'],
+    validPlans: ['starter', 'plus', 'premium'],
     validBillingCycles: ['monthly', 'yearly'],
     yearlyDiscountRate: 0.2,
     monthlyPrices: {
       starter: 0,
-      pro: 29,
-      desk: 99
+      plus: 29,
+      premium: 99
     },
     planRank: {
       starter: 0,
-      pro: 1,
-      desk: 2
+      plus: 1,
+      premium: 2
     },
     sectionMinPlan: {
       Home: 'starter',
       Portfolio: 'starter',
       Watchlist: 'starter',
-      Analytics: 'pro',
-      Journal: 'pro',
-      Options: 'desk',
-      Predictions: 'desk',
-      Research: 'pro',
+      Analytics: 'plus',
+      Journal: 'plus',
+      Options: 'premium',
+      Predictions: 'premium',
+      Research: 'plus',
       'Tax Estimator': 'starter',
-      Metrics: 'pro'
+      Metrics: 'plus'
     }
   },
   watchlist: {

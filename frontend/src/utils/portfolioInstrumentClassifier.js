@@ -14,6 +14,7 @@
 //  - No fabricated valuations.
 
 import { normalizeInstrumentSymbol, resolveCurrencyInstrument } from "./currencyInstruments.js";
+import { isStable } from "./stablecoins";
 
 /**
  * classifyPortfolioInstrument — returns one of the canonical buckets.
@@ -27,8 +28,11 @@ export function classifyPortfolioInstrument(holding = {}) {
   const instrumentType = String(holding?.instrumentType || "").trim().toLowerCase();
   const type = String(holding?.type || "").trim().toLowerCase();
 
-  // Stablecoins / explicit cash are Cash (translation exposure, not FX pair).
-  if (type === "stablecoin" || category === "stablecoin") return "Cash";
+  // Stablecoins (by symbol OR explicit tag) are Cash. Symbol-aware so a Binance
+  // spot USDT balance (tagged type:"crypto") still reaches the Cash bucket —
+  // otherwise it would fall through to "Crypto" and contradict the Holdings-table
+  // "Cash" badge and the HomeModule cash split.
+  if (isStable(symbol) || type === "stablecoin" || category === "stablecoin") return "Cash";
 
   // FX pair (e.g. EUR/USD, EURUSD=X) — price-bearing, separate bucket.
   if (instrumentType === "fx-pair" || marketType === "forex" || type === "forex" || type === "fx") {

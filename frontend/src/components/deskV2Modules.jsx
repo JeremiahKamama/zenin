@@ -136,6 +136,13 @@ export const MacroWatchlist = React.memo(function MacroWatchlist({ macroRows = [
   if (!macroRows.length) return null;
   const pinned = macroRows.filter((r) => pins.includes(r.indicatorCode || r.indicator));
   const rest = macroRows.filter((r) => !pins.includes(r.indicatorCode || r.indicator));
+  const formatWatchChange = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "";
+    const sign = n > 0 ? "+" : "";
+    if (Math.abs(n) >= 1000) return `${sign}${formatMacroNumber(n, { digits: 1 })}%`;
+    return formatMacroPercent(n, 2);
+  };
   const renderRow = (r) => {
     const key = r.indicatorCode || r.indicator;
     const meta = getIndicator(r.indicatorCode || r.indicator);
@@ -144,8 +151,8 @@ export const MacroWatchlist = React.memo(function MacroWatchlist({ macroRows = [
       <div key={key} className="deskv2-wl-row">
         <button type="button" className="deskv2-wl-pin" onClick={() => onToggle?.(key)} title="Pin/Unpin">{pins.includes(key) ? "★" : "☆"}</button>
         <span className="deskv2-wl-name">{meta?.label || r.indicator}</span>
-        <span className="deskv2-wl-val">{v != null && !Number.isNaN(v) ? formatMacroNumber(v, { kind: meta?.kind || "decimal" }) : "—"}</span>
-        <span className="deskv2-wl-chg">{r.change != null ? formatMacroPercent(r.change) : ""}</span>
+        <span className="deskv2-wl-val">{v != null && !Number.isNaN(v) ? formatMacroNumber(v, { kind: meta?.kind || "decimal", digits: 2 }) : "—"}</span>
+        <span className="deskv2-wl-chg">{formatWatchChange(r.change)}</span>
       </div>
     );
   };

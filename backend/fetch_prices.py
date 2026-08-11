@@ -4,6 +4,8 @@ import os
 import yfinance as yf
 import requests
 
+from posthog_client import posthog_client
+
 # Add scripts directory to path for market_status import
 sys.path.append(os.path.join(os.path.dirname(__file__), "scripts"))
 try:
@@ -346,6 +348,15 @@ def fetch_prices(requests: list) -> dict:
                     "marketStatus": item["status"],
                     "currency": infer_currency(yf_sym, item["orig"])
                 }
+
+    if posthog_client:
+        posthog_client.capture(
+            event="market_prices_requested",
+            properties={
+                "requested_symbol_count": len(requests),
+                "resolved_symbol_count": len(results),
+            },
+        )
 
     return results
 

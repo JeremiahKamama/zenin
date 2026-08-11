@@ -20,6 +20,27 @@ const EPS = 1e-8;
 export const normalizeSymbol = (value) =>
   String(value || "UNKNOWN").trim().toUpperCase();
 
+// Canonical asset identity resolver (Fix #6: centralize symbol/asset/name).
+// Produces a coherent symbol + display name from a transaction that may have
+// only one of: ticker symbol, human label, or prediction-market question.
+// - canonical symbol: a ticker token (alpha/digits/slash, no spaces), uppercased
+// - name: the human-readable identifier, returned verbatim (questions are
+//   NOT uppercased — they are prose, not tickers)
+// - symbol: falls back to name when no ticker exists
+// - Returns "UNKNOWN" ONLY when absolutely no identity is available.
+export function resolveAssetIdentity(trade = {}) {
+  const symbol = String(trade?.symbol || trade?.asset || "").trim();
+  const name = String(trade?.name || trade?.market || trade?.symbol || "").trim();
+  const tickerLike = /^[A-Za-z][A-Za-z0-9.\/_:-]{0,19}$/.test(symbol) || /^[A-Za-z0-9.\/_:-]{1,20}$/.test(name);
+  if (symbol && tickerLike) {
+    return { symbol: symbol.toUpperCase(), name: name || symbol.toUpperCase() };
+  }
+  if (name) {
+    return { symbol: name, name };
+  }
+  return { symbol: "UNKNOWN", name: "UNKNOWN" };
+}
+
 export const safeNum = (val) => {
   const n = Number(val);
   return Number.isFinite(n) ? n : 0;
@@ -45,6 +66,7 @@ export function detectAssetClass(symbol, marketType, ctx = {}) {
   const sym = String(symbol || "").trim().toUpperCase();
   if (OCC_RE.test(sym)) return "OPTIONS";
   if (ctx?.hasLegs) return "OPTIONS";
+  if (/prediction|polymarket|yesno/i.test(marketType || "")) return "PREDICTION";
   if (sym.includes("/")) return "FX";
   const mt = normalizeMarketType({ marketType });
   if (mt === "perp") return "PERP";
@@ -84,7 +106,13 @@ export function buildConnectionRegistry({ connectedAccounts = [], brokerageAccou
   return { map, resolve, list: [...map.values()] };
 }
 
-const buildLotKey = (asset, trade) => `${asset}::${normalizeMarketType(trade)}`;
+// Lots are matched WITHIN a connection — a BTC spot buy on Binance closes
+// against a Binance lot, never a Hyperliquid lot. This keeps the Performance
+// tab consistent with the rest of the app's "never merge same-symbol positions
+// across sources" rule (PortfolioModule.jsx). Without the connection dimension,
+// a duplicated connection (or overlapping venues) would inflate realized P&L.
+const buildLotKey = (asset, trade, connectionId) =>
+  `${asset}::${normalizeMarketType(trade)}::${connectionId || "unknown"}`;
 
 const formatCloseDate = (trade, dateObj) => {
   if (/^\d{4}-\d{2}-\d{2}$/.test(trade.date || "")) return trade.date;
@@ -123,8 +151,10 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
     else if (["BUY", "B", "LONG"].includes(rawSide)) direction = "BUY";
     if (!direction) continue;
 
-    const asset = normalizeSymbol(trade.asset || trade.symbol);
-    const lotKey = buildLotKey(asset, trade);
+    // Symbol/asset may be null for prediction-market fills (they carry a long
+    // market `name` instead). Fall back to `name` so the Asset column shows the
+    // market title rather than "UNKNOWN".
+    const asset = normalizeSymbol(trade.asset || trade.symbol || trade.name);
     const qty = Math.max(0, safeNum(trade.quantity));
     const price = safeNum(trade.price);
     const dateObj = parseTradeDate(trade.executedAt || trade.date);
@@ -143,6 +173,9 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
       isBrokerage: conn?.type === "broker",
       isCrypto: conn?.provider === "hyperliquid" || conn?.provider === "lighter" || conn?.type === "dex" || conn?.type === "cex",
     });
+
+    // Lot key includes the connection so lots never match across sources.
+    const lotKey = buildLotKey(asset, trade, connectionId);
 
     const lots = lotsByKey.get(lotKey) || [];
 
@@ -273,10 +306,13 @@ export function analyzeTradePerformance({ transactions = [], livePriceBySymbol =
 }
 
 function mkTrade({ asset, side, direction, lot, price, dateObj, matchedQty, pnl, trade, connectionId, connectionLabel, assetClass }) {
+  // Crypto covers both spot and perpetual venues (Hyperliquid, etc.).
+  const crypto = assetClass === "SPOT" || assetClass === "PERP";
   return {
     asset,
     symbol: asset,
     assetClass,
+    crypto,
     connectionId,
     connectionLabel,
     side,

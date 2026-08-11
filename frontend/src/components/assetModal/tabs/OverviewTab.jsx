@@ -36,27 +36,7 @@ export function OverviewTab({
   ];
 
   // Spec §3 (ETF plan): ETFs use fund-reference fields, never equity metrics.
-  const etfMeta = isEtf ? {
-    issuer: asset?.issuer || "—",
-    benchmark: asset?.benchmark || "—",
-    category: asset?.category || "—",
-    assetClass: /bond|fixed income|treasury|agg/i.test(asset?.category || "") ? "Fixed Income" : /commodity/i.test(asset?.category || "") ? "Commodity" : "Equity",
-    primaryExposure: Array.isArray(asset?.exposure) && asset.exposure.length ? asset.exposure.join(", ") : "—",
-    expenseRatio: "—",
-    distributionPolicy: "—",
-    topHolding: "—",
-  } : null;
-
-  const stats = isCommodity ? commodityStats : isEtf ? [
-    { label: "Issuer", value: etfMeta.issuer, mono: false },
-    { label: "Benchmark", value: etfMeta.benchmark, mono: false },
-    { label: "Category", value: etfMeta.category, mono: false },
-    { label: "Asset Class", value: etfMeta.assetClass, mono: false },
-    { label: "Primary Exposure", value: etfMeta.primaryExposure, mono: false },
-    { label: "Expense Ratio", value: etfMeta.expenseRatio, mono: true },
-    { label: "Distribution Policy", value: etfMeta.distributionPolicy, mono: false },
-    { label: "Top Holding", value: etfMeta.topHolding, mono: false },
-  ] : [
+  const stats = isCommodity ? commodityStats : [
     { label: "Market Cap", value: finvizData?.summary?.["Market Cap"] || (earnings?.marketCap != null ? formatCompactMoney(earnings.marketCap) : "—"), mono: true },
     { label: "Sector", value: asset?.sector || profile?.sector || "—", mono: false },
     { label: "Industry", value: asset?.industry || profile?.industry || "—", mono: false },
@@ -77,20 +57,16 @@ export function OverviewTab({
             Open Company Profile →
           </button>
         )}
-        {isEtf && (
-          <button className="am-link-btn" onClick={() => onViewCompanyProfile?.(asset)}>
-            Open ETF Profile →
-          </button>
-        )}
+        {isEtf ? <p className="am-etf-overview-note">Fund reference and position details are shown above. Use the ETF actions below for research, comparison, or watchlist changes.</p> : null}
       </div>
-      <div className="am-stat-grid">
+      {!isEtf ? <div className="am-stat-grid">
         {stats.map((s) => (
           <div className="am-stat" key={s.label}>
             <span className="am-stat-label">{s.label}</span>
             <strong className={`am-stat-value ${s.mono ? "font-mono" : ""} ${s.value === "—" ? "am-na" : ""}`}>{s.value}</strong>
           </div>
         ))}
-      </div>
+      </div> : null}
     </div>
   );
 }

@@ -43,6 +43,16 @@ export default defineConfig(({ mode }) => {
       // Dev-only: disable HTTP caching so live verification always fetches the
       // freshest modules (prevents stale ESM module-graph when iterating).
       headers: { "Cache-Control": "no-store" },
+      // Proxy /api to the local backend so the SPA talks to it same-origin.
+      // The session cookie is SameSite=Lax on the http dev backend, so a
+      // cross-origin fetch (5173 -> 4000) withholds it on writes (DELETE/POST),
+      // causing 401s. Routing through the proxy keeps requests same-origin.
+      proxy: {
+        "/api": {
+          target: "http://localhost:4000",
+          changeOrigin: true,
+        },
+      },
     },
     build: {
       // 'hidden' generates sourcemaps for Sentry upload but omits the

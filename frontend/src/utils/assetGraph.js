@@ -87,3 +87,65 @@ export function getCompanyCommodities(ticker) {
 
 /** Back-compat: the reverse map as an object (equivalent to the old literal). */
 export const COMPANY_TO_COMMODITIES = COMPANY_TO_COMMODITIES_DERIVED;
+
+/**
+ * INDEX_CONSTITUENTS — representative core members of major equity indices.
+ *
+ * This is a **reference seed**, not an exhaustive real-time constituent list.
+ * Membership is used by Part 5 (Market Context "Group By → Index") to bucket
+ * movers/losers by index membership. Non-constituent symbols fall into "Other".
+ *
+ * Symbols are normalised to UPPERCASE without exchange suffix (e.g. "AAPL",
+ * "7203.T" stays with suffix because it is the exchange-qualified ticker).
+ */
+export const INDEX_CONSTITUENTS = {
+  "S&P 500": [
+    "AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK.B", "LLY",
+    "JPM", "JNJ", "V", "WMT", "XOM", "PG", "MA", "UNH", "HD", "DIS",
+    "BAC", "KO", "PFE", "PEP", "AVGO", "TMO", "COST", "ABBV", "WMT", "LLY",
+    "CVX", "CRM", "MRK", "T", "ADP", "NFLX", "ABBV", "WFC", "UPS", "ORCL",
+    "NKE", "LLY", "ACN", "TMO", "MCD", "PYPL", "SCHW", "BMY", "TGT", "ADBE",
+    "AMD", "AMGN", "GILD", "INTC", "PEP", "QCOM", "MDLZ", "LOW", "CI", "ABT",
+    "CB", "AXP", "GS", "BKNG", "SPGI", "MS", "PNC", "COP", "EL", "CTAS",
+  ],
+  "Nasdaq-100": [
+    "AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "AVGO", "ADBE",
+    "INTC", "AMD", "ORCL", "CRM", "COST", "REGN", "MDLZ", "PDD", "PYPL", "QCOM",
+    "SBUX", "CHTR", "BIDU", "JD", "BILI", "NTES", "PPTV", "TME", "VALE", "MELI",
+    "TMUS", "AMGN", "GILD", "VRTX", "CSGP", "ASML", "TXN", "MU", "DOCU", "ZM",
+    "SNOW", "PLTR", "RIVN", "LCID", "RIOT", "COIN", "MARA", "RIVN", "XPEV", "NIO",
+    "SPOT", "PFE", "BMY", "ABT", "MRK", "VRTX", "REGN", "BIIB", "ALGN", "IDXX",
+  ],
+  "Dow Jones": [
+    "AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK.B", "JPM",
+    "JNJ", "V", "WMT", "XOM", "PG", "MA", "UNH", "HD", "DIS", "BAC",
+    "KO", "CVX", "WBA", "GS", "CRM", "MMM", "AXP", "AMGN", "HON", "CAT",
+  ],
+  "Nikkei 225": [
+    "7203.T", "6758.T", "6861.T", "9984.T", "8306.T", "5101.T", "4502.T", "4503.T",
+    "6301.T", "6326.T", "6973.T", "6716.T", "8053.T", "7203.T", "9983.T", "5401.T",
+    "8035.T", "4689.T", "6672.T", "7269.T", "6806.T", "6807.T", "6752.T", "6365.T",
+    "6366.T", "7741.T", "7751.T", "7752.T", "7759.T", "7760.T", "7761.T", "8001.T",
+    "8002.T", "8003.T", "8012.T", "8021.T", "8028.T", "8031.T", "8053.T", "8058.T",
+    "8078.T", "8086.T", "8089.T", "8090.T", "8098.T", "8103.T", "8105.T", "8113.T",
+    "8118.T", "8125.T", "8133.T", "8152.T", "8165.T", "8174.T", "8182.T", "8183.T",
+    "8192.T", "8195.T", "8197.T", "8200.T", "8201.T", "8202.T", "8204.T", "8205.T",
+    "8206.T", "8210.T", "8214.T", "8216.T", "8218.T", "8220.T", "8221.T", "8222.T",
+    "8223.T", "8224.T", "8225.T", "8227.T", "8228.T", "8233.T", "8234.T", "8237.T",
+    "8248.T", "8255.T", "8256.T", "8259.T", "8264.T", "8265.T", "8269.T", "8272.T",
+  ],
+};
+
+/** Lookup which index (if any) a symbol belongs to.
+ *  @param {string} symbol — ticker, e.g. "AAPL" or "7203.T"
+ *  @returns {string|null} index name or null for non-members. */
+export function getIndexMembership(symbol) {
+  const sym = String(symbol || "").toUpperCase().trim();
+  for (const [indexName, constituents] of Object.entries(INDEX_CONSTITUENTS)) {
+    if (constituents.some((c) => c.toUpperCase() === sym)) {
+      return indexName;
+    }
+  }
+  return null;
+}
+

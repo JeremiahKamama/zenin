@@ -12,6 +12,7 @@ import { normalizeInstrumentSymbol, resolveCurrencyInstrument } from "../utils/c
 import { ContextRail, DensePanelHeader, GuidedEmptyState, InlineControlGroup, WorkspaceMetricStrip, WorkspacePageHeader } from "./CompactWorkspaceUI";
 import { IntelligenceCenter } from "./intelligence/index.jsx";
 import { SharedWatchlistWorkspacePanel } from "./InstitutionalPanels";
+import { AssetLogo } from "./AssetLogo";
 import { PlanLockOverlay } from "./PlanLockOverlay";
 import {
   UNSUPPORTED_IMPORT_EXTENSIONS,
@@ -69,7 +70,7 @@ export function Watchlist({
   currentUserId = "",
   hasDeskFeatureAccess = false,
   sharedWatchlistLocked = false,
-  lockedPlanLabel = "desk",
+  lockedPlanLabel = "premium",
   onUpgrade,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
@@ -698,6 +699,7 @@ useEffect(() => {
       sortValue: (asset) => asset.symbol,
       cell: (asset) => (
         <div className="watchlist-symbol-cell">
+          <AssetLogo asset={asset} size="sm" />
           <strong>{asset.symbol}</strong>
           <span>{asset.name || asset.marketType || asset.type || "tracked"}</span>
         </div>
@@ -1190,6 +1192,7 @@ useEffect(() => {
                       >
                         <div className="asset-card-main">
                           <div className="asset-identity">
+                            <AssetLogo asset={asset} size="xs" />
                             <strong>{asset.symbol}</strong>
                             <p>{asset.name}</p>
                           </div>
@@ -1354,8 +1357,8 @@ useEffect(() => {
         <PlanLockOverlay
           locked={sharedWatchlistLocked}
           requiredPlan={lockedPlanLabel}
-          title="Shared Desk Watchlists"
-          description="Collaborative desk watchlists are a Desk plan feature. Upgrade to share and manage a live desk view."
+          title="Shared Premium Watchlists"
+          description="Collaborative premium watchlists are a Premium plan feature. Upgrade to share and manage a live team view."
           onUpgrade={onUpgrade}
         >
           <SharedWatchlistWorkspacePanel

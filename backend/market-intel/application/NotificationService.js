@@ -15,8 +15,7 @@
 
 "use strict";
 
-const { generateId } = require("../domain/models");
-const { NotificationDeliveryError } = require("../domain/errors");
+const { dispatchWorkspaceNotification } = require("../../workspaceNotificationDispatcher");
 
 /**
  * @typedef {Object} NotificationChannel
@@ -69,47 +68,21 @@ class NotificationService {
    */
   async send(recipient, title, body, options = {}) {
     const channels = options.channels || ["inApp"];
-    const notification = {
-      id: generateId(),
+    return dispatchWorkspaceNotification({
       userId: recipient.userId,
       workspaceId: recipient.workspaceId || null,
-      title,
-      body,
-      category: options.category || "general",
-      actionUrl: options.actionUrl || null,
-      channels,
-      status: "pending",
-      createdAt: new Date().toISOString()
-    };
-
-    const results = await Promise.allSettled(
-      channels.map((ch) => this._sendToChannel(ch, notification, recipient))
-    );
-
-    const delivered = results.some((r) => r.status === "fulfilled" && r.value === true);
-    notification.status = delivered ? "delivered" : "failed";
-    if (delivered) notification.deliveredAt = new Date().toISOString();
-
-    // Persist
-    if (this._db) {
-      try {
-        await this._db.query(
-          `INSERT INTO market_notifications
-           (id, user_id, workspace_id, title, body, category, action_url,
-            channels, status, delivered_at, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-          [
-            notification.id, notification.userId, notification.workspaceId,
-            notification.title, notification.body, notification.category,
-            notification.actionUrl, JSON.stringify(channels),
-            notification.status, notification.deliveredAt || null,
-            notification.createdAt
-          ]
-        );
-      } catch (_) {}
-    }
-
-    return notification;
+      event: {
+        type: options.type || `${options.category || "market-news"}.event`,
+        category: options.category || "market-news",
+        severity: options.severity || "info",
+        title,
+        body,
+        action: { label: options.actionLabel, actionUrl: options.actionUrl },
+        requestedChannels: channels,
+        dedupeKey: options.dedupeKey || null,
+        metadata: options.metadata || {}
+      }
+    });
   }
 
   /**
@@ -191,22 +164,6 @@ class NotificationService {
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Private
-  // -----------------------------------------------------------------------
-
-  async _sendToChannel(channelName, notification, recipient) {
-    const channel = this._channels.get(channelName);
-    if (!channel) return false;
-
-    try {
-      return await channel.send(notification, recipient);
-    } catch (err) {
-      throw new NotificationDeliveryError(
-        `Failed to deliver via ${channelName}: ${err.message}`
-      );
-    }
-  }
 }
 
 function mapNotificationRow(row) {

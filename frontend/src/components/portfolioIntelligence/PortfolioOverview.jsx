@@ -2,7 +2,7 @@
 // PortfolioOverview — feature shell
 // -----------------------------------------------------------------------------
 // Owns the top reading-order blocks: Portfolio Summary → What Needs Attention →
-// Recommended Changes. It is a thin orchestration shell; the actual cards
+// Analysis → Recommended Changes. It is a thin orchestration shell; the actual cards
 // (summaryCards, attentionCards, rebalance blocks) are computed in
 // PortfolioModule and passed in via props/slots. This keeps business logic in
 // PortfolioModule (single owner) while satisfying the "feature module"
@@ -12,10 +12,9 @@
 // =============================================================================
 
 import { memo } from "react";
-import { PortfolioTransmission } from "../../transmission/TransmissionSurfaces";
 import { StatusIndicator } from "../StatusIndicator.jsx";
 
-function PortfolioOverviewImpl({ summary, attention, recommendedChanges }) {
+function PortfolioOverviewImpl({ summary, attention, analysis, recommendedChanges }) {
   return (
     <>
       <section className="portfolio-command-summary">
@@ -57,7 +56,7 @@ function PortfolioOverviewImpl({ summary, attention, recommendedChanges }) {
                 <div>
                   <span className="portfolio-command-attention-head">
                     {card.title}
-                    <StatusIndicator tone={stTone} detail={card.metric} />
+                    <StatusIndicator tone={stTone} size="sm" />
                   </span>
                   <strong>{card.metric}</strong>
                   <em>{card.detail}</em>
@@ -69,14 +68,9 @@ function PortfolioOverviewImpl({ summary, attention, recommendedChanges }) {
         </div>
       </section>
 
-      <section className="portfolio-command-rebalance">{recommendedChanges}</section>
+      {analysis}
 
-      <PortfolioTransmission
-        topDriver="Oil"
-        currentEffect={{ label: "Negative Technology", tone: "negative" }}
-        affectedHoldings={6}
-        exposure="Medium"
-      />
+      <section className="portfolio-command-rebalance">{recommendedChanges}</section>
     </>
   );
 }

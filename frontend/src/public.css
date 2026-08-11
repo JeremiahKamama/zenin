@@ -1,5 +1,12 @@
 :root {
   --zc-font: "Inter", "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* Semantic color tokens — also defined in styles.css, but styles.css is only
+     loaded on /app. These ensure var(--color-danger|success|warning) resolve on
+     routes that only load public.css (e.g. /auth), so error/success states like
+     .auth-v2-error render with the correct color instead of inheriting. */
+  --color-danger: #ef4444;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
 }
 
 html.page-dark-theme,
@@ -4153,7 +4160,9 @@ body.light-theme-active .auth-v2-rule-list li::before {
 }
 .ob-nav-bar-fill {
   display: block; height: 100%; background: #fff;
-  transition: width 200ms ease;
+  /* Width reflects a discrete onboarding step; animating it causes layout work
+     and makes progress feel less precise than the underlying state change. */
+  transition: none;
 }
 .ob-timeline { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; }
 .ob-tl-item { position: relative; display: flex; align-items: stretch; }

@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const portfolioSnapshots = require("./portfolioSnapshots");
 const { ensureUnifiedPortfolioSchema } = require("./unifiedPortfolio");
 const { tagsForExchange } = require("./exchangeSync");
+const stablecoins = require("./stablecoins");
 
 const QTY_EPSILON = 1e-8;
 const DEFAULT_BALANCE = 10000;
@@ -433,8 +434,9 @@ function normalizeCurrencyCode(value, fallback = "USD") {
 }
 
 function isUsdLikeCurrency(currency) {
-  const code = normalizeCurrencyCode(currency, "");
-  return ["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"].includes(code);
+  // Delegate to the shared stablecoin registry so membership stays in sync with
+  // exchangeSync.js and unifiedPortfolio.js.
+  return stablecoins.isUsdEquivalent(currency);
 }
 
 function createFeeSummaryBucket() {
@@ -1673,6 +1675,7 @@ async function initializeDatabase() {
 
     await client.query(`
       ALTER TABLE user_workspace_trade_fills
+      ADD COLUMN IF NOT EXISTS realized_pnl DOUBLE PRECISION,
       ADD COLUMN IF NOT EXISTS workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
       ADD COLUMN IF NOT EXISTS trade_client_id TEXT,
       ADD COLUMN IF NOT EXISTS platform_trade_id TEXT,
@@ -1752,7 +1755,7 @@ async function initializeDatabase() {
         u.id,
         COALESCE(NULLIF(u.current_plan, ''), 'starter'),
         COALESCE(NULLIF(u.current_billing_cycle, ''), 'monthly'),
-        CASE WHEN COALESCE(NULLIF(u.current_plan, ''), 'starter') = 'desk' THEN 5 ELSE 1 END,
+        CASE WHEN COALESCE(NULLIF(u.current_plan, ''), 'starter') IN ('desk', 'premium') THEN 5 ELSE 1 END,
         1,
         'active'
       FROM app_users u
@@ -1783,7 +1786,7 @@ async function initializeDatabase() {
       SET
         plan = u.current_plan,
         billing_cycle = u.current_billing_cycle,
-        seat_limit = CASE WHEN u.current_plan = 'desk' THEN 5 ELSE 1 END,
+        seat_limit = CASE WHEN u.current_plan IN ('desk', 'premium') THEN 5 ELSE 1 END,
         updated_at = NOW()
       FROM app_users u
       WHERE w.owner_user_id = u.id;
@@ -2285,7 +2288,7 @@ async function initializeDatabase() {
 
     await client.query(`
       INSERT INTO app_users (id, email, password_hash, display_name, auth_provider, email_verified, current_plan)
-      VALUES (1, 'guest@zenin.app', '', 'Guest User', 'guest', TRUE, 'desk')
+      VALUES (1, 'guest@zenin.app', '', 'Guest User', 'guest', TRUE, 'premium')
       ON CONFLICT (id) DO NOTHING;
     `);
 
@@ -2596,6 +2599,49 @@ async function initializeDatabase() {
     `);
 
     await ensureUnifiedPortfolioSchema(client);
+
+    // ── Referrals tables (Part 3) ────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS referrals (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        referral_code TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS referral_events (
+        id SERIAL PRIMARY KEY,
+        referral_id INTEGER NOT NULL REFERENCES referrals(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL CHECK (event_type IN ('click', 'signup', 'convert')),
+        visitor_ref TEXT,
+        visitor_ip INET,
+        user_agent TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        metadata JSONB DEFAULT '{}'
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_referral_events_referral_id
+      ON referral_events(referral_id);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_referral_events_type_created
+      ON referral_events(event_type, created_at DESC);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_referrals_user_id
+      ON referrals(user_id);
+    `);
+
+    // Tier rename migration (pro -> plus, desk -> premium). Idempotent: only
+    // rewrites legacy values; new values and 'starter' are left untouched. Runs
+    // inside the schema-init transaction so it is atomic with table creation.
+    await client.query("UPDATE app_users SET current_plan = 'plus' WHERE current_plan = 'pro'");
+    await client.query("UPDATE app_users SET current_plan = 'premium' WHERE current_plan = 'desk'");
+    await client.query("UPDATE workspaces SET plan = 'plus' WHERE plan = 'pro'");
+    await client.query("UPDATE workspaces SET plan = 'premium' WHERE plan = 'desk'");
 
     await client.query("COMMIT");
     console.log("PostgreSQL database initialized.");
@@ -5680,6 +5726,33 @@ const userWorkspace = {
       return { removed: result.rows };
     },
 
+    // Strip manual (placeholder/dummy) holdings when NO connected accounts
+    // remain for the workspace. A connected account is any exchange key OR any
+    // portfolio source (Hyperliquid wallet, prediction wallet, broker, etc.).
+    // Manual rows are identified by `strategy_name IS NULL`. If any real account
+    // is still connected, manual holdings are left untouched.
+    stripManualHoldingsIfNoConnectedSources: async (workspaceId) => {
+      const wsId = Number(workspaceId);
+      if (!Number.isInteger(wsId)) return { removed: [], skipped: true };
+      const remaining = await pool.query(
+        `SELECT 1
+         FROM user_exchange_keys k WHERE k.workspace_id = $1
+         UNION ALL
+         SELECT 1
+         FROM portfolio_sources s WHERE s.workspace_id = $1
+         LIMIT 1`,
+        [wsId]
+      );
+      if (remaining.rows.length) return { removed: [], skipped: true };
+      const result = await pool.query(
+        `DELETE FROM user_workspace_portfolio
+         WHERE workspace_id = $1 AND strategy_name IS NULL
+         RETURNING id, symbol`,
+        [wsId]
+      );
+      return { removed: result.rows };
+    },
+
     add: async (userId, holding, workspaceId = null) => {
       const { resolvedUserId, resolvedWorkspaceId } = await resolveWorkspaceScope(userId, workspaceId);
       const symbol = String(holding.symbol || "").trim().toUpperCase();
@@ -5964,6 +6037,19 @@ const userWorkspace = {
           liquidityRole: fill.liquidityRole || fill.liquidity_role || null,
           executedAt: fill.executedAt || fill.executed_at || null,
           referencePrice: Number.isFinite(Number(fill.referencePrice)) ? Number(fill.referencePrice) : null,
+          // Per-fill realized PnL (Hyperliquid `closedPnl` / generic `realizedPnl`).
+          // This is the position-level realized PnL for the fill that closed part
+          // of a position — the correct source for Best Trades / Asset Performance
+          // (matches HYPERDASH, which aggregates per-fill closedPnl per coin).
+          realizedPnl: (() => {
+            const rp = fill.realizedPnl != null ? fill.realizedPnl
+              : (fill.rawPayload && fill.rawPayload.closedPnl != null) ? fill.rawPayload.closedPnl
+              : (fill.rawPayload && fill.rawPayload.executionMeta && fill.rawPayload.executionMeta.closedPnl != null) ? fill.rawPayload.executionMeta.closedPnl
+              : (fill.raw_payload_json && fill.raw_payload_json.closedPnl != null) ? fill.raw_payload_json.closedPnl
+              : (fill.raw_payload_json && fill.raw_payload_json.executionMeta && fill.raw_payload_json.executionMeta.closedPnl != null) ? fill.raw_payload_json.executionMeta.closedPnl
+              : 0;
+            return toNumber(rp);
+          })(),
           rawPayload: parseJsonPayload(fill.rawPayload || fill.raw_payload_json, {})
         };
 
@@ -5973,9 +6059,9 @@ const userWorkspace = {
           INSERT INTO user_workspace_trade_fills (
             user_id, workspace_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
             quantity, price, notional, fee_amount, fee_currency, fee_source, liquidity_role, executed_at,
-            reference_price, raw_payload_json, updated_at
+            reference_price, realized_pnl, raw_payload_json, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
           ON CONFLICT (workspace_id, platform, platform_fill_id) DO UPDATE
           SET
             trade_client_id = COALESCE(EXCLUDED.trade_client_id, user_workspace_trade_fills.trade_client_id),
@@ -5992,6 +6078,7 @@ const userWorkspace = {
             liquidity_role = EXCLUDED.liquidity_role,
             executed_at = COALESCE(EXCLUDED.executed_at, user_workspace_trade_fills.executed_at),
             reference_price = COALESCE(EXCLUDED.reference_price, user_workspace_trade_fills.reference_price),
+            realized_pnl = COALESCE(EXCLUDED.realized_pnl, user_workspace_trade_fills.realized_pnl),
             raw_payload_json = EXCLUDED.raw_payload_json,
             updated_at = NOW()
           RETURNING
@@ -6013,6 +6100,7 @@ const userWorkspace = {
             liquidity_role AS "liquidityRole",
             executed_at AS "executedAt",
             reference_price AS "referencePrice",
+            realized_pnl AS "realizedPnl",
             raw_payload_json AS "rawPayload";
         `, [
           resolvedUserId,
@@ -6033,6 +6121,7 @@ const userWorkspace = {
           normalized.liquidityRole,
           normalized.executedAt,
           normalized.referencePrice,
+          normalized.realizedPnl,
           JSON.stringify(normalized.rawPayload || {})
         ]);
         const saved = result.rows[0] ? mapTradeFillRow(result.rows[0]) : null;
@@ -7387,9 +7476,9 @@ const userWorkspace = {
           INSERT INTO user_workspace_trade_fills (
             user_id, workspace_id, trade_client_id, platform, platform_trade_id, platform_fill_id, symbol, side, market_type,
             quantity, price, notional, fee_amount, fee_currency, fee_source, liquidity_role, executed_at,
-            reference_price, raw_payload_json, updated_at
+            reference_price, realized_pnl, raw_payload_json, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 0, $19, NOW())
           ON CONFLICT (workspace_id, platform, platform_fill_id) DO UPDATE
           SET
             trade_client_id = EXCLUDED.trade_client_id,
@@ -7406,6 +7495,7 @@ const userWorkspace = {
             liquidity_role = EXCLUDED.liquidity_role,
             executed_at = EXCLUDED.executed_at,
             reference_price = EXCLUDED.reference_price,
+            realized_pnl = EXCLUDED.realized_pnl,
             raw_payload_json = EXCLUDED.raw_payload_json,
             updated_at = NOW();
         `, [
@@ -9598,11 +9688,11 @@ const admin = {
       {
         name: "Market Data",
         category: "Data",
-        status: process.env.EODHD_API_TOKEN ? "active" : "degraded",
-        note: process.env.EODHD_API_TOKEN ? "EODHD token configured." : "Missing EODHD token.",
+        status: "active",
+        note: "Yahoo Finance (token-free) · EODHD removed.",
         lastSyncAt: marketDataHealth.lastSeenAt,
         actionLabel: "Retry",
-        credentialStatus: process.env.EODHD_API_TOKEN ? "configured" : "missing",
+        credentialStatus: "not required",
         syncLagMinutes: marketDataHealth.lagMinutes,
         webhookFailures: marketDataHealth.failures24h,
         retryable: true

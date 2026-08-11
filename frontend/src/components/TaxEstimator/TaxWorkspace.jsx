@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { formatPercent } from "../../utils/format";
 import { convertToUSD, convertFromUSD } from "../../utils/currencyUtils";
+import { zeninFetchJson } from "../../utils/zeninFetch";
+import { getAppRuntimeConfig, setRuntimeConfigs } from "../../config/runtimeConfigStore";
 import {
   getTaxConfig,
   getTaxRules,
@@ -22,6 +24,7 @@ import {
   normalizeSavedEstimateEntries,
   getDemoGuestState,
   deriveGainsFromTrades,
+  normalizeTaxRatesToRules,
   reducePositiveGainsProportionally,
   countryFlag,
 } from "./lib/taxConfig";
@@ -39,7 +42,7 @@ import AdvancedSettingsDrawer from "./AdvancedSettingsDrawer";
 import AuditTrailDrawer from "./AuditTrailDrawer";
 import SavedScenarioDrawer from "./SavedScenarioDrawer";
 
-export default function TaxWorkspace({ trades = [], portfolio = [], spotPrices = {} }) {
+export default function TaxWorkspace({ trades = [], portfolio = [], spotPrices = {}, unifiedPortfolio = null }) {
   const searchParams = new URLSearchParams(globalThis?.location?.search || "");
   const isGuestDemo = searchParams.get("guest") === "1";
   const guestDemoState = useMemo(() => getDemoGuestState(), []);
@@ -47,7 +50,7 @@ export default function TaxWorkspace({ trades = [], portfolio = [], spotPrices =
   const taxRules = getTaxRules();
   const taxRegions = getTaxRegions();
   const taxSources = getTaxSources();
-  const taxRulesLastUpdated = String(taxConfig.lastUpdated || "");
+  const [taxRulesLastUpdated, setTaxRulesLastUpdated] = useState(String(taxConfig.lastUpdated || ""));
   const defaultIncomeBreakdown = getDefaultIncomeBreakdown();
   const defaultAdvancedState = useMemo(() => getDefaultAdvancedState(), []);
 
@@ -111,6 +114,53 @@ export default function TaxWorkspace({ trades = [], portfolio = [], spotPrices =
     else setDetectedCountry("USA");
   }, []);
 
+  // Unified read model is the single transaction source when active (covers
+  // Hyperliquid + SnapTrade brokerage + exchanges + manual). Mapped to the shape
+  // deriveGainsFromTrades expects. Falls back to the legacy `trades` prop.
+  const displayTransactions = useMemo(() => {
+    if (unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0) {
+      return unifiedPortfolio.transactions.map((t) => ({
+        asset: t.symbol,
+        symbol: t.symbol,
+        side: String(t.side || "").toUpperCase() === "SELL" ? "sell" : "buy",
+        quantity: Number(t.quantity || 0),
+        price: Number(t.unitPrice || 0),
+        executedAt: t.executedAt,
+        marketType: t.sourceType === "wallet" ? "crypto" : "equity",
+        notional: Number(t.notional || 0),
+        fee: Number(t.fee || 0)
+      }));
+    }
+    return Array.isArray(trades) ? trades : [];
+  }, [unifiedPortfolio, trades]);
+
+  // Live tax rates: the frontend runtime ships tax.rules as {} so calcLiability
+  // zeroed most countries. Fetch the maintained rate table and inject it.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const data = await zeninFetchJson("/tax/rates", { timeoutMs: 8000 });
+        if (!active || !data) return;
+        const rules = normalizeTaxRatesToRules(data);
+        if (rules && Object.keys(rules).length) {
+          const base = getAppRuntimeConfig() || {};
+          setRuntimeConfigs({
+            appConfig: {
+              ...base,
+              tax: { ...(base.tax || {}), rules, lastUpdated: data.cachedAt || new Date().toISOString() }
+            }
+          });
+          setTaxRulesLastUpdated(String(data.cachedAt || "Current rules"));
+        }
+      } catch (err) {
+        console.warn("Tax rates fetch skipped.", err && err.message);
+      }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!detectedCountry || jurisdictions.length > 0) return;
     if (taxRules[detectedCountry]) setJurisdictions([detectedCountry]);
@@ -118,17 +168,17 @@ export default function TaxWorkspace({ trades = [], portfolio = [], spotPrices =
 
   useEffect(() => {
     if (hasManualGainEdit) return;
-    if (!Array.isArray(trades) || trades.length === 0) return;
-    setGains(deriveGainsFromTrades(trades, advanced.costBasisMethod));
+    if (!Array.isArray(displayTransactions) || displayTransactions.length === 0) return;
+    setGains(deriveGainsFromTrades(displayTransactions, advanced.costBasisMethod));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trades, hasManualGainEdit, advanced.costBasisMethod]);
+  }, [displayTransactions, hasManualGainEdit, advanced.costBasisMethod]);
 
   const ordinaryIncomeTotal = useMemo(() => totalOrdinaryIncome(additionalIncome), [additionalIncome]);
 
   const ledgerSections = useMemo(
     () =>
       buildTaxEstimatorLedger({
-        trades,
+        trades: displayTransactions,
         portfolio,
         spotPrices,
         gains,

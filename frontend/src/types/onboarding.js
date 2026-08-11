@@ -1,7 +1,7 @@
 // Onboarding domain types (spec v1).
 // JSX implementation; mirrors the schema-driven engine contract.
 
-export const ONBOARDING_PLANS = ["starter", "pro", "desk"];
+export const ONBOARDING_PLANS = ["starter", "plus", "premium"];
 
 export const ONBOARDING_STEPS = {
   WELCOME: "welcome",
@@ -50,9 +50,10 @@ export const ONBOARDING_FIELDS = {
   defaults: "defaults",
 };
 
-// Where each plan lands when onboarding completes.
+// Where each plan lands when onboarding completes. (Legacy plan ids pro/desk
+// are accepted as aliases of plus/premium during the rename rollout.)
 export const PLAN_COMPLETION_ROUTE = {
   starter: "/app/dashboard",
-  pro: "/app/research",
-  desk: "/app/desk",
+  plus: "/app/research",
+  premium: "/app/desk",
 };

@@ -1,8 +1,9 @@
-// hooks/useUnifiedPortfolio.js
 // Source-aware portfolio read model. Pulls the unified summary from the backend
-// (which aggregates existing brokerage_*/portfolio_holdings today) and refreshes
-// on a 15-minute cadence to match the backend's background refresh contract.
-//
+// and refreshes on a 60-second cadence so the portfolio value, P&L, exposures,
+// and connected sources stay live without a manual page refresh. The hook never
+// throws (all fetches are error-caught) and an inFlight guard prevents overlap
+// if a refresh is still in flight when the timer fires.
+
 // Design: NEVER throws into the host component. On any failure (401, offline,
 // older backend without the endpoint) it leaves `summary` null so callers fall
 // back to the legacy locally-computed value. This keeps the hook zero-regression:
@@ -23,7 +24,7 @@ import {
   triggerUnifiedSync
 } from "@/services/portfolioService";
 
-const REFRESH_MS = 15 * 60 * 1000;
+const REFRESH_MS = 60 * 1000;
 
 export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
   const [summary, setSummary] = useState(null);
@@ -146,10 +147,25 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
     isPartial: summary ? !!summary.isPartial : false,
     hasManualExcluded: summary ? !!summary.hasManualExcluded : false,
     // Unified daily snapshots → tradeTimeline format for the equity chart.
+    // Includes dailyReturn (backend-computed, cash-flow-aware TWR) so the chart
+    // can use it directly without client-side recalculation.
     snapshotTimeline: Array.isArray(snapshots) && snapshots.length > 0
       ? snapshots
           .filter((s) => (s.snapshotDate || s.snapshot_date) && Number.isFinite(Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value)))
-          .map((s) => ({ t: new Date(s.snapshotDate || s.snapshot_date).getTime(), equity: Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value) }))
+          .map((s) => ({
+            t: new Date(s.snapshotDate || s.snapshot_date).getTime(),
+            equity: Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value),
+            // Backend-computed daily return (TWR, cash-flow aware) — no client override.
+            dailyReturn: s.dailyReturn != null ? Number(s.dailyReturn) : undefined,
+            portReturn: s.dailyReturn != null ? Number(s.dailyReturn) : undefined,
+            realizedPnl: s.realizedPnl != null ? Number(s.realizedPnl) : 0,
+            unrealizedPnl: s.unrealizedPnl != null ? Number(s.unrealizedPnl) : 0,
+            deposits: s.deposits != null ? Number(s.deposits) : 0,
+            withdrawals: s.withdrawals != null ? Number(s.withdrawals) : 0,
+            cash: s.cash != null ? Number(s.cash) : 0,
+            estimated: s.estimated === true,
+            baseCurrency: s.baseCurrency
+          }))
           .sort((a, b) => a.t - b.t)
       : [],
     refresh,

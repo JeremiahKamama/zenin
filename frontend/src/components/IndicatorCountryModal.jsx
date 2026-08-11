@@ -10,7 +10,6 @@ import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
-const MACRO_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const sanitizeMacroSnapshot = (snapshot) => {
   if (!snapshot || typeof snapshot !== "object") return snapshot;
@@ -60,14 +59,11 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
       setSnapshot(cachedPayload);
       setStale(Boolean(cachedPayload?.stale || cachedPayload?.unavailable));
       setNotice(Boolean(cachedPayload?.stale || cachedPayload?.unavailable) ? getSnapshotFallbackMessage(cachedPayload) : "");
-      if (Date.now() - cachedAt < MACRO_CLIENT_CACHE_TTL_MS) {
-        return () => {
-          isMounted = false;
-          controller.abort();
-        };
-      }
     }
 
+    // Always fetch fresh so the modal reflects the latest data on every open
+    // (the backend still governs server-side TTL). The previous early-return on
+    // a client-side cache prevented re-opening from pulling new values.
     const fetchSnapshot = async () => {
       setLoading(true);
       try {

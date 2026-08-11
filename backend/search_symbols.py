@@ -10,6 +10,8 @@ import json
 import subprocess
 import time
 
+from posthog_client import posthog_client
+
 # Hardcoded fallback database
 FALLBACK_STOCKS = {
     'AAPL': 'Apple Inc',
@@ -270,6 +272,14 @@ if __name__ == "__main__":
             search_type = "tradfi"
         
         results = search_symbols(query, search_type)
+        if posthog_client:
+            posthog_client.capture(
+                event="symbol_search_completed",
+                properties={
+                    "search_type": search_type,
+                    "result_count": len(results),
+                },
+            )
         print(json.dumps(results))
     except Exception as e:
         print(json.dumps([]))

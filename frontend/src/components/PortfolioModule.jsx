@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import ReactApexChart from "react-apexcharts";
 import { DataTable } from "./data-table/DataTable";
+import { SortableHeader } from "./data-table/SortableHeader";
 import { TradingViewChart } from "./TradingViewChart";
 import { calculateAccountSnapshot, INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
 import { calculateOptionPnL } from "../utils/optionsPnL";
@@ -10,14 +11,18 @@ import { PortfolioActivity } from "./PortfolioActivity";
 import { deriveBrokerageBadge, formatLastSync, maskAccountNumber, findDuplicateSymbols } from "../utils/brokerageStatus.js";
 import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "../utils/portfolioHeadline";
 import { classifyPortfolioInstrument, PORTFOLIO_BUCKETS } from "../utils/portfolioInstrumentClassifier.js";
+import { isStable } from "../utils/stablecoins";
 import { formatPercent } from "../utils/format";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
+import { buildConnectionRegistry } from "../utils/tradePerformance.js";
+import PerformanceData, { resolveTimeline } from "../utils/PerformanceData.js";
 import {
   fetchPerformanceHistory,
   buildEquitySeries,
   buildBenchmarkSeries,
-  computePerformanceMetrics
+  computePerformanceMetrics,
+  resolveRange
 } from "../utils/performanceHistory";
 import { WorkspaceScopeSelector } from "./WorkspaceScopeSelector";
 // Portfolio Intelligence — feature modules + normalized data layer.
@@ -35,6 +40,7 @@ import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { DeferredChart } from "./DeferredChart.jsx";
 import { EtfRecommendations } from "./EtfRecommendations";
 import { CORE_ETF_SEED } from "../utils/assetGraph";
+import { AssetLogo } from "./AssetLogo";
 
 const PORTFOLIO_VIEW_STORAGE_KEY = "zenin_portfolio_view_state_v1";
 const PORTFOLIO_SAVED_VIEWS_KEY = "zenin_portfolio_saved_views";
@@ -49,6 +55,190 @@ const FEE_SOURCE_CHEAPEST_AVENUE = "cheapest_avenue";
 function formatRiskLabel(value, fallback = "Watch") {
   const normalized = String(value || "").trim();
   return (normalized || fallback).replace(/-/g, " ");
+}
+
+// Prediction Markets card — mirrors the Predictions workspace Positions/Activity
+// views. Compact, monochrome, no search bar or value-filter icon. Polymarket
+// positions + fills are pulled here so they stay out of the core Holdings book.
+// Polymarket market names are noisy: the resolved outcome may be appended
+// (e.g. "Will X win? No") and combo/parlay markets concatenate events with
+// " AND " (e.g. "UFC … (Main Card) AND UFC … AND …"). The Market column should
+// show only the first question, so: strip after the first "?", and collapse any
+// " AND "-joined combo down to its first segment + "+N".
+function cleanMarketQuestion(raw) {
+  let s = String(raw || "").trim();
+  if (!s) return "Unknown Market";
+  const q = s.indexOf("?");
+  if (q !== -1) s = s.slice(0, q + 1);
+  const segments = s.split(/\s+AND\s+/i);
+  if (segments.length > 1) s = `${segments[0].trim()} +${segments.length - 1}`;
+  return s;
+}
+
+function PredictionMarketsPanel({ positions = [], activity = [], onOpenPredictions }) {
+  const [view, setView] = useState("positions"); // positions | activity
+
+  const openPositions = positions.filter((p) => Number(p.quantity) > 0 && Number(p.current) > 0 && Number(p.value) > 0);
+  const closedPositions = positions.filter((p) => !(Number(p.quantity) > 0 && Number(p.current) > 0 && Number(p.value) > 0));
+  const shownPositions = [...openPositions, ...closedPositions];
+
+  const fmtCents = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const c = Math.round(n * 100);
+    if (c >= 100) return `$${(c / 100).toFixed(2)}`;
+    return `${c}¢`;
+  };
+  const fmtShares = (q) => {
+    const n = Number(q) || 0;
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+    return n.toFixed(1);
+  };
+  const fmtValue = (v) => formatCurrency(Number(v) || 0, "USD");
+  const fmtPct = (p) => `${p >= 0 ? "+" : ""}${Number(p).toFixed(2)}%`;
+  const fmtTime = (ts) => {
+    if (!ts) return "";
+    const mins = Math.round((Date.now() - ts) / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.round(hrs / 24)}d ago`;
+  };
+
+  return (
+    <div className="portfolio-command-prediction-panel">
+      <div className="portfolio-command-prediction-tabs">
+        <button
+          type="button"
+          className={view === "positions" ? "active" : ""}
+          onClick={() => setView("positions")}
+        >
+          Positions
+        </button>
+        <button
+          type="button"
+          className={view === "activity" ? "active" : ""}
+          onClick={() => setView("activity")}
+        >
+          Activity
+        </button>
+      </div>
+
+      {view === "positions" ? (
+        <>
+          {shownPositions.length ? (
+            <div className="portfolio-command-prediction-tables">
+              <div className="portfolio-command-prediction-table-block">
+                <div className="portfolio-command-prediction-table-head">Active</div>
+                <div className="portfolio-command-prediction-grid-wrap">
+                <div className="portfolio-command-prediction-grid portfolio-command-prediction-grid--active">
+                  <div className="portfolio-command-prediction-row portfolio-command-prediction-head">
+                    <span>market</span>
+                    <span>avg</span>
+                    <span>Current</span>
+                    <span>value</span>
+                  </div>
+                  {openPositions.map((p) => (
+                    <div key={p.key} className="portfolio-command-prediction-row">
+                      <span className="portfolio-command-prediction-name">{p.name}</span>
+                      <span className="portfolio-command-prediction-num">{fmtCents(p.avg)}</span>
+                      <span className="portfolio-command-prediction-num">{fmtCents(p.current)}</span>
+                      <div className="portfolio-command-prediction-value">
+                        <strong>{fmtValue(p.value)}</strong>
+                        <span className={p.pnlUsd >= 0 ? "positive" : "negative"}>
+                          {fmtValue(p.pnlUsd)} ({fmtPct(p.pnlPct)})
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                </div>
+              </div>
+
+              <div className="portfolio-command-prediction-table-block">
+                <div className="portfolio-command-prediction-table-head">
+                  Closed
+                </div>
+                <div className="portfolio-command-prediction-grid-wrap">
+                <div className="portfolio-command-prediction-grid portfolio-command-prediction-grid--closed">
+                  <div className="portfolio-command-prediction-row portfolio-command-prediction-head">
+                    <span>Market</span>
+                    <span>Result</span>
+                    <span>Total Traded</span>
+                    <span>PNL#</span>
+                  </div>
+                  {closedPositions.map((p) => (
+                    <div key={p.key} className="portfolio-command-prediction-row">
+                      <span className="portfolio-command-prediction-name">{p.name}</span>
+                      <span className="portfolio-command-prediction-num">
+                        {p.result != null ? (p.result ? "Yes" : "No") : "—"}
+                      </span>
+                      <span className="portfolio-command-prediction-num">{fmtValue(p.totalTraded)}</span>
+                      <div className="portfolio-command-prediction-value">
+                        <span className={p.pnlUsd >= 0 ? "positive" : "negative"}>
+                          {fmtValue(p.pnlUsd)} ({fmtPct(p.pnlPct)})
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="portfolio-command-empty compact">
+              <h3>No prediction positions</h3>
+              <p>Connect a Polymarket wallet to track event-driven exposures here.</p>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {activity.length ? (
+            <div className="portfolio-command-prediction-list portfolio-command-prediction-list--activity">
+              <div className="portfolio-command-prediction-row portfolio-command-prediction-head">
+                <span>Type</span>
+                <span>Market</span>
+                <span>Amount</span>
+              </div>
+              {activity.map((t) => (
+                <div key={t.key} className="portfolio-command-prediction-row">
+                  <span className={`portfolio-command-prediction-type ${t.side}`}>{t.side}</span>
+                  <div className="portfolio-command-prediction-market">
+                    <div className="portfolio-command-prediction-copy">
+                      <span className="portfolio-command-prediction-name">{t.name}</span>
+                      <span className="portfolio-command-prediction-tag">
+                        <span className={`portfolio-command-prediction-side ${t.side}`}>{t.side === "buy" ? "BUY" : "SELL"}</span>
+                        <span className="portfolio-command-prediction-price">{fmtCents(t.price)}</span>
+                        <span className="portfolio-command-prediction-shares">{fmtShares(t.quantity)} sh</span>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="portfolio-command-prediction-value">
+                    <strong>{fmtValue(t.amount)}</strong>
+                    <span className="portfolio-command-prediction-time">{fmtTime(t.executedAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="portfolio-command-empty compact">
+              <h3>No prediction activity</h3>
+              <p>Fills from linked Polymarket wallets appear here.</p>
+            </div>
+          )}
+        </>
+      )}
+
+      {onOpenPredictions ? (
+        <div className="portfolio-command-inline-actions portfolio-command-prediction-foot">
+          <button type="button" className="portfolio-v2-link" onClick={onOpenPredictions}>
+            Open Predictions
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 // Weight → risk tier (single source of truth; mirrors exposureFlowData.classify).
@@ -179,7 +369,7 @@ export function PortfolioModule({
   onOpenPlans,
   indicatorContext,
   unifiedPortfolio = null
-}){
+}) {
   const g7Currencies = Array.isArray(getAppRuntimeConfig()?.ui?.g7Currencies)
     ? getAppRuntimeConfig().ui.g7Currencies
     : ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
@@ -189,8 +379,45 @@ export function PortfolioModule({
   const [chartMode, setChartMode] = useState("equity");
   const [performanceView, setPerformanceView] = useState("chart");
   const [chartInterval, setChartInterval] = useState("1D");
+  // Workspace + provenance context for the PerformanceData service. The
+  // workspace is scoped server-side; "default" is sufficient for cache isolation
+  // in the single-workspace client. Account/source filters (spec §28) default
+  // to empty = "all" so the full connected portfolio is queried. These extend
+  // to UI dropdowns once per-curve account/source selection is exposed.
+  const currentWorkspaceId = "default";
+  const selectedAccounts = [];
+  const selectedSources = [];
   const [showDiversificationModal, setShowDiversificationModal] = useState(false);
   const [holdingsSortBy, setHoldingsSortBy] = useState("value");
+  // Sort direction for the Holdings table column headers (SortableHeader
+  // shows ChevronUp/ChevronDown based on this). Defaults to desc so highest
+  // value/pnl appear first, matching the existing dropdown behavior.
+  const [holdingsSortDir, setHoldingsSortDir] = useState("desc");
+  // Track which column header is "active" (last clicked) so only ONE chevron
+  // shows the active up/down state at a time, even when several columns map
+  // to the same underlying sort field (e.g. Symbol / Name / Value / Allocation
+  // all sort on "value"). The dropdown sets sortBy directly but clears the
+  // active-column highlight since it isn't a per-column click.
+  const [holdingsActiveCol, setHoldingsActiveCol] = useState("value");
+  // Map a column key to its sort field; null = not sortable (stays dimmed).
+  const SORTABLE_COL_KEYS = { symbol: "value", name: "name", value: "value", allocation: "value", pnl: "pnl", pnlPct: "return", "vs-benchmark": null, "drift": null, provider: null };
+  const handleColumnSort = (colKey) => {
+    const targetSort = SORTABLE_COL_KEYS[colKey];
+    if (!targetSort) return;
+    setHoldingsSortBy(targetSort);
+    // 3-state cycle on the same column: asc → desc → unsorted (reset to
+    // the dropdown's default order) → asc. Clicking a DIFFERENT column
+    // starts fresh at ascending.
+    setHoldingsSortDir((prev) => {
+      if (holdingsActiveCol === colKey && holdingsSortBy === targetSort) {
+        if (prev === "desc") return "asc";
+        if (prev === "asc") return null;             // third click → unsorted
+        return "desc";                               // was null → desc
+      }
+      return "asc";                                  // new column → asc first
+    });
+    setHoldingsActiveCol(colKey);
+  };
   const [selectedHolding, setSelectedHolding] = useState(null);
 
   // Unified read model is the single source of truth for positions when active
@@ -210,6 +437,7 @@ export function PortfolioModule({
         id: t.executedAt ? `${t.symbol}-${t.executedAt}` : `${t.symbol}-${Math.random()}`,
         symbol: t.symbol,
         asset: t.symbol,
+        name: t.name || null,
         side: String(t.side || t.type || "").toUpperCase() === "SELL" ? "sell" : "buy",
         type: t.type || t.side || "fill",
         quantity: Number(t.quantity || 0),
@@ -220,6 +448,7 @@ export function PortfolioModule({
         currency: t.currency || "USD",
         executedAt: t.executedAt,
         date: t.executedAt,
+        realizedPnl: t.realizedPnl != null ? Number(t.realizedPnl) : null,
         platform: t.provider || t.sourceType || "unknown",
         provider: t.provider || t.sourceType || "unknown",
         sourceAccountId: t.sourceType || "",
@@ -229,6 +458,35 @@ export function PortfolioModule({
     }
     return Array.isArray(trades) ? trades : [];
   }, [unifiedPortfolio, trades]);
+
+  // A position/transaction/execution belongs to a prediction market (Polymarket
+  // etc.) when its source/provider/market-type is prediction. These are surfaced
+  // ONLY in the dedicated Prediction Markets card — they must be excluded from the
+  // eight Portfolio intelligence tabs (Portfolio/Performance/Exposure/Execution/
+  // Orders/Costs/Events/Activity) and their tables.
+  const isPredictionSource = (item) => {
+    if (!item) return false;
+    const mt = String(item.marketType || item.instrumentType || item.type || item.assetType || "").toLowerCase();
+    const pt = String(item.positionType || "").toLowerCase();
+    const prov = String(item.provider || item.sourceType || item.platform || item.source || "").toLowerCase();
+    return mt === "prediction" || mt === "polymarket" || pt === "prediction" || prov === "prediction" || prov === "polymarket";
+  };
+
+  // Portfolio-intelligence views exclude prediction-market data (it lives in the
+  // Prediction Markets card). The raw unified datasets above stay intact so the
+  // Prediction card can still filter them down to prediction-only.
+  const analysisPositions = useMemo(
+    () => (Array.isArray(displayPositions) ? displayPositions : []).filter((p) => !isPredictionSource(p)),
+    [displayPositions]
+  );
+  const analysisTransactions = useMemo(
+    () => (Array.isArray(displayTransactions) ? displayTransactions : []).filter((t) => !isPredictionSource(t)),
+    [displayTransactions]
+  );
+  const analysisNotifications = useMemo(
+    () => (Array.isArray(workspaceNotifications) ? workspaceNotifications : []).filter((n) => !isPredictionSource(n)),
+    [workspaceNotifications]
+  );
 
   const [benchmarkSymbol, setBenchmarkSymbol] = useState("SPY");
   // Immutable snapshot history (single source of truth for the Performance
@@ -244,6 +502,12 @@ export function PortfolioModule({
   const [flowOutcome, setFlowOutcome] = useState({ title: "", message: "", tone: "success" });
   const [displayCurrency, setDisplayCurrency] = useState("USD");
   const [assetClassFilter, setAssetClassFilter] = useState("all");
+  const [holdingsInstrumentType, setHoldingsInstrumentType] = useState("all");
+  const [selectedHoldingsConnections, setSelectedHoldingsConnections] = useState(new Set());
+  const holdingsConnRegistry = useMemo(
+    () => buildConnectionRegistry({ connectedAccounts, brokerageAccounts }),
+    [connectedAccounts, brokerageAccounts]
+  );
   const [activePortfolioTab, setActivePortfolioTab] = useState("holdings");
   const [historyFilters, setHistoryFilters] = useState({ platform: "all", side: "all", symbol: "" });
   const [selectedExecution, setSelectedExecution] = useState(null);
@@ -298,6 +562,7 @@ export function PortfolioModule({
   const apiExecutionRows = useMemo(() => {
     const isUnified = unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0;
     const rows = (isUnified ? displayTransactions : (Array.isArray(apiTradeExecutions) ? apiTradeExecutions : []))
+      .filter((execution) => !isPredictionSource(execution))
       .filter((execution) => isUnified || String(execution.platform || execution.provider || execution.source || "").trim())
       .filter((execution) => String(execution.platform || execution.provider || "").trim())
       .filter((execution) => {
@@ -460,60 +725,48 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const chartColor = chartMode === "pnl" ? (isProfitable ? "var(--color-success)" : "var(--color-danger)") : "var(--color-data-primary)";
 
   // Fetch immutable daily snapshots for the selected interval. Prefer unified
-  // snapshots (connected sources) over the legacy portfolio_daily_snapshots.
+  // snapshots (connected sources) — the canonical immutable historical source.
+  // Fall back to the fill-reconstructed equity curve only when no snapshots
+  // exist (Tier 2, supplemental for fresh wallets).
+  //
+  // Driven by the centralized PerformanceData service: Timeline → resolveRange
+  // (calendar-aware, no synthetic buckets), applyProvenanceFilter (account +
+  // source filtering, spec §27-28), buildEquitySeries (metric per View, no
+  // interpolation), downsample (display-only on real observations, spec §22).
   useEffect(() => {
-    // Unified read model wins when it has timeline history (snapshots or fill curve).
-    // Shared selector keeps Home + Portfolio in agreement on the timeline source.
-    const unifiedTimeline = resolvePerformanceTimeline({ unified: unifiedPortfolio, legacyTimeline: [] });
-    if (unifiedTimeline.length > 0 && (unifiedPortfolio.snapshots || []).length > 0) {
-      const rows = (unifiedPortfolio.snapshots || [])
-        .filter((s) => (s.snapshotDate || s.snapshot_date) && Number.isFinite(Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value)))
-        .map((s) => ({
-          date: s.snapshotDate || s.snapshot_date,
-          ts: new Date(`${s.snapshotDate || s.snapshot_date}T00:00:00Z`).getTime(),
-          portfolioValue: Number(s.portfolioValue != null ? s.portfolioValue : s.portfolio_value),
-          cash: 0,
-          investedCapital: 0,
-          dailyPnl: 0,
-          dailyReturn: 0,
-          benchmarkValue: null,
-          benchmarkReturn: null,
-          deposits: 0,
-          withdrawals: 0,
-          estimated: false,
-          source: "unified"
-        }))
-        .filter((r) => Number.isFinite(r.ts))
-        .sort((a, b) => a.ts - b.ts);
+    const svc = new PerformanceData({
+      workspace: currentWorkspaceId,
+      accounts: selectedAccounts || [],
+      sources: selectedSources || [],
+      currency: displayCurrency,
+      benchmarkSymbol,
+    });
+    setHistoryStatus("loading");
+
+    if ((unifiedPortfolio.snapshots || []).length > 0) {
+      // Tier 1: immutable EOD snapshots (canonical historical source).
+      const { start, end } = resolveTimeline(chartInterval);
+      const rows = svc.resolveSnapshots(unifiedPortfolio.snapshots, start, end);
       setSnapshotHistory(rows);
       setHistoryStatus(rows.length ? "ready" : "empty");
       return;
     }
 
-    // Fall back to fill-reconstructed curve when no EOD snapshots exist yet.
-    // Shows full trading history since first trade, not just since first snapshot.
-    if (unifiedPortfolio?.isUnified && Array.isArray(unifiedPortfolio.fillEquityCurve) && unifiedPortfolio.fillEquityCurve.length > 1) {
-      const rows = unifiedPortfolio.fillEquityCurve
-        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity))
-        .map((p) => ({
-          date: new Date(p.t).toISOString().slice(0, 10),
-          ts: Number(p.t),
-          portfolioValue: Number(p.equity),
-          cash: 0, investedCapital: 0, dailyPnl: 0, dailyReturn: 0,
-          benchmarkValue: null, benchmarkReturn: null,
-          deposits: 0, withdrawals: 0, estimated: false,
-          source: "fill_curve"
-        }))
-        .sort((a, b) => a.ts - b.ts);
+    // Tier 2: fill-reconstructed equity curve (fresh wallets only).
+    // Backward-subtracts future realized PNL from current equity — approximate;
+    // only used when immutable snapshots are absent. Clearly labelled estimated.
+    if (unifiedPortfolio?.isUnified && Array.isArray(unifiedPortfolio.fillEquityCurve) && unifiedPortfolio.fillEquityCurve.length > 0) {
+      const { start, end } = resolveTimeline(chartInterval);
+      const rows = svc.resolveFillCurve(unifiedPortfolio.fillEquityCurve, start, end);
       setSnapshotHistory(rows);
       setHistoryStatus(rows.length ? "ready" : "empty");
       return;
     }
 
+    // Manual portfolio (no connected source): legacy standalone endpoint.
     let cancelled = false;
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    setHistoryStatus("loading");
-    fetchPerformanceHistory(chartInterval, { signal: controller?.signal })
+    fetchPerformanceHistory(chartInterval, { signal: controller?.signal, benchmark: benchmarkSymbol })
       .then((rows) => {
         if (cancelled) return;
         setSnapshotHistory(rows);
@@ -528,7 +781,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       cancelled = true;
       controller?.abort();
     };
-  }, [chartInterval, unifiedPortfolio?.isUnified, unifiedPortfolio?.snapshots]);
+  }, [chartInterval, benchmarkSymbol, selectedAccounts, selectedSources, displayCurrency, currentWorkspaceId, unifiedPortfolio?.snapshots, unifiedPortfolio?.fillEquityCurve]);
 
   // Base value = first snapshot's portfolio value (for %/PnL rebasing). Falls
   // back to currentAccountEquity when history is empty — never $10K.
@@ -615,13 +868,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
         weight: totalExposure > 0 ? (row.value / totalExposure) * 100 : 0
       }))
       .sort((a, b) => b.value - a.value);
-  }, [displayPositions]);
+  }, [analysisPositions]);
 
   const attributionRows = useMemo(() => {
     const bySector = new Map();
     const byRegion = new Map();
     const byFactor = new Map();
-    (Array.isArray(displayPositions) ? displayPositions : []).forEach((item) => {
+    (Array.isArray(analysisPositions) ? analysisPositions : []).forEach((item) => {
       const qty = Number(item?.quantity || 0);
       const px = Number(item?.price || 0);
       const value = qty * px;
@@ -640,7 +893,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       region: toRows(byRegion, "Region"),
       factor: toRows(byFactor, "Factor")
     };
-  }, [displayPositions]);
+  }, [analysisPositions]);
 
   const exposureRows = useMemo(() => {
     const groups = {
@@ -649,7 +902,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       currency: new Map()
     };
     let total = 0;
-    (Array.isArray(displayPositions) ? displayPositions : []).forEach((item) => {
+    (Array.isArray(analysisPositions) ? analysisPositions : []).forEach((item) => {
       const value = (Number(item?.price || 0) * Number(item?.quantity || 0));
       total += value;
       const sector = String(item?.theme || item?.sector || "Unclassified");
@@ -669,7 +922,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
         }))
         .sort((a, b) => b.weight - a.weight);
     return [...normalize(groups.sector, "Sector"), ...normalize(groups.country, "Country"), ...normalize(groups.currency, "Currency")];
-  }, [displayPositions]);
+  }, [analysisPositions]);
 
   // Rec 10 — derive portfolio gaps from current exposure vs the ETF
   // seed's exposure universe. Missing = seed exposure token not present
@@ -780,14 +1033,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
       mwr: Number.isFinite(m.mwr) ? m.mwr.toFixed(2) : "N/A",
       calmar: Number.isFinite(m.calmar) ? m.calmar.toFixed(2) : "N/A",
       winRate: Number.isFinite(m.winRate) ? m.winRate.toFixed(1) : "N/A",
-      alpha: "N/A",
-      beta: "N/A"
     };
   }, [snapshotHistory, currentAccountEquity]);
 
   const predictionMarketRows = useMemo(() => {
-    const source = Array.isArray(trades) ? trades : [];
-    const predictionTrades = source
+    // (1) Trade-derived rows from legacy `trades` (existing path).
+    const fromTrades = (Array.isArray(trades) ? trades : [])
       .filter((trade) => {
         const mt = String(trade?.marketType || "").toLowerCase();
         return ["prediction", "polymarket", "yesno"].includes(mt);
@@ -798,22 +1049,51 @@ const isProfitable = currentAccountEquity >= initialBalance;
         const price = Number(trade?.price) || 0;
         const ts = new Date(trade?.executedAt || trade?.date || 0).getTime() || 0;
         const market = String(trade?.name || trade?.asset || "Unknown Market").trim();
-        return { market, side, qty, price, ts };
+        // Connection keeps the same market from two sources in separate buckets
+        // (a duplicated Polymarket wallet no longer doubles qty/PnL in one row).
+        const connection = String(trade?.platform || trade?.provider || "unknown");
+        return { market, side, qty, price, ts, connection };
+      });
+
+    // (2) Position-derived rows from unified prediction positions (Polymarket).
+    // Each open position is an MTM lot: pnl = qty * (currentPrice - avgEntry).
+    const fromPositions = (Array.isArray(displayPositions) ? displayPositions : [])
+      .filter((p) => {
+        const mt = String(p?.marketType || p?.type || "").toLowerCase();
+        const prov = String(p?.provider || "").toLowerCase();
+        return mt === "prediction" || mt === "polymarket" || prov === "polymarket" || p?.positionType === "prediction";
       })
-      .filter((trade) => trade.qty > 0 && trade.price >= 0 && trade.market)
-      .sort((a, b) => a.ts - b.ts);
+      .map((p) => {
+        const qty = Math.abs(Number(p?.quantity) || 0);
+        const price = Number(p?.price) || 0; // current mark
+        const entry = Number(p?.entryPrice) || 0; // avg entry
+        const side = String(p?.side || "long").toLowerCase() === "short" ? "sell" : "buy";
+        const market = String(p?.symbol || p?.name || "Unknown Market").trim();
+        // For the FIFO aggregator below, a "buy" lot at entry price with a later
+        // mark price yields unrealized pnl = qty * (mark - entry).
+        const connection = String(p?.provider || p?.source || p?.sourceAccountId || "unknown");
+        return { market, side, qty, price: entry || price, ts: 0, markPrice: price, entryPrice: entry, connection };
+      });
+
+    const predictionTrades = [...fromTrades, ...fromPositions].filter(
+      (t) => t.qty > 0 && t.price >= 0 && t.market
+    ).sort((a, b) => a.ts - b.ts);
 
     if (!predictionTrades.length) return [];
 
     const byMarket = new Map();
     predictionTrades.forEach((trade) => {
-      const row = byMarket.get(trade.market) || {
+      // Group by market + connection so the same market from two sources
+      // stays in separate buckets (no cross-source qty/PnL inflation).
+      const groupKey = `${trade.market}::${trade.connection || "unknown"}`;
+      const row = byMarket.get(groupKey) || {
         market: trade.market,
+        connection: trade.connection || "unknown",
         netQty: 0,
         netCost: 0,
         realizedPnl: 0,
         lastPrice: 0,
-        lastTs: 0
+        lastTs: 0,
       };
       if (trade.side === "buy") {
         row.netQty += trade.qty;
@@ -825,8 +1105,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
         row.netQty -= qtyToClose;
         row.netCost -= qtyToClose * avgCost;
       }
-      row.lastPrice = trade.price;
-      row.lastTs = trade.ts;
+      // Position-derived rows carry an explicit mark; prefer it as lastPrice so
+      // the unrealized leg uses the live mark instead of the last fill price.
+      if (trade.markPrice != null && trade.markPrice > 0) row.lastPrice = trade.markPrice;
+      else row.lastPrice = trade.price;
+      row.lastTs = trade.ts || row.lastTs;
       byMarket.set(trade.market, row);
     });
 
@@ -835,13 +1118,84 @@ const isProfitable = currentAccountEquity >= initialBalance;
         const avgOpenCost = row.netQty > 0 ? row.netCost / row.netQty : 0;
         const unrealizedPnl = row.netQty > 0 ? row.netQty * (row.lastPrice - avgOpenCost) : 0;
         const pnl = row.realizedPnl + unrealizedPnl;
-        return { market: row.market, pnl, netQty: row.netQty, updatedAt: row.lastTs };
+        return { market: row.market, pnl, netQty: row.netQty, updatedAt: row.lastTs, connection: row.connection };
       })
       .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
-  }, [trades]);
+  }, [trades, displayPositions]);
+
+  // Prediction-market positions for the dedicated Prediction Markets card.
+  const predictionPositions = useMemo(() => {
+    return (Array.isArray(displayPositions) ? displayPositions : [])
+      .filter((p) => {
+        const mt = String(p?.marketType || p?.instrumentType || p?.type || "").toLowerCase();
+        const pt = String(p?.positionType || "").toLowerCase();
+        return mt === "prediction" || mt === "polymarket" || pt === "prediction";
+      })
+      .map((p) => {
+        const qty = Math.abs(Number(p?.quantity) || 0);
+        const entry = Number(p?.averageEntryPrice != null ? p.averageEntryPrice : p?.entryPrice) || 0; // avg entry
+        const current = Number(p?.currentPrice != null ? p.currentPrice : p?.price) || 0; // current mark
+        const value = Number(p?.marketValue) || qty * current;
+        const pnlUsd = qty * (current - entry);
+        const pnlPct = entry > 0 ? ((current - entry) / entry) * 100 : 0;
+        const isClosed = !(qty > 0 && current > 0 && value > 0);
+        return {
+          key: String(p?.symbol || p?.name || Math.random()),
+          symbol: String(p?.symbol || ""),
+          name: cleanMarketQuestion(p?.name || p?.question || p?.symbol || "Unknown Market"),
+          side: String(p?.side || "long").toLowerCase() === "short" ? "short" : "long",
+          quantity: qty,
+          avg: entry,
+          current,
+          value,
+          pnlUsd,
+          pnlPct,
+          // Closed-trade columns. A settled (closed) prediction position has a
+          // resolved outcome: Yes when the position realised a gain, No otherwise.
+          result: isClosed ? pnlUsd >= 0 : null,
+          totalTraded: qty * entry,
+          isClosed,
+        };
+      });
+  }, [analysisPositions]);
+
+  // Prediction-market activity (fills) for the dedicated Prediction Markets card.
+  const predictionActivity = useMemo(() => {
+    const src = Array.isArray(displayTransactions) ? displayTransactions : [];
+    return src
+      .filter((t) => {
+        const prov = String(t?.provider || t?.sourceType || "").toLowerCase();
+        const mt = String(t?.marketType || t?.sourceType || "").toLowerCase();
+        return prov === "polymarket" || mt === "prediction" || mt === "polymarket";
+      })
+      .map((t) => {
+        const qty = Math.abs(Number(t?.quantity) || 0);
+        const price = Number(t?.unitPrice || t?.price) || 0;
+        const amount = qty * price;
+        return {
+          key: `${t?.providerTxId || t?.id || Math.random()}`,
+          symbol: String(t?.symbol || ""),
+          name: cleanMarketQuestion(t?.name || t?.question || t?.symbol || "Unknown Market"),
+          side: String(t?.side || "sell").toLowerCase() === "buy" ? "buy" : "sell",
+          quantity: qty,
+          price,
+          amount,
+          executedAt: t?.executedAt ? new Date(t.executedAt).getTime() : 0,
+        };
+      });
+  }, [displayTransactions]);
 
   const combinedHoldings = useMemo(() => {
-    const spotRows = (Array.isArray(displayPositions) ? displayPositions : []).map((item, index) => {
+    // Exclude prediction-market positions: they are surfaced in the dedicated
+    // Prediction Markets card, not in the core Holdings book.
+    const isPrediction = (item) => {
+      const mt = String(item?.marketType || item?.instrumentType || item?.type || "").toLowerCase();
+      const pt = String(item?.positionType || "").toLowerCase();
+      return mt === "prediction" || mt === "polymarket" || pt === "prediction";
+    };
+    const spotRows = (Array.isArray(displayPositions) ? displayPositions : [])
+      .filter((item) => !isPrediction(item))
+      .map((item, index) => {
       const currency = item?.currency || item?.quotedCurrency || "USD";
       // MyStocks (African) rows carry priceUsd from the backend; prefer it so a
       // mixed-currency portfolio values correctly without relying on possibly
@@ -910,8 +1264,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
       if (holdingsSortBy === "risk") return Math.abs(Number(row.positionGain || 0));
       return Number(row.positionValue || 0);
     };
-    return [...combinedHoldings].sort((a, b) => score(b) - score(a));
-  }, [combinedHoldings, holdingsSortBy]);
+    return [...combinedHoldings].sort((a, b) => {
+      const delta = score(b) - score(a);
+      return holdingsSortDir === "asc" ? -delta : holdingsSortDir === "desc" ? delta : 0;
+    });
+  }, [combinedHoldings, holdingsSortBy, holdingsSortDir]);
 
   // Benchmark series from REAL stored benchmark closes (portfolio_daily_snapshots
   // .benchmark_value). Rebased to the portfolio's start. Returns [] when the
@@ -1077,10 +1434,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
     return formatCurrency(value, currency, { sign: true });
   };
 
-  const stablecoinSymbols = useMemo(
-    () => new Set(["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"]),
-    []
-  );
+  // Stablecoin classification uses the shared registry (../utils/stablecoins).
 
   const exposureSummary = useMemo(() => {
     const pickTop = (bucket) => exposureRows.find((row) => String(row.bucket || "").toLowerCase() === bucket) || null;
@@ -1148,8 +1502,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
         const symbol = String(item?.symbol || "N/A").toUpperCase();
         const quantity = Number(item?.quantity || 0);
         const allocation = total > 0 ? (Number(holding.positionValue || 0) / total) * 100 : 0;
-        const isStable = stablecoinSymbols.has(symbol) || String(item?.type || "").toLowerCase() === "stablecoin";
-        const status = isStable ? "Cash" : "Hold";
+        const isStableRow = isStable(symbol) || String(item?.type || "").toLowerCase() === "stablecoin";
+        const status = isStableRow ? "Cash" : "Hold";
         return {
           key: holding.key,
           kind: "spot",
@@ -1158,6 +1512,16 @@ const isProfitable = currentAccountEquity >= initialBalance;
           allocation,
           positionValue: Number(holding.positionValue || 0),
           positionGain: Number(holding.positionGain || 0),
+          // Columns surfaced for reporting (B1/B2). Entry/current price come from
+          // the unified position; qty is the raw holding quantity.
+          qty: quantity,
+          qtyDisplay: `${quantity.toLocaleString(undefined, { maximumFractionDigits: quantity < 1 ? 8 : 4 })} ${symbol}`,
+          entryPrice: Number.isFinite(Number(item?.entryPrice)) && Number(item?.entryPrice) > 0 ? Number(item?.entryPrice) : null,
+          currentPrice: Number.isFinite(Number(item?.currentPrice)) && Number(item?.currentPrice) > 0 ? Number(item?.currentPrice) : null,
+          marketValue: Number(holding.positionValue || 0),
+          marketValueDisplay: formatCurrency(holding.positionValue, holding.currency),
+          pnlPct: Number(item?.priceChangePercent || 0),
+          provider: String(item?.source || item?.provider || "—"),
           markValueMain: holding.kind === "spot" ? formatCurrency(holding.rawValue, holding.currency) : formatCurrency(holding.positionValue, "USD"),
           markValueSub: `${quantity.toFixed(4)} ${symbol}`,
           pnlMain: formatSignedMoney(holding.positionGain),
@@ -1179,6 +1543,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
       const pnl = Number(holding.positionGain || 0);
       const base = Math.abs(Number(trade?.netPremiumAtEntry || 0) * Math.max(1, qty));
       const pct = base > 0 ? (pnl / base) * 100 : 0;
+      const optCurrentMark = Number(holding?.metrics?.currentMark || 0);
+      const optEntry = Number(trade?.netPremiumAtEntry || 0);
       return {
         key: holding.key,
         kind: "options",
@@ -1187,6 +1553,15 @@ const isProfitable = currentAccountEquity >= initialBalance;
         allocation,
         positionValue: Number(holding.positionValue || 0),
         positionGain: pnl,
+        // Options columns (B1/B2). Entry = net premium/contract; current = mark/contract.
+        qty,
+        qtyDisplay: `${qty.toLocaleString(undefined, { maximumFractionDigits: 5 })} Units`,
+        entryPrice: Number.isFinite(optEntry) && optEntry > 0 ? optEntry : null,
+        currentPrice: qty > 0 && Number.isFinite(optCurrentMark) ? Math.abs(optCurrentMark / qty) : null,
+        marketValue: Number(holding.positionValue || 0),
+        marketValueDisplay: formatMoney(holding.positionValue),
+        pnlPct: pct,
+        provider: String(trade?.provider || trade?.platform || "—"),
         markValueMain: formatMoney(holding.positionValue),
         markValueSub: `${qty.toFixed(5)} Units`,
         pnlMain: formatSignedMoney(pnl),
@@ -1197,7 +1572,48 @@ const isProfitable = currentAccountEquity >= initialBalance;
         raw: trade
       };
     });
-  }, [sortedHoldings, stablecoinSymbols]);
+  }, [sortedHoldings]);
+
+  // Part 4: Filter holdings by instrument type (All | Spot | Perps | Options | Futures)
+  // and by selected connections.
+  const filteredHoldingsTableRows = useMemo(() => {
+    // First apply instrument type filter
+    let rows = holdingsTableRows;
+    if (holdingsInstrumentType !== "all") {
+      rows = rows.filter((row) => {
+        if (holdingsInstrumentType === "options") return row.kind === "options";
+        if (holdingsInstrumentType === "spot") {
+          return row.kind === "spot" && !["perp", "future", "forex"].includes(String(row.raw?.marketType || "").toLowerCase());
+        }
+        if (holdingsInstrumentType === "perps") {
+          return row.kind === "spot" && String(row.raw?.marketType || "").toLowerCase() === "perp";
+        }
+        if (holdingsInstrumentType === "futures") {
+          return row.kind === "spot" && String(row.raw?.marketType || "").toLowerCase() === "future";
+        }
+        return true;
+      });
+    }
+
+    // Then apply connection filter
+    if (selectedHoldingsConnections.size > 0 && holdingsConnRegistry.list.length > 0) {
+      rows = rows.filter((row) => {
+        const raw = row.raw || {};
+        const resolved = holdingsConnRegistry.resolve
+          ? holdingsConnRegistry.resolve({
+              sourceAccountId: raw.sourceAccountId,
+              provider: raw.provider || raw.source,
+              platform: raw.platform || raw.provider,
+              sourceType: raw.sourceType
+            })
+          : null;
+        const connId = resolved ? resolved.id : null;
+        return connId ? selectedHoldingsConnections.has(connId) : false;
+      });
+    }
+
+    return rows;
+  }, [holdingsTableRows, holdingsInstrumentType, selectedHoldingsConnections, holdingsConnRegistry]);
 
   const recentActivityRows = useMemo(() => {
     const useUnified = unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0;
@@ -1419,6 +1835,21 @@ const isProfitable = currentAccountEquity >= initialBalance;
   const totalGainLoss = Number(calculatePortfolioGain?.() || 0);
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const cashWeight = currentAccountEquity > 0 ? (liveAvailableBalance / currentAccountEquity) * 100 : 0;
+
+  // Real YTD return derived from immutable snapshots (falls back to total return
+  // when snapshots are absent). Cost-basis-based totalReturnPct is 0 for unified
+  // accounts, so prefer the snapshot series for the YTD card.
+  const ytdReturnPct = useMemo(() => {
+    if (!snapshotHistory || snapshotHistory.length < 2) return totalReturnPct;
+    const now = new Date();
+    const jan1 = new Date(Date.UTC(now.getUTCFullYear(), 0, 1)).getTime();
+    const ytdSnaps = snapshotHistory.filter((s) => s.ts >= jan1);
+    const base = ytdSnaps.length ? ytdSnaps[0] : snapshotHistory[0];
+    const baseVal = base.portfolioValue;
+    if (!baseVal) return totalReturnPct;
+    const endVal = Number.isFinite(currentAccountEquity) && currentAccountEquity > 0 ? currentAccountEquity : snapshotHistory[snapshotHistory.length - 1].portfolioValue;
+    return ((endVal - baseVal) / Math.abs(baseVal)) * 100;
+  }, [snapshotHistory, currentAccountEquity, totalReturnPct]);
 
   const performanceSnapshot = useMemo(() => {
     const values = Array.isArray(chartData)
@@ -1887,13 +2318,20 @@ const isProfitable = currentAccountEquity >= initialBalance;
       feeCurrency: t.currency || "USD",
       platform: t.provider || "hyperliquid",
       executedAt: t.executedAt,
-      marketType: t.type || "perp",
-      platformFillId: null,
-      id: `${t.sourceType || t.provider || "fill"}-${i}`,
+      marketType: t.type || "trade",
+      platformFillId: t.providerTxId || null,
+      id: t.txnId || t.providerTxId || `${t.sourceType || t.provider || "fill"}-${i}`,
       source: t.sourceType || "wallet"
     }));
   }, [unifiedPortfolio?.isUnified, unifiedPortfolio?.transactions]);
   const effectiveExecutions = unifiedExecutions.length > 0 ? unifiedExecutions : apiTradeExecutions;
+
+  // Portfolio-intelligence execution views exclude prediction-market fills
+  // (they live in the dedicated Prediction Markets card).
+  const analysisExecutions = useMemo(
+    () => (Array.isArray(effectiveExecutions) ? effectiveExecutions : []).filter((e) => !isPredictionSource(e)),
+    [effectiveExecutions]
+  );
 
   // Derive a fee summary from unified transactions so Costs tab has data.
   const unifiedFeeSummary = useMemo(() => {
@@ -2073,21 +2511,21 @@ const isProfitable = currentAccountEquity >= initialBalance;
       },
       {
         label: `Benchmark (${benchmarkSymbol})`,
-        value: formatSignedPercent(benchmarkSnapshot.returnPct, 2),
-        detail: `Relative ${formatSignedPercent(benchmarkSnapshot.relativePct, 2)}`,
-        tone: benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative",
+        value: benchmarkSeries.length >= 2 ? formatSignedPercent(benchmarkSnapshot.returnPct, 2) : "—",
+        detail: benchmarkSeries.length >= 2 ? `Relative ${formatSignedPercent(benchmarkSnapshot.relativePct, 2)}` : "Benchmark unavailable",
+        tone: benchmarkSeries.length >= 2 ? (benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative") : "muted",
       },
       {
         label: "YTD Return",
-        value: formatSignedPercent(totalReturnPct, 2),
-        detail: "Portfolio return",
-        tone: totalReturnPct >= 0 ? "positive" : "negative",
+        value: formatSignedPercent(ytdReturnPct, 2),
+        detail: "Portfolio YTD",
+        tone: ytdReturnPct >= 0 ? "positive" : "negative",
       },
       {
-        label: "Beta / Sharpe",
-        value: `${metrics.beta || "N/A"} / ${metrics.sharpe || "N/A"}`,
-        detail: healthStatus.label,
-        tone: healthStatus.tone,
+        label: "Sharpe",
+        value: metrics.sharpe || "N/A",
+        detail: metrics.volatility !== "N/A" ? `Vol ${metrics.volatility}% · Sortino ${metrics.sortino}` : "Risk-adjusted return",
+        tone: metrics.sharpe !== "N/A" && Number(metrics.sharpe) >= 1 ? "positive" : metrics.sharpe !== "N/A" && Number(metrics.sharpe) < 0 ? "negative" : "neutral",
       },
     ];
     // P3 — Tier-1 external intelligence cards, fed by the IntelligenceBus (Phase 4).
@@ -2118,14 +2556,14 @@ const isProfitable = currentAccountEquity >= initialBalance;
     benchmarkSymbol,
     cashWeight,
     currentAccountEquity,
-    healthStatus.label,
-    healthStatus.tone,
     liveAvailableBalance,
-    metrics.beta,
     metrics.sharpe,
+    metrics.volatility,
+    metrics.sortino,
     totalGainLoss,
     totalOptionsValue,
     totalReturnPct,
+    ytdReturnPct,
     regimeIntelligence?.regime,
     regimeIntelligence?.macroSignal,
   ]);
@@ -2212,10 +2650,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
     { label: "Portfolio YTD", value: formatSignedPercent(totalReturnPct, 2), tone: totalReturnPct >= 0 ? "positive" : "negative" },
     { label: "Benchmark YTD", value: formatSignedPercent(benchmarkSnapshot.returnPct, 2), tone: benchmarkSnapshot.returnPct >= 0 ? "positive" : "negative" },
     { label: "YTD Relative", value: formatSignedPercent(benchmarkSnapshot.relativePct, 2), tone: benchmarkSnapshot.relativePct >= 0 ? "positive" : "negative" },
-    { label: "Beta", value: String(metrics.beta || "N/A") },
-        { label: "Tracking Error", value: formatPercent(Math.abs(Number(benchmarkSnapshot.relativePct || 0))) },
+    { label: "Tracking Error", value: formatPercent(Math.abs(Number(benchmarkSnapshot.relativePct || 0))) },
     { label: "Sharpe Ratio", value: String(metrics.sharpe || "N/A") },
-  ]), [benchmarkSnapshot.relativePct, benchmarkSnapshot.returnPct, benchmarkSymbol, metrics.beta, metrics.sharpe, totalReturnPct]);
+  ]), [benchmarkSnapshot.relativePct, benchmarkSnapshot.returnPct, benchmarkSymbol, metrics.sharpe, totalReturnPct]);
 
   const demotedPredictionRows = useMemo(() => predictionMarketRows.slice(0, 4), [predictionMarketRows]);
 
@@ -2289,8 +2726,8 @@ const isProfitable = currentAccountEquity >= initialBalance;
     if (activePortfolioTab === "attribution") {
       return (
         <PerformanceModule
-          displayTransactions={displayTransactions}
-          displayPositions={displayPositions}
+          displayTransactions={analysisTransactions}
+          displayPositions={analysisPositions}
           connectedAccounts={connectedAccounts}
           brokerageAccounts={brokerageAccounts}
           livePriceBySymbol={spotPrices}
@@ -2376,7 +2813,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
             <div className="portfolio-command-mini-card static">
               <span>Latest Fill</span>
-              <strong>{latestExecution ? latestExecution.symbol : "No fills"}</strong>
+              <strong>
+                {latestExecution ? (
+                  <><AssetLogo asset={latestExecution} size="xs" /> {latestExecution.symbol} </>
+                ) : "No fills"}
+              </strong>
               <em>{latestExecution ? `${formatVenueLabel(latestExecution.platform)} · ${formatExecutionTimestamp(latestExecution.executedAt)}` : "Connect an API account"}</em>
             </div>
           </div>
@@ -2428,7 +2869,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                   key: "symbol",
                   header: "Symbol",
                   sortable: false,
-                  cell: (e) => (<div><strong>{e.symbol}</strong><span>{e.marketType}</span></div>),
+                  cell: (e) => (<div><AssetLogo asset={e} size="xs" /><strong>{e.symbol}</strong><span>{e.marketType}</span></div>),
                 },
                 {
                   key: "side",
@@ -2543,26 +2984,11 @@ const isProfitable = currentAccountEquity >= initialBalance;
               <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Open Predictions</button>
             </div>
           </div>
-          {predictionMarketRows.length ? (
-            <div className="portfolio-command-card-grid four">
-              {predictionMarketRows.slice(0, 8).map((row) => (
-                <div key={row.market} className="portfolio-command-market-card">
-                  <span>{row.market}</span>
-                  <strong>{formatSignedMoney(row.pnl)}</strong>
-                  <em>{row.netQty.toFixed(2)} qty</em>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="portfolio-command-empty">
-              <h3>No prediction market positions yet</h3>
-              <p>Use the Predictions workspace to track macro and event-driven exposures beside the main book.</p>
-              <div className="portfolio-command-inline-actions">
-                <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>Explore Markets</button>
-                <button type="button" className="portfolio-v2-link secondary" onClick={() => setShowPredictionGuide(true)}>Learn how it works</button>
-              </div>
-            </div>
-          )}
+          <PredictionMarketsPanel
+            positions={predictionPositions}
+            activity={predictionActivity}
+            onOpenPredictions={onOpenPredictions}
+          />
         </div>
       );
     }
@@ -2586,6 +3012,59 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </select>
             </label>
             <label className="portfolio-command-inline-select">
+              <span>Instrument</span>
+              <select value={holdingsInstrumentType} onChange={(event) => setHoldingsInstrumentType(event.target.value)} className="portfolio-v2-select">
+                <option value="all">All</option>
+                <option value="spot">Spot</option>
+                <option value="perps">Perps</option>
+                <option value="options">Options</option>
+                <option value="futures">Futures</option>
+              </select>
+            </label>
+            {holdingsConnRegistry.list.length > 0 && (
+              <label className="portfolio-command-inline-select" style={{ minWidth: "180px" }}>
+                <span>Connections</span>
+                <select
+                  value={selectedHoldingsConnections.size > 1 || !selectedHoldingsConnections.has([...holdingsConnRegistry.list][0]?.id) ? "__custom" : [...holdingsConnRegistry.list][0]?.id || ""}
+                  onChange={(event) => {
+                    const val = event.target.value;
+                    if (val === "__clear") {
+                      setSelectedHoldingsConnections(new Set());
+                    } else if (val === "__all") {
+                      const allIds = new Set(holdingsConnRegistry.list.map((c) => c.id));
+                      if (selectedHoldingsConnections.size === allIds.size) {
+                        setSelectedHoldingsConnections(new Set());
+                      } else {
+                        setSelectedHoldingsConnections(allIds);
+                      }
+                    } else {
+                      const next = new Set(selectedHoldingsConnections);
+                      if (next.has(val)) next.delete(val);
+                      else next.add(val);
+                      setSelectedHoldingsConnections(next);
+                    }
+                  }}
+                  className="portfolio-v2-select"
+                  multiple
+                >
+                  <option value="__all">All</option>
+                  {holdingsConnRegistry.list.map((conn) => (
+                    <option key={conn.id} value={conn.id}>{conn.label}</option>
+                  ))}
+                </select>
+                {selectedHoldingsConnections.size > 0 && (
+                  <button
+                    type="button"
+                    className="portfolio-v2-link"
+                    style={{ fontSize: "11px", padding: "0 4px" }}
+                    onClick={() => setSelectedHoldingsConnections(new Set())}
+                  >
+                    Clear
+                  </button>
+                )}
+              </label>
+            )}
+            <label className="portfolio-command-inline-select">
               <span>Sort</span>
               <select value={holdingsSortBy} onChange={(event) => setHoldingsSortBy(event.target.value)} className="portfolio-v2-select">
                 <option value="value">Value</option>
@@ -2599,8 +3078,22 @@ const isProfitable = currentAccountEquity >= initialBalance;
         <div className="portfolio-command-table-wrap">
           <DataTable
             columns={[
-              { key: "symbol", header: "Symbol", sortable: false },
-              { key: "name", header: "Name", sortable: false },
+              { key: "symbol", header: () => (
+                <SortableHeader
+                  label="Symbol"
+                  active={holdingsActiveCol === "symbol"}
+                  direction={holdingsSortDir}
+                  onClick={() => handleColumnSort("symbol")}
+                />
+              ), sortable: false },
+              { key: "name", header: () => (
+                <SortableHeader
+                  label="Name"
+                  active={holdingsActiveCol === "name"}
+                  direction={holdingsSortDir}
+                  onClick={() => handleColumnSort("name")}
+                />
+              ), sortable: false },
               {
                 key: "kind",
                 header: "Asset Class",
@@ -2608,8 +3101,48 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 cell: (row) => row.kind === "options" ? "Options" : String(row?.raw?.marketType || row?.raw?.type || "Asset").replace(/_/g, " "),
               },
               {
+                key: "qty",
+                header: "Quantity",
+                sortable: false,
+                cell: (row) => row.qtyDisplay || "—",
+              },
+              {
+                key: "entryPrice",
+                header: "Entry",
+                sortable: false,
+                className: "portfolio-command-col-wide",
+                cell: (row) => row.entryPrice != null ? formatCurrency(row.entryPrice, row.currency || "USD") : "—",
+              },
+              {
+                key: "currentPrice",
+                header: "Current",
+                sortable: false,
+                className: "portfolio-command-col-wide",
+                cell: (row) => row.currentPrice != null ? formatCurrency(row.currentPrice, row.currency || "USD") : "—",
+              },
+              {
+                key: "marketValue",
+                header: () => (
+                  <SortableHeader
+                    label="Value"
+                    active={holdingsActiveCol === "value"}
+                    direction={holdingsSortDir}
+                    onClick={() => handleColumnSort("value")}
+                  />
+                ),
+                sortable: false,
+                cell: (row) => row.marketValueDisplay || "—",
+              },
+              {
                 key: "allocation",
-                header: "Allocation",
+                header: () => (
+                  <SortableHeader
+                    label="Allocation"
+                    active={holdingsActiveCol === "allocation"}
+                    direction={holdingsSortDir}
+                    onClick={() => handleColumnSort("allocation")}
+                  />
+                ),
                 sortable: false,
                 cell: (row) => (
                   <div className="portfolio-command-allocation-cell">
@@ -2620,9 +3153,33 @@ const isProfitable = currentAccountEquity >= initialBalance;
               },
               {
                 key: "pnl",
-                header: "Unrealized PnL",
+                header: () => (
+                  <SortableHeader
+                    label="Unrealized PnL"
+                    active={holdingsActiveCol === "pnl"}
+                    direction={holdingsSortDir}
+                    onClick={() => handleColumnSort("pnl")}
+                  />
+                ),
                 sortable: false,
                 cell: (row) => <span className={row.pnlPositive ? "positive" : "negative"}>{row.pnlMain}</span>,
+              },
+              {
+                key: "pnlPct",
+                header: () => (
+                  <SortableHeader
+                    label="PnL %"
+                    active={holdingsActiveCol === "pnlPct"}
+                    direction={holdingsSortDir}
+                    onClick={() => handleColumnSort("pnlPct")}
+                  />
+                ),
+                sortable: false,
+                cell: (row) => {
+                  const pct = Number(row?.pnlPct || 0);
+                  if (!Number.isFinite(pct) || pct === 0) return "—";
+                  return <span className={pct >= 0 ? "positive" : "negative"}>{formatSignedPercent(pct, 1)}</span>;
+                },
               },
               {
                 key: "benchDelta",
@@ -2647,13 +3204,24 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 },
               },
               {
+                key: "provider",
+                header: "Source",
+                sortable: false,
+                cell: (row) => {
+                  const p = String(row?.provider || "—");
+                  if (!p || p === "—") return "—";
+                  // Title-case the provider id for display (binance -> Binance).
+                  return p.charAt(0).toUpperCase() + p.slice(1);
+                },
+              },
+              {
                 key: "action",
                 header: "",
                 sortable: false,
                 cell: (row) => <button type="button" className="portfolio-v2-link" onClick={() => openHoldingSnapshot(row)}>Open</button>,
               },
             ]}
-            data={holdingsTableRows}
+            data={filteredHoldingsTableRows}
             getRowId={(row) => row.key}
             emptyState={
               <div className="portfolio-command-empty">
@@ -2985,7 +3553,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
               </div>
             </div>
             <ul className="portfolio-v2-flow-list">
-              {holdingsTableRows
+              {filteredHoldingsTableRows
                 .filter(row => {
                   if (!flowSelection) return true;
                   const bucket = flowSelection.bucket || "Sector";
@@ -2995,6 +3563,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
                 .slice(0, 5)
                 .map((row) => (
                   <li key={`exp-holding-${row.key}`}>
+                    <AssetLogo asset={row} size="xs" />
                     <span>{row.symbol}</span>
                     <strong>{row.allocation.toFixed(2)}%</strong>
                   </li>
@@ -3402,66 +3971,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
     });
   }, []);
 
-  // Next Best Action (spec §3): one dominant, above-the-fold action derived from
-  // concentration → drift → tax → healthy. Routes into existing insight flows
-  // with relevant context preselected. Uses Brandv2 surfaces (no colored hero).
-  const nextBestAction = useMemo(() => {
-    if (topDriftRow) {
-      const drift = Number(topDriftRow.drift || 0);
-      const align = projectedAlignment?.after != null
-        ? ` Rebalancing is projected to improve target alignment from ${Math.round(projectedAlignment.before)}% to ${Math.round(projectedAlignment.after)}%.`
-        : "";
-      return {
-        tone: "warning",
-        label: "Recommended action",
-        title: "Review rebalance plan",
-        desc: `Largest drift: ${topDriftRow.symbol} at ${drift >= 0 ? "+" : ""}${drift.toFixed(1)}% vs target.${align}`,
-        cta: "Review & rebalance",
-        onAction: () => openInsightFlow("rebalancing", topDriftRow),
-      };
-    }
-
-    if (lossHarvestSnapshot?.count) {
-      return {
-        tone: "neutral",
-        label: "Opportunity",
-        title: "Review tax impact",
-        desc: `${lossHarvestSnapshot.count} position(s) sit on unrealized losses — an estimated ${formatMoney(Number(lossHarvestSnapshot.estimatedSavings || 0))} tax offset is available via harvesting.`,
-        cta: "Review tax impact",
-        onAction: () => openInsightFlow("exposure", lossHarvestSnapshot.top),
-      };
-    }
-
-    return {
-      tone: "healthy",
-      label: "On track",
-      title: "Portfolio is within current targets",
-      desc: "Holdings are inside drift bands and concentration limits. No immediate action required.",
-      cta: "Review allocation",
-      onAction: () => openPortfolioTab("exposure"),
-    };
-  }, [exposureSummary, topDriftRow, projectedAlignment, lossHarvestSnapshot, openInsightFlow, openPortfolioTab]);
-
-  const renderNextBestAction = () => (
-    <section
-      className={`portfolio-next-best-action portfolio-next-best-action--${nextBestAction.tone}`}
-      aria-label="Next best action"
-    >
-      <div className="portfolio-next-best-action__body">
-        <div className="portfolio-next-best-action__label">{nextBestAction.label}</div>
-        <h2 className="portfolio-next-best-action__title">{nextBestAction.title}</h2>
-        <p className="portfolio-next-best-action__desc">{nextBestAction.desc}</p>
-      </div>
-      <div className="portfolio-next-best-action__cta">
-        <button
-          type="button"
-          className="portfolio-command-primary-cta"
-          onClick={nextBestAction.onAction}
-        >{nextBestAction.cta}</button>
-      </div>
-    </section>
-  );
-
   return (
     <div className="portfolio-module portfolio-v2 portfolio-exec-page portfolio-command-page">
       <header className="portfolio-command-header">
@@ -3572,11 +4081,12 @@ const isProfitable = currentAccountEquity >= initialBalance;
               onTabChange={(id) => openPortfolioTab(id, { scroll: false })}
               assetClassFilter={assetClassFilter}
               orders={orderLedger.orders}
-              rawExecutions={effectiveExecutions}
+              rawExecutions={analysisExecutions}
               feeDashboard={effectiveFeeDashboard}
-              notifications={workspaceNotifications}
+              notifications={analysisNotifications}
               onManageConnections={handleOpenConnections}
-              transactions={unifiedPortfolio?.transactions?.length ? unifiedPortfolio.transactions : displayTransactions}
+              connectedAccounts={connectedAccounts}
+              transactions={unifiedPortfolio?.transactions?.length ? unifiedPortfolio.transactions.filter((t) => !isPredictionSource(t)) : analysisTransactions}
               reconciliation={unifiedPortfolio?.reconciliation || null}
               syncStatus={unifiedPortfolio?.syncStatus || null}
               baseCurrency={unifiedPortfolio?.summary?.baseCurrency || "USD"}
@@ -3589,7 +4099,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
               }}
               rail={null}
             />
-            )}
           </div>
         }
         recommendedChanges={
@@ -3658,8 +4167,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       <div>
                         <span className="portfolio-command-column-label risk">Trim</span>
                         <div className="portfolio-command-change-list">
-                          {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row) => (
-                            <button key={`trim-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                          {actionableRebalanceRows.filter((row) => row.action === "Trim").slice(0, 5).map((row, i) => (
+                            <button key={`trim-${row.symbol}-${i}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                              <AssetLogo asset={row} size="xs" />
                               <strong>{row.symbol}</strong>
                               <em>{formatMoney(-Math.abs(row.tradeValue || 0))}</em>
                               <b>{formatSignedPercent(row.drift, 1)}</b>
@@ -3670,8 +4180,9 @@ const isProfitable = currentAccountEquity >= initialBalance;
                       <div>
                         <span className="portfolio-command-column-label positive">Add</span>
                         <div className="portfolio-command-change-list">
-                          {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row) => (
-                            <button key={`add-${row.symbol}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                          {actionableRebalanceRows.filter((row) => row.action === "Add").slice(0, 5).map((row, i) => (
+                            <button key={`add-${row.symbol}-${i}`} type="button" className="portfolio-command-change-row" onClick={() => openInsightFlow("rebalancing", row)}>
+                              <AssetLogo asset={row} size="xs" />
                               <strong>{row.symbol}</strong>
                               <em>{formatMoney(Math.abs(row.tradeValue || 0))}</em>
                               <b>{formatSignedPercent(Math.abs(row.drift || 0), 1)}</b>
@@ -3737,8 +4248,6 @@ const isProfitable = currentAccountEquity >= initialBalance;
         }
       />
 
-      {renderNextBestAction()}
-
       {activePortfolioTab !== "prediction" ? (
         <section className="portfolio-command-prediction-strip">
           <div className="portfolio-command-panel-head">
@@ -3748,25 +4257,13 @@ const isProfitable = currentAccountEquity >= initialBalance;
             </div>
             <div className="portfolio-command-inline-actions">
               <span className="portfolio-command-beta-pill">Beta</span>
-              <button type="button" className="portfolio-v2-link" onClick={() => onOpenPredictions?.()}>View All Prediction Markets</button>
             </div>
           </div>
-          {demotedPredictionRows.length ? (
-            <div className="portfolio-command-card-grid four">
-              {demotedPredictionRows.map((row) => (
-                <div key={row.market} className="portfolio-command-market-card">
-                  <span>{row.market}</span>
-                  <strong>{formatSignedMoney(row.pnl)}</strong>
-                  <em>{row.netQty.toFixed(2)} qty</em>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="portfolio-command-empty compact">
-              <h3>No prediction market positions yet</h3>
-              <p>Explore macro and event markets when you want portfolio context beyond traditional assets.</p>
-            </div>
-          )}
+          <PredictionMarketsPanel
+            positions={predictionPositions}
+            activity={predictionActivity}
+            onOpenPredictions={onOpenPredictions}
+          />
         </section>
       ) : null}
       <InsightFlowOverlay />

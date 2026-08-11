@@ -1926,14 +1926,29 @@ export function HomeModule({
   }, [rebalanceDriftPct]);
 
   const recentActivityRows = useMemo(() => {
-    const sourceTrades = (unifiedPortfolio?.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0)
-      ? unifiedPortfolio.transactions.map((t) => ({ ...t, date: t.executedAt, __ts: new Date(t.executedAt || 0).getTime() }))
-      : (Array.isArray(trades) ? trades : []);
+    // Deterministic source selection: only switch to unified transactions when
+    // they are fully resolved (isUnified AND not still loading AND present).
+    // Otherwise fall back to legacy/workspace trades. This prevents the UI from
+    // oscillating or showing stale data during the ~60s unified refresh cycle.
+    const unifiedReady =
+      unifiedPortfolio?.isUnified &&
+      !unifiedPortfolio?.loading &&
+      Array.isArray(unifiedPortfolio?.transactions) &&
+      unifiedPortfolio.transactions.length > 0;
+    let sourceTrades;
+    if (unifiedReady) {
+      sourceTrades = unifiedPortfolio.transactions;
+    } else if (Array.isArray(trades) && trades.length > 0) {
+      sourceTrades = trades;
+    } else {
+      sourceTrades = [];
+    }
     const rows = sourceTrades
       .map((trade) => ({
         ...trade,
-        __ts: Number.isFinite(trade.__ts) ? trade.__ts : new Date(trade?.executedAt || trade?.date || 0).getTime()
+        __ts: Number.isFinite(trade.__ts) ? trade.__ts : new Date(trade?.executedAt || trade?.date || trade?.executed_at || 0).getTime()
       }))
+      // Reject records with no valid timestamp (sync artifacts / incomplete fills).
       .filter((trade) => Number.isFinite(trade.__ts) && trade.__ts > 0)
       .sort((a, b) => b.__ts - a.__ts)
       .slice(0, 3);
@@ -1944,27 +1959,40 @@ export function HomeModule({
       const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
       const diffDays = Math.floor(diffHours / 24);
       const when = diffDays >= 1 ? `${diffDays}d ago` : diffHours >= 1 ? `${diffHours}h ago` : "just now";
-      const side = String(trade?.side || trade?.type || "").toLowerCase() === "sell" ? "Sell" : "Buy";
-      const orderType = String(trade?.orderType || trade?.order_type || "MKT").trim().toUpperCase();
-      const symbol = String(trade?.asset || trade?.symbol || "Asset").toUpperCase();
-      const notional = Number(trade?.notional || (Number(trade?.price || 0) * Number(trade?.quantity || 0)));
+      const side = String(trade?.side || "").toLowerCase() === "sell" ? "Sell" : "Buy";
+      const orderType = String(trade?.order_type || "MKT").trim().toUpperCase();
+      const symbol = String(trade?.symbol || trade?.asset || "Asset").toUpperCase();
+      // Canonical price fallback: unitPrice (unified) -> price (legacy bootstrap).
+      const unitPrice = trade?.unitPrice != null ? Number(trade.unitPrice) : (trade?.price != null ? Number(trade.price) : null);
+      const quantity = trade?.quantity != null ? Number(trade.quantity) : null;
+      // Hierarchy: authoritative notional > quantity * unitPrice > reject.
+      const notionalSrc = trade?.notional != null ? Number(trade.notional) : null;
+      const notional = Number.isFinite(notionalSrc) && notionalSrc > 0
+        ? notionalSrc
+        : (Number.isFinite(unitPrice) && Number.isFinite(quantity) && unitPrice > 0 && quantity > 0
+          ? unitPrice * quantity
+          : null);
+      // Reject invalid/incomplete executions: no positive notional = no visible row.
+      if (!Number.isFinite(notional) || notional <= 0) return null;
       const stamp = new Date(trade.__ts);
       const timestampLabel = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, "0")}-${String(stamp.getDate()).padStart(2, "0")} ${String(stamp.getHours()).padStart(2, "0")}:${String(stamp.getMinutes()).padStart(2, "0")}`;
+      // Stable execution identity: prefer providerTxId / DB id over index-based keys.
+      const rowId = trade?.providerTxId || trade?.id || `${symbol}-${trade.__ts}`;
       return {
-        id: trade.id || `${symbol}-${trade.__ts}`,
+        id: rowId,
         title: `${side} ${symbol}`,
         action: side.toUpperCase(),
         instruction: `${side.toUpperCase()}_${orderType}`,
         symbol,
         when,
         timestampLabel,
-        value: Number.isFinite(notional) ? notional : 0,
+        value: notional,
         status: String(trade?.status || "Filled").toUpperCase(),
         raw: trade,
         tone: side === "Sell" ? "sell" : "buy"
       };
-    });
-  }, [trades]);
+    }).filter(Boolean); // drop rejected (invalid) execution rows
+  }, [trades, unifiedPortfolio, unifiedPortfolio?.transactions]);
 
   const dayRange = useMemo(() => {
     const now = Date.now();

@@ -5,8 +5,6 @@
 //   • Largest Contributor / Largest Risk / Largest Hedge
 //   • Macro / Commodity / FX / Rate exposure (by holding type; FX/Rate are
 //     regime-derived via the bus, else "—" — never fabricated)
-//   • AI Summary — a deterministic, data-driven sentence (no invented prose)
-//   • Open Portfolio
 //
 // All numbers come from the already-normalized portfolioImpactRows; nothing is
 // fetched or invented.
@@ -36,7 +34,7 @@ function fmtMoney(v) {
   return `${sign}$${abs.toFixed(0)}`;
 }
 
-export default function PortfolioImpactEnhanced({ rows = [], totalImpact = 0, regimeLabel = null, onOpenPortfolio }) {
+export default function PortfolioImpactEnhanced({ rows = [], totalImpact = 0, regimeLabel = null }) {
   const contributor = topBy(rows, "max");
   const risk = topBy(rows, "min");
   // Largest Hedge: a defensive-type holding (Macro/Commodity) with positive
@@ -70,16 +68,6 @@ export default function PortfolioImpactEnhanced({ rows = [], totalImpact = 0, re
   const sortedByImpact = [...rows].sort((a, b) => Number(b.impact || 0) - Number(a.impact || 0));
   const winners = sortedByImpact.filter((r) => Number(r.impact || 0) > 0).slice(0, 3);
   const losers = sortedByImpact.filter((r) => Number(r.impact || 0) < 0).slice(0, 3);
-
-  const summary = (() => {
-    if (!rows.length) return "Add holdings to surface portfolio impact, exposure, and hedges.";
-    const parts = [];
-    if (contributor) parts.push(`Top contributor ${contributor.symbol} (${fmtMoney(contributor.impact)})`);
-    if (risk && Number(risk.impact || 0) < 0) parts.push(`largest drag ${risk.symbol} (${fmtMoney(risk.impact)})`);
-    parts.push(`net book impact ${fmtMoney(totalImpact)}`);
-    if (hhi > 0.4) parts.push("concentration elevated");
-    return parts.join(". ") + ".";
-  })();
 
   const exposureItems = [
     { label: "Equity", value: equityExp },
@@ -147,14 +135,6 @@ export default function PortfolioImpactEnhanced({ rows = [], totalImpact = 0, re
         </div>
       ) : null}
 
-      <div className="pf-impact-summary">
-        <span className="macro-ctx-label">AI Summary</span>
-        <p>{summary}</p>
-      </div>
-
-      <div className="pf-impact-actions">
-        <button type="button" className="market-signal-btn" onClick={() => onOpenPortfolio?.()}>Open Portfolio</button>
-      </div>
     </div>
   );
 }

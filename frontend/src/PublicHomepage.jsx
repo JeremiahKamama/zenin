@@ -36,7 +36,7 @@ const FAQ_ITEMS = [
 function normalizePlan(plan) {
   const validPlans = Array.isArray(getPublicRuntimeConfig()?.subscription?.validPlans)
     ? getPublicRuntimeConfig().subscription.validPlans
-    : ["starter", "pro", "desk"];
+    : ["starter", "plus", "premium"];
   const value = String(plan || "").trim().toLowerCase();
   return validPlans.includes(value) ? value : "starter";
 }
@@ -186,8 +186,8 @@ export default function PublicHomepage() {
         description: SEO_DESCRIPTION,
         offers: [
           { "@type": "Offer", name: "Starter", price: "0", priceCurrency: "USD" },
-          { "@type": "Offer", name: "Pro", price: "29", priceCurrency: "USD" },
-          { "@type": "Offer", name: "Desk", price: "99", priceCurrency: "USD" }
+          { "@type": "Offer", name: "Plus", price: "29", priceCurrency: "USD" },
+          { "@type": "Offer", name: "Premium", price: "99", priceCurrency: "USD" }
         ],
         featureList: [
           "Portfolio tracking",
@@ -380,7 +380,6 @@ export default function PublicHomepage() {
         <section className="hero">
           <div className="container hero-grid">
             <div>
-              <span className="eyebrow">Portfolio tracker and market intelligence</span>
               <h1>
                 Track portfolios, <span className="text-white">research stocks,</span> model{" "}
                 <span className="text-white">options,</span> and estimate taxes in one place.
@@ -635,25 +634,25 @@ export default function PublicHomepage() {
                 </article>
 
                 <article
-                  className={`pricing-card featured${selectedPlan === "pro" ? " is-selected" : ""}`}
+                  className={`pricing-card featured${selectedPlan === "plus" ? " is-selected" : ""}`}
                   role="button"
                   tabIndex={0}
-                  aria-pressed={selectedPlan === "pro"}
-                  aria-label="Select Pro plan"
-                  onClick={() => handleCardSelect("pro")}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("pro"); } }}
+                  aria-pressed={selectedPlan === "plus"}
+                  aria-label="Select Plus plan"
+                  onClick={() => handleCardSelect("plus")}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("plus"); } }}
                 >
                   <div className="pricing-card-head">
-                    <h4>Pro</h4>
+                    <h4>Plus</h4>
                     <span className="pricing-badge">Most popular</span>
                   </div>
                   <p className="pricing-desc">Cross-market workflows for active investors and analysts.</p>
                   <div className="pricing-price">
-                    <strong>{toMoney(getPlanPrice("pro", billingCycle).amount)}</strong>
-                    <span>{getPlanPrice("pro", billingCycle).periodLabel}</span>
+                    <strong>{toMoney(getPlanPrice("plus", billingCycle).amount)}</strong>
+                    <span>{getPlanPrice("plus", billingCycle).periodLabel}</span>
                   </div>
-                  {getPlanPrice("pro", billingCycle).helperLabel ? (
-                    <p className="pricing-price-helper">{getPlanPrice("pro", billingCycle).helperLabel}</p>
+                  {getPlanPrice("plus", billingCycle).helperLabel ? (
+                    <p className="pricing-price-helper">{getPlanPrice("plus", billingCycle).helperLabel}</p>
                   ) : null}
                   <ul className="pricing-list">
                     <li>Unlimited portfolios</li>
@@ -663,46 +662,46 @@ export default function PublicHomepage() {
                   </ul>
                   <button
                     className="btn btn-primary pricing-cta btn-halo"
-                    onClick={() => { window.location.href = "/onboarding?plan=pro"; }}
-                    disabled={pricingBusyPlan === "pro" || isCurrentSelection("pro")}
+                    onClick={() => { window.location.href = "/onboarding?plan=plus"; }}
+                    disabled={pricingBusyPlan === "plus" || isCurrentSelection("plus")}
                   >
-                    {renderCtaText("pro", "Start Pro")}
+                    {renderCtaText("plus", "Start Plus")}
                   </button>
                 </article>
 
                 <article
-                  className={`pricing-card${selectedPlan === "desk" ? " is-selected" : ""}`}
+                  className={`pricing-card${selectedPlan === "premium" ? " is-selected" : ""}`}
                   role="button"
                   tabIndex={0}
-                  aria-pressed={selectedPlan === "desk"}
-                  aria-label="Select Desk plan"
-                  onClick={() => handleCardSelect("desk")}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("desk"); } }}
+                  aria-pressed={selectedPlan === "premium"}
+                  aria-label="Select Premium plan"
+                  onClick={() => handleCardSelect("premium")}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCardSelect("premium"); } }}
                 >
                   <div className="pricing-card-head">
-                    <h4>Desk</h4>
+                    <h4>Premium</h4>
                     <span className="pricing-badge muted">For teams</span>
                   </div>
-                  <p className="pricing-desc">Shared workspaces, member controls, and desk operations.</p>
+                  <p className="pricing-desc">Shared workspaces, member controls, and premium operations.</p>
                   <div className="pricing-price">
-                    <strong>{toMoney(getPlanPrice("desk", billingCycle).amount)}</strong>
-                    <span>{getPlanPrice("desk", billingCycle).periodLabel}</span>
+                    <strong>{toMoney(getPlanPrice("premium", billingCycle).amount)}</strong>
+                    <span>{getPlanPrice("premium", billingCycle).periodLabel}</span>
                   </div>
-                  {getPlanPrice("desk", billingCycle).helperLabel ? (
-                    <p className="pricing-price-helper">{getPlanPrice("desk", billingCycle).helperLabel}</p>
+                  {getPlanPrice("premium", billingCycle).helperLabel ? (
+                    <p className="pricing-price-helper">{getPlanPrice("premium", billingCycle).helperLabel}</p>
                   ) : null}
                   <ul className="pricing-list">
                     <li>5 team seats included</li>
                     <li>Role-based workspace permissions</li>
-                    <li>Shared account sync and desk activity</li>
+                    <li>Shared account sync and premium activity</li>
                     <li>Priority data refresh and source health</li>
                   </ul>
                   <button
                     className="btn btn-secondary pricing-cta btn-halo"
-                    onClick={() => { window.location.href = "/onboarding?plan=desk"; }}
-                    disabled={pricingBusyPlan === "desk" || isCurrentSelection("desk")}
+                    onClick={() => { window.location.href = "/onboarding?plan=premium"; }}
+                    disabled={pricingBusyPlan === "premium" || isCurrentSelection("premium")}
                   >
-                    {renderCtaText("desk", "Choose Desk")}
+                    {renderCtaText("premium", "Choose Premium")}
                   </button>
                 </article>
               </div>
@@ -720,8 +719,8 @@ export default function PublicHomepage() {
                       <tr>
                         <th>Capability</th>
                         <th>Starter</th>
-                        <th>Pro</th>
-                        <th>Desk</th>
+                        <th>Plus</th>
+                        <th>Premium</th>
                       </tr>
                     </thead>
                     <tbody>

@@ -13,6 +13,7 @@ import { ExecutionModule } from "./modules/ExecutionModule";
 import { OrdersModule } from "./modules/OrdersModule";
 import { CostsModule } from "./modules/CostsModule";
 import { EventsModule } from "./modules/EventsModule";
+import { PortfolioActivity } from "../PortfolioActivity";
 
 export const PORTFOLIO_ANALYSIS_TABS = [
   { id: "holdings", label: "Portfolio" },
@@ -22,6 +23,7 @@ export const PORTFOLIO_ANALYSIS_TABS = [
   { id: "orders", label: "Orders" },
   { id: "costs", label: "Costs" },
   { id: "events", label: "Events" },
+  { id: "activity", label: "Activity" },
 ];
 
 export function PortfolioAnalysis({
@@ -36,6 +38,14 @@ export function PortfolioAnalysis({
   feeDashboard = null,
   notifications = [],
   onManageConnections,
+  // unified portfolio read model (provider-neutral activity + reconciliation)
+  transactions = [],
+  reconciliation = null,
+  syncStatus = null,
+  baseCurrency = "USD",
+  // Account labels (user-set in Settings) so the Activity Account dropdown can
+  // show the real label instead of the raw sourceType.
+  connectedAccounts = [],
   // right rail (independently refreshable). Intelligence now lives in the
   // dedicated Intelligence workspace — pass `rail={null}` to omit it here.
   rail = null,
@@ -47,6 +57,15 @@ export function PortfolioAnalysis({
     if (tabDef.id === "orders") return <OrdersModule orders={orders} assetClassFilter={assetClassFilter} onManageConnections={onManageConnections} />;
     if (tabDef.id === "costs") return <CostsModule feeDashboard={feeDashboard} rawExecutions={rawExecutions} />;
     if (tabDef.id === "events") return <EventsModule rawExecutions={rawExecutions} notifications={notifications} onManageConnections={onManageConnections} />;
+    if (tabDef.id === "activity") return (
+      <PortfolioActivity
+        transactions={transactions}
+        reconciliation={reconciliation}
+        syncStatus={syncStatus}
+        baseCurrency={baseCurrency}
+        connectedAccounts={connectedAccounts}
+      />
+    );
     // Holdings / Performance / Exposure are owned by PortfolioModule.
     if (renderLegacyTab) return renderLegacyTab(activeTab);
     return null;
@@ -66,7 +85,7 @@ export function PortfolioAnalysis({
           </button>
         ))}
       </div>
-      <div className="portfolio-command-analysis-grid">
+      <div className={`portfolio-command-analysis-grid${rail ? "" : " no-rail"}`}>
         <div className="portfolio-command-analysis-main">{renderTab()}</div>
         {rail}
       </div>

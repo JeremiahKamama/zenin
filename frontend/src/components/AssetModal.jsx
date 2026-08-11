@@ -603,6 +603,7 @@ export function AssetModal({
           onToggleStar={onToggleStar}
           onViewCompanyProfile={handleOpenProfile}
           onClose={onClose}
+          showProfileAction={normalizedAssetKind !== "etf"}
         />
 
         {/* ── Kind-specific overview summary (above the chart/context grid) ── */}
@@ -673,6 +674,7 @@ export function AssetModal({
               setChartExpanded={setChartExpanded}
               chartResetSignal={chartResetSignal}
               chartRange={chartRange}
+              compactWhenEmpty={normalizedAssetKind === "etf"}
               formatChartPrice={(value) => {
                 const numeric = Number(value);
                 if (!Number.isFinite(numeric)) return "Price unavailable";

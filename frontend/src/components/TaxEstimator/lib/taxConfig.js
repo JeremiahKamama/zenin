@@ -495,3 +495,24 @@ export function getDemoGuestState() {
     comparisonScenarios: [],
   };
 }
+
+// Map the /api/tax/rates payload into the { [country]: { cgRate, stRate } }
+// shape calcLiability expects. Defensive: the backend payload shape may nest
+// under `rates` or be top-level, and field names vary (cgRate/stRate vs
+// capitalGainsRate/shortTermRate). Returns {} when nothing usable is found.
+export function normalizeTaxRatesToRules(payload) {
+  if (!payload || typeof payload !== "object") return {};
+  const candidate = payload.rates && typeof payload.rates === "object" ? payload.rates : payload;
+  const rules = {};
+  for (const [country, value] of Object.entries(candidate)) {
+    if (!value || typeof value !== "object") continue;
+    const cgRate =
+      Number(value.cgRate != null ? value.cgRate : value.capitalGainsRate != null ? value.capitalGainsRate : value.cgtRate);
+    const stRate =
+      Number(value.stRate != null ? value.stRate : value.shortTermRate != null ? value.shortTermRate : value.incomeTaxRate);
+    if (Number.isFinite(cgRate) && Number.isFinite(stRate)) {
+      rules[country] = { cgRate, stRate };
+    }
+  }
+  return rules;
+}

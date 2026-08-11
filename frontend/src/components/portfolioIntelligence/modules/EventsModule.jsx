@@ -1,7 +1,7 @@
 // =============================================================================
 // EventsModule — Recent portfolio events (read-only)
 // -----------------------------------------------------------------------------
-// Merges trade-execution notifications and recent fills into a single activity
+// Merges trade/activity notifications and recent fills into a single activity
 // feed. Read-only; mirrors the existing "Recent Activity" rail but as a full
 // Analysis tab.
 // =============================================================================
@@ -10,6 +10,7 @@ import { useMemo } from "react";
 import { DataTable } from "../../data-table/DataTable";
 import { normalizeExecutions } from "../services/ExecutionService";
 import { formatMoney, formatQuantity, formatRelativeTime, formatTimestamp } from "../formatters";
+import { AssetLogo } from "../../../components/AssetLogo";
 
 export function EventsModule({ rawExecutions = [], notifications = [], onManageConnections }) {
   const executions = useMemo(() => normalizeExecutions(rawExecutions), [rawExecutions]);
@@ -26,21 +27,28 @@ export function EventsModule({ rawExecutions = [], notifications = [], onManageC
       source: String(e.raw?.platformName || e.platform).toUpperCase(),
     }));
     const fromNotifs = (Array.isArray(notifications) ? notifications : [])
-      .filter((n) => String(n?.type || "").startsWith("trade_execution."))
-      .map((n) => ({
-        id: `notif-${n.id}`,
-        kind: "notification",
-        symbol: n.symbol || (n.title || "").split(" ")[0] || "—",
-        side: String(n.side || "").toLowerCase() === "sell" ? "sell" : "buy",
-        notional: Number(n.notional || 0),
-        qty: Number(n.quantity || 0),
-        when: n.createdAt,
-        source: "Notification",
-      }));
+      .filter((n) => {
+        const type = String(n?.type || "");
+        return type.startsWith("portfolio_transaction.");
+      })
+      .map((n) => {
+        const metadata = n?.metadata && typeof n.metadata === "object" ? n.metadata : {};
+        const transactionType = String(metadata.transactionType || n.side || "activity").toLowerCase();
+        return {
+          id: `notif-${n.id}`,
+          kind: "notification",
+          symbol: metadata.symbol || n.symbol || (n.title || "").split(" ").pop() || "—",
+          side: transactionType === "sell" ? "sell" : transactionType,
+          notional: Number(metadata.notional || n.notional || 0),
+          qty: Number(metadata.quantity || n.quantity || 0),
+          when: metadata.executedAt || n.createdAt,
+          source: metadata.provider ? String(metadata.provider).toUpperCase() : "Notification",
+        };
+      });
     return [...fromExec, ...fromNotifs]
       .filter((e) => e.when)
       .sort((a, b) => new Date(b.when) - new Date(a.when))
-      .slice(0, 200);
+      .slice(0, 100);
   }, [executions, notifications]);
 
   if (!events.length) {
@@ -67,7 +75,7 @@ export function EventsModule({ rawExecutions = [], notifications = [], onManageC
 
   const columns = [
     { key: "when", header: "When", sortValue: (e) => new Date(e.when).getTime(), cell: (e) => <span title={formatTimestamp(e.when)}>{formatRelativeTime(e.when)}</span> },
-    { key: "symbol", header: "Symbol", cell: (e) => <strong>{e.symbol}</strong> },
+    { key: "symbol", header: "Symbol", cell: (e) => (<><AssetLogo asset={e} size="xs" /> <strong>{e.symbol}</strong></>) },
     {
       key: "side",
       header: "Side",

@@ -39,6 +39,7 @@ import {
   TaxIcon,
   ThemeDarkIcon,
   ThemeLightIcon,
+  SettingsIcon,
   WatchlistIcon
 } from "./components/SidebarIcons";
 import { readResilientCache, writeResilientCache } from "./utils/resilientData";
@@ -47,8 +48,11 @@ import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, res
 import { fetchBrokerageWorkspaceSummary } from "./utils/brokerageApi.js";
 import { useUnifiedPortfolio } from "./hooks/useUnifiedPortfolio";
 import { zeninFetch, zeninFetchJson } from "./utils/zeninFetch";
+import { syncPredictionWalletSource, disconnectPredictionWalletSource } from "./services/portfolioService";
+import { getReferralCode, getReferralStats, initReferralTrackingIfPresent } from "./utils/referralApi";
 import { buildAssetRoute } from "./utils/assetRegistry";
 import { normalizeInstrumentSymbol, resolveCurrencyInstrument, CURATED_ETF_CATALOG } from "./utils/currencyInstruments.js";
+import { isUsdEquivalent as isStableCash } from "./utils/stablecoins";
 import { ProviderHealthDashboard } from "./components/ProviderHealthDashboard";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { useNotificationStream } from "./hooks/useNotificationStream";
@@ -83,6 +87,10 @@ function AnimatedTradeToast({ toast, onDismiss }) {
 }
 
 import { useLivePriceStream } from "./hooks/useLivePriceStream";
+import { useIdleTimer } from "./hooks/useIdleTimer";
+import { LiveDataPausedToast } from "./components/LiveDataPausedToast";
+import { WhileYouWereGoneModal } from "./components/WhileYouWereGoneModal";
+import { PriceTicker } from "./components/PriceTicker";
 import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useRuntimeConfig } from "./hooks/useRuntimeConfig";
 import { useMediaQuery, useViewportWidth } from "./hooks/useMediaQuery";
@@ -290,14 +298,15 @@ const Analytics = lazyWithReloadRetry(
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
-const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid", "lighter", "interactive_brokers"]);
+const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid", "lighter", "polymarket", "interactive_brokers"]);
 // Providers shown in the connect UI but not yet syncable (honest "coming soon"
 // stubs — no fabricated sync capability). Rendered disabled with a "Soon" badge.
 const COMING_SOON_PROVIDERS = new Set(["aster", "variational"]);
 // USD-pegged stablecoins treated as 1:1 with USD for buying-power/cash totals.
 // Connected wallets (e.g. Hyperliquid) sync USDC; without this, a USDC balance
 // never replaces the default seed cash and "Buying power" stays stuck at $10K.
-const USD_STABLE_EQUIVALENTS = new Set(["USD", "USDC", "USDT"]);
+// `isStableCash` (imported above) classifies USD-equivalent stables via the
+// shared registry so membership stays in sync with the rest of the app.
 
 function normalizeProviderId(value) {
   return String(value || "")
@@ -497,7 +506,7 @@ function buildDevFullAccessUser() {
     id: "dev-full-access",
     email: "dev@zenin.test",
     displayName: "Developer",
-    currentPlan: "desk",
+    currentPlan: "premium",
     currentBillingCycle: "monthly",
     isAdmin: true,
     adminRole: "owner",
@@ -674,8 +683,9 @@ function parseRouteFromLocation() {
 function formatPlanLabel(plan, billingCycle = "monthly") {
   const normalized = String(plan || "").trim().toLowerCase();
   const cycle = String(billingCycle || "").trim().toLowerCase() === "yearly" ? "Yearly" : "Monthly";
-  if (normalized === "desk") return `Desk Plan (${cycle})`;
-  if (normalized === "pro") return `Pro Plan (${cycle})`;
+  // Accept new ids (premium/plus) and legacy ids (desk/pro).
+  if (normalized === "premium" || normalized === "desk") return `Premium Plan (${cycle})`;
+  if (normalized === "plus" || normalized === "pro") return `Plus Plan (${cycle})`;
   return `Starter Plan (${cycle})`;
 }
 
@@ -686,16 +696,19 @@ function getGuestWorkspaceLabel() {
 function normalizeCurrentPlan(plan) {
   const validPlans = Array.isArray(getAppRuntimeConfig()?.subscription?.validPlans)
     ? getAppRuntimeConfig().subscription.validPlans
-    : ["starter", "pro", "desk"];
+    : ["starter", "plus", "premium"];
   const normalized = String(plan || "").trim().toLowerCase();
   if (validPlans.includes(normalized)) return normalized;
+  // Backward-compat: map legacy tier ids to the new ones during the rename rollout.
+  if (normalized === "pro") return "plus";
+  if (normalized === "desk") return "premium";
   return "starter";
 }
 
 function resolveEffectivePlan(userPlan, workspacePlan) {
   const normalizedUserPlan = normalizeCurrentPlan(userPlan);
   const normalizedWorkspacePlan = normalizeCurrentPlan(workspacePlan);
-  const planRank = getAppRuntimeConfig()?.subscription?.planRank || { starter: 0, pro: 1, desk: 2 };
+  const planRank = getAppRuntimeConfig()?.subscription?.planRank || { starter: 0, plus: 1, premium: 2 };
   return Number(planRank[normalizedWorkspacePlan] || 0) > Number(planRank[normalizedUserPlan] || 0)
     ? normalizedWorkspacePlan
     : normalizedUserPlan;
@@ -1052,6 +1065,11 @@ const SIDEBAR_SECTION_META = {
     group: "Tools",
     eyebrow: "Tax",
     description: "Model scenarios and tax exposure."
+  },
+  Settings: {
+    group: "Tools",
+    eyebrow: "Settings",
+    description: "Profile, security, billing, and workspace controls."
   }
 };
 
@@ -2385,7 +2403,7 @@ useEffect(() => {
   }, []);
 
   const openWorkspaceSection = useCallback((section, payload = null) => {
-    const appSections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
+    const appSections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator", "Settings"];
     if (!appSections.includes(section)) return;
     startTransition(() => {
       if (routeState.type === "company") navigateToAppRoute();
@@ -2799,6 +2817,51 @@ useEffect(() => {
     portfolioRef.current = portfolio;
   }, [portfolio]);
 
+  // Guest / dev-full-access state — declared early so the idle-timer block below
+  // can reference isGuestUser without hitting the temporal-dead-zone. The original
+  // placement was ~1500 lines further down, after the idle timer already consumed it.
+  const devFullAccess = useMemo(() => {
+    try { if (localStorage.getItem("zenin_auth_user")) return false; } catch {}
+    return isDevFullAccessEnabled();
+  }, []);
+  const explicitGuestAccess = useMemo(() => isGuestQueryRequested(), []);
+  const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
+  const [isGuestUser, setIsGuestUser] = useState(() => (devFullAccess ? false : allowGuestAccess));
+  const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
+  const [showSinceYouLeft, setShowSinceYouLeft] = useState(false);
+
+  // Idle detection — after 30 min of inactivity, pause live data pulling and
+  // surface the "While You Were Gone" + "Live data paused" UI. Only active for
+  // signed-in users (no point pausing live data on the marketing/public surface).
+  const { idle: isUserIdle, idleSince, bump: bumpUserActivity } = useIdleTimer({
+    timeoutMs: 30 * 60 * 1000,
+    enabled: !!hasAuthToken() && !isGuestUser,
+  });
+  const liveDataPaused = isUserIdle;
+
+  // When the user returns from idle (idle → active), open the "While You Were
+  // Gone" modal so they see what moved. Tracked via a ref to fire only on the
+  // transition, not on every render. Suppressed for guests.
+  const wasIdleRef = useRef(false);
+  useEffect(() => {
+    if (isUserIdle) {
+      wasIdleRef.current = true;
+      return;
+    }
+    if (wasIdleRef.current && !isGuestUser) {
+      wasIdleRef.current = false;
+      setShowSinceYouLeft(true);
+    }
+  }, [isUserIdle, isGuestUser]);
+
+  // Resume live data after inactivity: mark activity + refresh the current
+  // section's data immediately. The unified refresh is wired after the
+  // `unified` hook is declared (see reconnectLiveData below).
+  const reconnectLiveData = useCallback(() => {
+    bumpUserActivity();
+    try { unified?.refresh?.(); } catch { /* best-effort */ }
+  }, [bumpUserActivity]);
+
   const { liveStreamStatus, lastLivePriceAt } = useLivePriceStream({
     watchlistAssets,
     portfolio: portfolioWithEntry,
@@ -2808,6 +2871,7 @@ useEffect(() => {
     setWatchlistAssets,
     setPortfolio,
     setSelectedAsset,
+    paused: liveDataPaused,
   });
 
   const fetchCashBalances = useCallback(async () => {
@@ -2828,7 +2892,7 @@ useEffect(() => {
       });
       setCashBalances(nextCashBalances);
       const stableBalance = Object.entries(nextCashBalances)
-        .reduce((sum, [cur, amt]) => USD_STABLE_EQUIVALENTS.has(cur) ? sum + Number(amt || 0) : sum, 0);
+        .reduce((sum, [cur, amt]) => isStableCash(cur) ? sum + Number(amt || 0) : sum, 0);
       if (stableBalance > 0) {
         setBalance(stableBalance);
       }
@@ -3092,7 +3156,7 @@ useEffect(() => {
 
     setCashBalances(nextCashBalances);
     const stableBalance = Object.entries(nextCashBalances)
-      .reduce((sum, [cur, amt]) => USD_STABLE_EQUIVALENTS.has(cur) ? sum + Number(amt || 0) : sum, 0);
+      .reduce((sum, [cur, amt]) => isStableCash(cur) ? sum + Number(amt || 0) : sum, 0);
     if (stableBalance > 0) {
       setBalance(stableBalance);
     }
@@ -3690,7 +3754,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   // when the backend summary is unavailable, isUnified is false and we fall back
   // to the legacy locally-computed value below. Preferring the unified total when
   // present rewires every surface that consumes calculatePortfolioValue at once.
-  const unified = useUnifiedPortfolio();
+  const unified = useUnifiedPortfolio({ autoRefresh: !liveDataPaused });
   const unifiedPortfolioValue = unified.isUnified ? unified.totalValue : null;
 
 
@@ -3703,8 +3767,16 @@ const handleOptionTradeClosed = async (tradeId) => {
     }, 0);
   }, [activeOptionsTrades, multiChainCache, spotPrices]);
 
-  const calculatePortfolioValue = () =>
-    resolveHeadlineValue({ unified, legacyEquity: portfolioMarketValue });
+  const calculatePortfolioValue = () => {
+    // Only surface a headline value when there is a real, connected source.
+    // Without an account/source the app would otherwise fall back to seeded or
+    // legacy demo data ($315K placeholder, etc.) and show fabricated numbers
+    // next to an empty "FIRST ACCOUNT" prompt. When nothing is connected we
+    // return 0 so the dashboard honestly reads empty rather than fake.
+    const hasRealPortfolio = connectedAccounts.length > 0 || (unified?.sources?.length || 0) > 0;
+    if (!hasRealPortfolio) return 0;
+    return resolveHeadlineValue({ unified, legacyEquity: portfolioMarketValue });
+  };
 
   const calculatePortfolioGain = () => {
     const spotGain = portfolioWithEntry.reduce((total, item) => {
@@ -3863,7 +3935,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const addToWatchlist = async (asset) => {
     if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
-      setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to manage this shared watchlist.`);
+      setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "premium")} to manage this shared watchlist.`);
       return false;
     }
     const mt = resolveMarketType(asset);
@@ -3907,7 +3979,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const importWatchlistAssets = async (incomingAssets = [], meta = {}) => {
     if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
-      const message = `Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to import into this shared watchlist.`;
+      const message = `Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "premium")} to import into this shared watchlist.`;
       setWatchlistNotice(message);
       throw new Error(message);
     }
@@ -4026,7 +4098,7 @@ const handleOptionTradeClosed = async (tradeId) => {
 
   const removeFromWatchlist = async ({ symbol, marketType, category = null, theme = null }) => {
     if (sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed) {
-      setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk")} to manage this shared watchlist.`);
+      setWatchlistNotice(`Upgrade to ${formatPlanLabel(sharedWatchlistAccess.requiredPlan || "premium")} to manage this shared watchlist.`);
       return false;
     }
     const mt = String(marketType || "").trim().toLowerCase() || "spot";
@@ -4184,7 +4256,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     selectedAsset && (selectedAsset.type === "etf" || selectedAsset.marketType === "etf" || selectedAsset.category === "etfs")
   );
 
-  const sections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator"];
+  const sections = ["Home", "Portfolio", "Watchlist", "Research", "Analytics", "Intelligence", "Options", "Predictions", "Journal", "Tax Estimator", "Settings"];
   const savedSection = typeof window !== "undefined" ? localStorage.getItem("zenin_active_section") : null;
   const [homeSubview, setHomeSubview] = useState(() => savedSection === "Metrics" ? "metrics" : null);
   const [analyticsInitialTab, setAnalyticsInitialTab] = useState(null);
@@ -4192,6 +4264,11 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (typeof window !== "undefined" && isGuestQueryRequested()) {
       const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
       if (requestedSection) return requestedSection;
+    }
+    // Deep-link: ?section=settings
+    if (typeof window !== "undefined") {
+      const urlSection = String(window.location.searchParams?.get("section") || "").trim();
+      if (sections.includes(urlSection)) return urlSection;
     }
     // New users land on Home; returning users keep their saved section.
     return sections.includes(savedSection) ? savedSection : "Home";
@@ -4251,17 +4328,6 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [isSidebarVisuallyCollapsed, viewportWidth]);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("zenin_email") || "user@zenin.app");
   const [simulatePlan, setSimulatePlan] = useState(() => localStorage.getItem("zenin_simulate_plan") || "");
-  // A signed-in user must never get the guest/dev-full-access demo view.
-  // zenin_auth_user is written to localStorage on every successful sign-in,
-  // so its presence is a TDZ-safe (in-scope) auth signal here. Combined with
-  // the flag being cleared on sign-in (see sign-in handler), this guarantees
-  // authenticated users render live workspace data, not the May-24 snapshot.
-  const devFullAccess = useMemo(() => {
-    try { if (localStorage.getItem("zenin_auth_user")) return false; } catch {}
-    return isDevFullAccessEnabled();
-  }, []);
-  const explicitGuestAccess = useMemo(() => isGuestQueryRequested(), []);
-  const allowGuestAccess = useMemo(() => devFullAccess || isGuestAccessRequested(), [devFullAccess]);
   const [accessCheckLoading, setAccessCheckLoading] = useState(true);
   // Single-owner launch guard: the workspace route transition fires exactly once.
   const hasLaunchedWorkspaceRef = useRef(false);
@@ -4297,7 +4363,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     try {
       const rawUser = localStorage.getItem("zenin_auth_user");
       const parsed = rawUser ? JSON.parse(rawUser) : null;
-      if (devFullAccess) return "desk";
+      if (devFullAccess) return "premium";
       return normalizeCurrentPlan(parsed?.currentPlan);
     } catch {
       return "starter";
@@ -4333,8 +4399,6 @@ const handleOptionTradeClosed = async (tradeId) => {
       return "";
     }
   });
-  const [isGuestUser, setIsGuestUser] = useState(() => (devFullAccess ? false : allowGuestAccess));
-  const isExplicitGuestMode = explicitGuestAccess && isGuestUser;
 
   // Active workspace object for workspace-scoped data.
   
@@ -4501,22 +4565,10 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [themeMode]);
 
   const toggleTheme = () => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Settings is rendered as a full-screen section (activeSection === "Settings")
+  // instead of a modal. The isSettingsOpen state and its escape handler have been
+  // replaced by activeSection === "Settings" / setActiveSection("Home").
   const [isProviderHealthOpen, setIsProviderHealthOpen] = useState(false);
-  const settingsPanelRef = useRef(null);
-  useEffect(() => {
-    if (!isSettingsOpen) return undefined;
-    const handler = (event) => {
-      if (event.key !== "Escape") return;
-      // Only react when nothing inside the modal has already captured Escape (e.g. an inline form).
-      const panel = settingsPanelRef.current;
-      if (panel && !panel.contains(event.target)) return;
-      event.preventDefault();
-      setIsSettingsOpen(false);
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [isSettingsOpen]);
   const [activeSettingsCategory, setActiveSettingsCategory] = useState("Profile");
   const [expandedSettingsPanels, setExpandedSettingsPanels] = useState({
     "profile-email": false,
@@ -4533,7 +4585,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   });
 
   useEffect(() => {
-    if (!isSettingsOpen || activeSettingsCategory !== "Profile") return;
+    if (activeSection !== "Settings" || activeSettingsCategory !== "Profile") return;
     setExpandedSettingsPanels((prev) => {
       if (!prev["profile-email"] && !prev["profile-password"] && !prev["profile-twofa"]) return prev;
       return {
@@ -4543,7 +4595,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         "profile-twofa": false
       };
     });
-  }, [isSettingsOpen, activeSettingsCategory]);
+  }, [activeSection, activeSettingsCategory]);
 
   const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const [preferences, setPreferences] = useState(() => {
@@ -4630,7 +4682,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [sections, currentPlan, isAdmin, isGuestUser, personaSectionOrder]);
   const sidebarNavigationGroups = useMemo(() => {
     const hiddenRailSections = new Set(devFullAccess ? [] : isSidebarCollapsed ? ["Predictions"] : []);
-    const visibleSections = accessibleSections.filter((section) => !hiddenRailSections.has(section));
+    const visibleSections = accessibleSections.filter((section) => !hiddenRailSections.has(section) && section !== "Settings");
     return SIDEBAR_GROUP_ORDER.map((group) => ({
       label: group,
       items: visibleSections.map((section) => ({
@@ -4784,7 +4836,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         setIsGuestUser(false);
         setAuthUserId(String(devUser.id));
         setAuthDisplayName(devUser.displayName);
-        setCurrentPlan("desk");
+        setCurrentPlan("premium");
         setCurrentBillingCycle("monthly");
         setAccountPlanLabel("Developer");
         setProfileSecurity(profileSecurityFromUser(devUser, devUser.email));
@@ -4862,11 +4914,14 @@ const handleOptionTradeClosed = async (tradeId) => {
           } catch {}
           // Reset in-memory demo state so stale holdings/$10K don't flash before
           // the backend bootstrap (setPortfolio/setBalance/...) repopulates live.
+          // NOTE: connectedAccounts is intentionally NOT cleared here — it is real
+          // workspace source metadata (not demo data) and must survive sign-in so
+          // the Connected Accounts panel never flashes empty. It is rebuilt by the
+          // bootstrap effect (workspaceAccounts) + unified-sources merge.
           try {
             if (typeof setPortfolio === "function") setPortfolio([]);
             if (typeof setTrades === "function") setTrades([]);
             if (typeof setActiveOptionsTrades === "function") setActiveOptionsTrades([]);
-            if (typeof setConnectedAccounts === "function") setConnectedAccounts([]);
             if (typeof setBalance === "function") setBalance(0);
           } catch {}
           setAuthDisplayName(String(data.user.displayName || "").trim());
@@ -4979,7 +5034,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       ? {
         shared: !!bootstrapData.sharedWatchlistAccess.shared,
         allowed: bootstrapData.sharedWatchlistAccess.allowed !== false,
-        requiredPlan: bootstrapData.sharedWatchlistAccess.requiredPlan || "desk"
+        requiredPlan: bootstrapData.sharedWatchlistAccess.requiredPlan || "premium"
       }
       : { shared: false, allowed: true, requiredPlan: "starter" };
     const sharedWatchlistLocked = nextSharedWatchlistAccess.shared && !nextSharedWatchlistAccess.allowed;
@@ -5004,12 +5059,11 @@ const handleOptionTradeClosed = async (tradeId) => {
         nextCashBalances[currency] = amount;
       });
       setCashBalances(nextCashBalances);
-      // Treat USD-pegged stablecoins (USD/USDT/USDC) as buying power so a
-      // synced wallet holding USDC (not "USD") populates the headline balance
-      // instead of leaving the $10K default.
-      const STABLES = new Set(["USD", "USDT", "USDC"]);
+      // Treat USD-pegged stablecoins as buying power so a synced wallet holding
+      // USDC (not "USD") populates the headline balance instead of leaving the
+      // $10K default. Membership comes from the shared stablecoin registry.
       const stableTotal = Object.keys(nextCashBalances)
-        .filter((c) => STABLES.has(c))
+        .filter((c) => isStableCash(c))
         .reduce((sum, c) => sum + (Number(nextCashBalances[c]) || 0), 0);
       if (stableTotal > 0) setBalance(stableTotal);
 
@@ -5042,51 +5096,57 @@ const handleOptionTradeClosed = async (tradeId) => {
         name: String(bootstrapData?.activeWorkspace?.name || "").trim(),
         slug: String(bootstrapData?.activeWorkspace?.slug || "").trim()
       });
-      if (Array.isArray(bootstrapData?.workspaceAccounts) && bootstrapData.workspaceAccounts.length) {
-        setConnectedAccounts(bootstrapData.workspaceAccounts.map((account) => ({
-          id: account.id,
-          provider: account.extraData?.providerLabel || account.exchange,
-          exchange: account.exchange,
-          username: account.extraData?.username || account.extraData?.address || "Workspace source",
-          venueType: account.extraData?.venueType || "cex",
-          apiKeyMasked: "Workspace managed",
-          providerTrust: account.providerTrust || null,
-          syncAvailable: account.syncAvailable !== false,
-          connectionCapability: account.connectionCapability || buildClientConnectionCapability(account.extraData?.providerLabel || account.exchange),
-          connectedAt: account.createdAt || null,
-          lastSyncAt: account.lastSyncAt || null,
-          lastSyncStatus: account.lastSyncStatus || "idle",
-          lastSyncMeta: account.lastSyncMeta || {}
-        })));
-      }
-      // Always merge unified-pipeline sources (Hyperliquid / Lighter / SnapTrade)
-      // into Connected accounts so a user with BOTH a workspace account and a
-      // unified source sees every connected source in one place. Dedup by
-      // provider + sourceType so we never double-list. (Fixes the case where a
-      // workspace account existed and unified sources were silently dropped.)
+      // Build Connected accounts from server truth ONLY (workspace accounts
+      // from the bootstrap + unified-pipeline sources). Deliberately do NOT
+      // merge with the previous (localStorage-hydrated) list — deleted sources
+      // would otherwise survive in localStorage and keep reappearing as phantom
+      // rows that 404 on Remove. Server data is authoritative; a refresh drops
+      // any source that no longer exists.
+      const keyAccounts = Array.isArray(bootstrapData?.workspaceAccounts)
+        ? bootstrapData.workspaceAccounts.map((account) => ({
+            id: account.id,
+            provider: account.extraData?.providerLabel || account.exchange,
+            exchange: account.exchange,
+            username: account.extraData?.username || account.extraData?.address || "Workspace source",
+            venueType: account.extraData?.venueType || "cex",
+            apiKeyMasked: "Workspace managed",
+            providerTrust: account.providerTrust || null,
+            syncAvailable: account.syncAvailable !== false,
+            connectionCapability: account.connectionCapability || buildClientConnectionCapability(account.extraData?.providerLabel || account.exchange),
+            connectedAt: account.createdAt || null,
+            lastSyncAt: account.lastSyncAt || null,
+            lastSyncStatus: account.lastSyncStatus || "idle",
+            lastSyncMeta: account.lastSyncMeta || {}
+          }))
+        : [];
       if (unified?.isUnified && Array.isArray(unified.sources)) {
-        setConnectedAccounts((prev) => {
-          const base = prev.length ? prev : [];
-          const seen = new Set(base.map((a) => `${a.venueType}-${String(a.provider).toLowerCase()}`));
-          const fromUnified = unified.sources
-            .filter((s) => s.sourceType !== "manual")
-            .map((s) => ({
-              id: `${s.sourceType}-${s.provider}`,
-              provider: s.provider,
-              exchange: s.provider,
-              username: s.label || s.provider,
-              venueType: s.sourceType === "brokerage" ? "broker" : s.sourceType === "wallet" ? "dex" : "cex",
-              apiKeyMasked: "Synced via unified pipeline",
-              providerTrust: { cannotTrade: true, cannotWithdraw: true },
-              syncAvailable: true,
-              connectedAt: null,
-              lastSyncAt: s.lastSyncAt || null,
-              lastSyncStatus: s.status || "synced",
-              lastSyncMeta: {}
-            }))
-            .filter((u) => !seen.has(`${u.venueType}-${u.provider.toLowerCase()}`));
-          return fromUnified.length ? [...base, ...fromUnified] : base;
-        });
+        // Dedup by provider alone AND by venueType+provider so a workspace
+        // account already listed (e.g. a Polymarket key) collapses its
+        // redundant unified-source twin instead of showing twice.
+        const seen = new Set(keyAccounts.map((a) => String(a.provider).toLowerCase()));
+        const seenFull = new Set(keyAccounts.map((a) => `${a.venueType}-${String(a.provider).toLowerCase()}`));
+        const fromUnified = unified.sources
+          .filter((s) => s.sourceType !== "manual" && s.id != null)
+          .map((s) => ({
+            id: s.id != null ? s.id : `${s.sourceType}-${s.provider}`,
+            sourceId: s.id != null ? s.id : null,
+            isUnified: true,
+            provider: s.provider,
+            exchange: s.provider,
+            username: s.label || s.provider,
+            venueType: s.sourceType === "brokerage" ? "broker" : s.sourceType === "prediction" ? "prediction" : s.sourceType === "wallet" ? "dex" : "cex",
+            apiKeyMasked: "Synced via unified pipeline",
+            providerTrust: { cannotTrade: true, cannotWithdraw: true },
+            syncAvailable: true,
+            connectedAt: null,
+            lastSyncAt: s.lastSyncAt || null,
+            lastSyncStatus: s.status || "synced",
+            lastSyncMeta: {}
+          }))
+          .filter((u) => !seen.has(u.provider.toLowerCase()) && !seenFull.has(`${u.venueType}-${u.provider.toLowerCase()}`));
+        setConnectedAccounts([...keyAccounts, ...fromUnified]);
+      } else {
+        setConnectedAccounts(keyAccounts);
       }
       setCategories(
         Array.isArray(bootstrapData?.categories) && bootstrapData.categories.length
@@ -5114,7 +5174,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         })
         .catch((err) => console.warn("Watchlist bulk sync skipped.", err));
     }
-  }, [bootstrapData]);
+  }, [bootstrapData, unified?.isUnified, unified?.sources]);
 
   useEffect(() => {
     if (!bootstrapError) return;
@@ -5149,16 +5209,12 @@ const handleOptionTradeClosed = async (tradeId) => {
       setCategories(fallbackCategories);
     }
   }, [isGuestUser, categories.length, fallbackCategories]);
-  const [connectedAccounts, setConnectedAccounts] = useState(() => {
-    const raw = localStorage.getItem("zenin_connected_accounts");
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
+  const [connectedAccounts, setConnectedAccounts] = useState(() => []);
+  // NOTE: connectedAccounts is server-derived (rebuilt from the backend in the
+  // bootstrap effect). We intentionally do NOT hydrate it from localStorage —
+  // a stale persisted list resurrected phantom rows (already-deleted sources)
+  // that then 404'd on Remove. The bootstrap effect overwrites it with live
+  // truth on every load.
   const [isConnectWindowOpen, setIsConnectWindowOpen] = useState(false);
   const [connectPromptMode, setConnectPromptMode] = useState("manual");
   const [connectAccountFeedback, setConnectAccountFeedback] = useState("");
@@ -5184,7 +5240,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     apiSecret: ""
   });
   const [isSyncingAccount, setIsSyncingAccount] = useState(false);
-  const settingsCategories = ["Profile", "Workspace", "Notifications", "Security", "Connected accounts", "Billing"];
+  const settingsCategories = ["Profile", "Workspace", "Notifications", "Security", "Connected accounts", "Billing", "Referrals"];
   const settingsCategoryPanel = {
     Notifications: "Notification",
     Security: "Profile",
@@ -5192,6 +5248,31 @@ const handleOptionTradeClosed = async (tradeId) => {
     Billing: "Subscription",
   };
   const activeSettingsPanel = settingsCategoryPanel[activeSettingsCategory] || activeSettingsCategory;
+
+  // ─── Referral state (Part 3) ──────────────────────────────────────────────
+  const [referralCodeData, setReferralCodeData] = useState(null);
+  const [referralStats, setReferralStats] = useState(null);
+  const [referralLoading, setReferralLoading] = useState(false);
+  useEffect(() => {
+    // Track referral click once on app load if ?ref= is present
+    if (typeof window !== "undefined") {
+      void initReferralTrackingIfPresent();
+    }
+  }, []);
+  const loadReferralData = useCallback(async () => {
+    if (!isGuestUser) {
+      setReferralLoading(true);
+      try {
+        const [codeData, stats] = await Promise.all([getReferralCode(), getReferralStats()]);
+        setReferralCodeData(codeData);
+        setReferralStats(stats);
+      } catch (err) {
+        console.warn("[Settings] Referral data load failed:", err?.message || err);
+      } finally {
+        setReferralLoading(false);
+      }
+    }
+  }, [isGuestUser]);
   const [profileSecurity, setProfileSecurity] = useState(() => {
     const raw = localStorage.getItem("zenin_profile_security");
     const fallback = buildDefaultProfileSecurity(localStorage.getItem("zenin_email") || "user@zenin.app");
@@ -5211,6 +5292,14 @@ const handleOptionTradeClosed = async (tradeId) => {
   const settingsSyncReadyRef = useRef(false);
   const settingsLoadedRef = useRef(false);
   const secondaryBootstrappedRef = useRef(false);
+
+  // Load referral data when the Referrals settings category is active.
+  useEffect(() => {
+    if (activeSettingsCategory === "Referrals") {
+      void loadReferralData();
+    }
+  }, [activeSettingsCategory, loadReferralData]);
+
   const [profileForms, setProfileForms] = useState({
     newEmail: "",
     emailPassword: "",
@@ -5926,7 +6015,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         : brokerOptions;
   const selectedProviderId = normalizeProviderId(accountForm.provider);
   const selectedProviderCanSync = SYNC_ENABLED_PROVIDERS.has(selectedProviderId);
-  const selectedProviderIsHyperliquid = selectedProviderId === "hyperliquid" || selectedProviderId === "lighter";
+  const selectedProviderIsHyperliquid = selectedProviderId === "hyperliquid" || selectedProviderId === "lighter" || selectedProviderId === "polymarket";
   const selectedProviderCapability = buildClientConnectionCapability(accountForm.provider);
   const apiKeyFieldLabel = selectedProviderIsHyperliquid ? "Wallet address" : "API Key / Account ID";
   const apiKeyPlaceholder = selectedProviderIsHyperliquid
@@ -6119,14 +6208,18 @@ const handleOptionTradeClosed = async (tradeId) => {
   }, [accessCheckLoading, authUserId, bootstrapLoading, connectedAccounts.length, connectedAccountsHydrated, isGuestUser, openConnectWindow]);
 
   // Persona-based onboarding: show once per signed-in user, before the connect prompt.
+  // DO NOT show if the user has already connected a source — they've already
+  // committed to a workflow by connecting accounts. (spec: skip persona prompt
+  // for users who have ever connected a source)
   useEffect(() => {
     if (accessCheckLoading || bootstrapLoading || isGuestUser || !authUserId) return;
+    if (connectedAccounts.length > 0) return; // ← guard: skip if sources already connected
     if (typeof sessionStorage === "undefined") return;
     const sessionKey = getPersonaPromptSessionKey(authUserId);
     if (sessionStorage.getItem(sessionKey) === "1") return;
     sessionStorage.setItem(sessionKey, "1");
     setIsPersonaOnboardingOpen(true);
-  }, [accessCheckLoading, authUserId, bootstrapLoading, isGuestUser]);
+  }, [accessCheckLoading, authUserId, bootstrapLoading, isGuestUser, connectedAccounts.length]);
 
   // Load saved persona section order from settings:preferences on first workspace load.
   useEffect(() => {
@@ -6158,6 +6251,60 @@ const handleOptionTradeClosed = async (tradeId) => {
     const requiresSecret = accountForm.venueType === "cex" && canSyncProvider;
     if (requiresSecret && !accountForm.apiSecret.trim()) return;
     const connectionLabel = accountForm.username.trim() || getDefaultConnectionLabel(accountForm.provider, accountForm.venueType);
+
+    // Prediction-market wallets (e.g. Polymarket) are keyless + address-only.
+    // Server-side auto-fetch pulls positions/trades by address. No exchange-key
+    // storage path is used.
+    if (accountForm.venueType === "prediction" && canSyncProvider) {
+      setIsSyncingAccount(true);
+      try {
+        const res = await syncPredictionWalletSource({
+          provider: providerId,
+          walletAddress: accountForm.apiKey.trim(),
+          connectionId: accountForm.apiKey.trim(),
+          label: connectionLabel,
+          nativeCurrency: "USD"
+        });
+        if (!res || res.success !== true) {
+          throw new Error(res?.error || "Failed to sync prediction wallet");
+        }
+        try { await refreshBootstrap(); } catch { /* refetched on next bootstrap */ }
+        try { await unified.refresh(); } catch { /* unified refresh is best-effort */ }
+        const nextAccount = {
+          id: res?.source?.connectionId || accountForm.apiKey.trim(),
+          venueType: "prediction",
+          provider: accountForm.provider,
+          exchange: providerId,
+          username: connectionLabel,
+          apiKeyMasked: accountForm.apiKey.trim(),
+          providerTrust: null,
+          syncAvailable: true,
+          connectionCapability: buildClientConnectionCapability(accountForm.provider),
+          connectedAt: new Date().toISOString(),
+          lastSyncAt: new Date().toISOString(),
+          lastSyncStatus: "success",
+          lastSyncMeta: res,
+          isPrediction: true
+        };
+        const nextAccounts = [nextAccount, ...connectedAccounts];
+        setConnectedAccounts(nextAccounts);
+        void refreshWorkspacePanel();
+        setConnectAccountSuccess({
+          provider: accountForm.provider,
+          label: connectionLabel,
+          syncAvailable: true,
+          holdingsCount: Number(res?.source?.holdingsCount || 0),
+          tradesCount: Number(res?.source?.tradesCount || 0),
+          message: `Synced ${Number(res?.source?.holdingsCount || 0)} prediction positions from ${connectionLabel}.`
+        });
+      } catch (error) {
+        console.error("Prediction wallet sync failed:", error);
+        setConnectAccountFeedback(error.message || "Failed to connect prediction wallet.");
+      } finally {
+        setIsSyncingAccount(false);
+      }
+      return;
+    }
 
     setIsSyncingAccount(true);
 
@@ -6380,15 +6527,54 @@ const handleOptionTradeClosed = async (tradeId) => {
       setConnectedAccounts((prev) => prev.filter((a) => a.id !== acc.id));
       return;
     }
+    const numericId = Number.parseInt(String(acc.id), 10);
+    const isUnifiedSource = acc.isUnified || !Number.isFinite(numericId) || numericId <= 0;
+    // Prediction-wallet connections are keyed by wallet address (external_connection_id),
+    // not a numeric id. Route them through the dedicated prediction-wallet DELETE so the
+    // address is matched precisely instead of the generic unified-sources path stripping
+    // trailing digits off a hex address.
+    if (acc.venueType === "prediction" || acc.isPrediction) {
+      try {
+        await disconnectPredictionWalletSource(acc.sourceId || acc.id);
+        setConnectedAccounts((prev) => prev.filter((a) => a.id !== acc.id && a.id !== numericId));
+        void refreshBootstrap();
+        void refreshWorkspacePanel();
+        void unified.refresh();
+      } catch (error) {
+        setConnectAccountFeedback(error.message || "Failed to remove account.");
+      }
+      return;
+    }
     try {
-      const res = await zeninFetch(`/db/exchange-keys/${acc.id}`, { method: "DELETE" });
-      if (!res.ok) {
+      let endpoint;
+      if (isUnifiedSource) {
+        // Composite ids like `wallet-polymarket-102` carry the real numeric
+        // portfolio_source id in the final segment; strip to it so the unified
+        // sources DELETE endpoint (which requires a numeric id) accepts it.
+        const m = String(acc.id).match(/(\d+)(?!.*\d)/);
+        const sourceId = m ? m[1] : acc.id;
+        endpoint = `/portfolio/unified/sources/${sourceId}`;
+      } else {
+        endpoint = `/db/exchange-keys/${acc.id}`;
+      }
+      const res = await zeninFetch(endpoint, { method: "DELETE" });
+      // 404 means the source was already removed server-side (e.g. a stale UI
+      // row after a prior successful delete). Treat that as success so the stale
+      // row is dropped from the UI instead of surfacing a misleading error.
+      if (res.ok || res.status === 404) {
+        setConnectedAccounts((prev) =>
+          prev.filter((a) => a.id !== acc.id && a.id !== numericId)
+        );
+        void refreshBootstrap();
+        void refreshWorkspacePanel();
+        // Reload unified positions/transactions/sources so the portfolio
+        // numbers (KEY POSITIONS, Connected Sources, performance) update
+        // immediately after the delete cascade.
+        void unified.refresh();
+      } else {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || "Failed to remove account");
       }
-      setConnectedAccounts((prev) => prev.filter((a) => a.id !== acc.id));
-      void refreshBootstrap();
-      void refreshWorkspacePanel();
     } catch (error) {
       setConnectAccountFeedback(error.message || "Failed to remove account.");
     }
@@ -7000,7 +7186,8 @@ const handleOptionTradeClosed = async (tradeId) => {
     Predictions: PredictionsIcon,
     Intelligence: IntelligenceIcon,
     Journal: JournalIcon,
-    "Tax Estimator": TaxIcon
+    "Tax Estimator": TaxIcon,
+    Settings: SettingsIcon
   };
 
   const sectionIcon = (section) => {
@@ -7024,7 +7211,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     if (viewportWidth <= 960) setIsSidebarCollapsed(true);
     setIsNotificationCenterOpen(false);
     setIsNotificationInboxOpen(false);
-    setIsSettingsOpen(false);
+    setActiveSection("Home");
     setCommandPaletteOpen(true);
   }, [setCommandPaletteOpen, viewportWidth]);
 
@@ -7037,7 +7224,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     activeShellTriggerRef.current = notificationTriggerRef.current;
     if (viewportWidth <= 960) setIsSidebarCollapsed(true);
     setCommandPaletteOpen(false);
-    setIsSettingsOpen(false);
+    setActiveSection("Home");
     setIsNotificationInboxOpen(false);
     setIsNotificationCenterOpen(true);
     void refreshWorkspaceNotifications();
@@ -7079,7 +7266,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     setIsNotificationCenterOpen(false);
     setIsNotificationInboxOpen(false);
     setActiveSettingsCategory("Profile");
-    setIsSettingsOpen(true);
+    setActiveSection("Settings");
   }, [setCommandPaletteOpen, viewportWidth]);
 
   // Open Settings -> Accounts -> Connected Accounts so the user can retry a
@@ -7093,7 +7280,7 @@ const handleOptionTradeClosed = async (tradeId) => {
     setIsNotificationInboxOpen(false);
     setActiveSettingsCategory("Accounts");
     setExpandedSettingsPanels((prev) => ({ ...prev, "accounts-connected": true }));
-    setIsSettingsOpen(true);
+    setActiveSection("Settings");
   }, [setCommandPaletteOpen, viewportWidth]);
 
   const toggleSidebarFromNavbar = useCallback(() => {
@@ -7101,7 +7288,7 @@ const handleOptionTradeClosed = async (tradeId) => {
       setCommandPaletteOpen(false);
       setIsNotificationCenterOpen(false);
       setIsNotificationInboxOpen(false);
-      setIsSettingsOpen(false);
+      setActiveSection("Home");
     }
     toggleSidebarCollapse();
   }, [isSidebarVisuallyCollapsed, setCommandPaletteOpen, toggleSidebarCollapse, viewportWidth]);
@@ -7142,7 +7329,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         label: "Open Settings (Control Bay)",
         hint: "Profile, workspace, preferences",
         shortcut: "Ctrl ,",
-        run: () => setIsSettingsOpen(true)
+        run: () => setActiveSection("Settings")
       },
       {
         id: "toggle-sidebar",
@@ -7178,23 +7365,30 @@ const handleOptionTradeClosed = async (tradeId) => {
   // Demo workspace disabled: guests now see the full app (real modules with
   // empty/placeholder states, since they have no backend session).
   const shouldRenderGuestPreview = false;
-  const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && connectedAccounts.length === 0 && !(unified?.isUnified && (unified.sources?.length || 0) > 0);
+  const hasConnectedAccount = connectedAccounts.length > 0;
+  const hasUnifiedSource = (unified?.sources?.length || 0) > 0;
+  // Show the first-account nudge only when hydrated AND there is no connected
+  // account AND no unified source. It must disappear the moment any account is
+  // connected or a Hyperliquid/prediction wallet is synced (regardless of
+  // whether the unified summary has computed a numeric totalValue yet), and
+  // return once every account/source is removed.
+  const shouldShowConnectNudge = !isGuestUser && connectedAccountsHydrated && !hasConnectedAccount && !hasUnifiedSource;
   const sharedWatchlistLocked = sharedWatchlistAccess.shared && !sharedWatchlistAccess.allowed;
-  const hasDeskFeatureAccess = isAdmin || normalizeCurrentPlan(currentPlan) === "desk";
-  const hasProFeatureAccess = isAdmin || ["pro", "desk"].includes(normalizeCurrentPlan(currentPlan));
+  const hasDeskFeatureAccess = isAdmin || normalizeCurrentPlan(currentPlan) === "premium";
+  const hasProFeatureAccess = isAdmin || ["plus", "premium"].includes(normalizeCurrentPlan(currentPlan));
   // Gated-section lock: returns the required plan label if the user can't
   // access `section`, else null. Mirrors nav gating (hasSectionAccessForUser)
   // so the render block honors the same Pro/Desk tiers.
   const lockedFor = (section) => {
     if (hasSectionAccessForUser(currentPlan, isAdmin, section)) return null;
-    return formatPlanLabel(requiredPlanForSection(section) || "pro");
+    return formatPlanLabel(requiredPlanForSection(section) || "plus");
   };
   const lockedWatchlistPreviewAssets = useMemo(() => (
     sharedWatchlistLocked
       ? mergeAssetPrices(getFallbackAssetsForCategory(activeCategory), assets)
       : watchlistAssets
   ), [activeCategory, assets, sharedWatchlistLocked, watchlistAssets]);
-  const lockedWatchlistPlanLabel = formatPlanLabel(sharedWatchlistAccess.requiredPlan || "desk");
+  const lockedWatchlistPlanLabel = formatPlanLabel(sharedWatchlistAccess.requiredPlan || "premium");
   const renderConnectNudge = (surface = "home") => {
     if (!shouldShowConnectNudge) return null;
     return (
@@ -7435,6 +7629,27 @@ const handleOptionTradeClosed = async (tradeId) => {
           <Tooltip side="right">
             <TooltipTrigger asChild>
               <button
+                className={`sidebar-theme-row sidebar-utility-row ${activeSection === "Settings" ? "sidebar-settings-active" : ""}`}
+                onClick={() => openWorkspaceSection("Settings")}
+                title="Settings"
+                aria-label="Open Settings"
+                aria-current={activeSection === "Settings" ? "page" : undefined}
+              >
+                <span className="sidebar-utility-left">
+                  <span className="sidebar-theme-icon" aria-hidden="true"><SettingsIcon /></span>
+                  <span className="sidebar-utility-copy">
+                    <span className="sidebar-theme-label">Settings</span>
+                  </span>
+                </span>
+                {!isSidebarVisuallyCollapsed ? <span className="sidebar-theme-arrow">›</span> : null}
+              </button>
+            </TooltipTrigger>
+            {isSidebarVisuallyCollapsed ? <TooltipContent>Settings</TooltipContent> : null}
+          </Tooltip>
+
+          <Tooltip side="right">
+            <TooltipTrigger asChild>
+              <button
                 className="sidebar-theme-row sidebar-utility-row sidebar-logout-row"
                 onClick={handleLogout}
                 title="Sign out"
@@ -7505,13 +7720,19 @@ const handleOptionTradeClosed = async (tradeId) => {
               className="global-top-navbar__icon icon-button"
               onClick={openAccountSettings}
               aria-label="Open account settings"
-              aria-expanded={isSettingsOpen}
+              aria-expanded={activeSection === "Settings"}
               aria-controls="zenin-workspace-settings"
             >
               <AccountIcon aria-hidden="true" />
             </button>
           </div>
         </header>
+        <PriceTicker
+          watchlistAssets={assets || []}
+          portfolioHoldings={portfolioWithEntry || []}
+          onNavigate={(payload) => openAssetResearch({ symbol: payload.symbol })}
+          visible={usesWorkspaceShell}
+        />
         <main className={`main-content ${usesWorkspaceShell ? "main-content-home" : ""}`}>
         {routeState.indicatorContext && routeState.type !== "decisions" && routeState.type !== "portfolio" ? (
           <div className="indicator-context-banner route-context-banner">
@@ -7773,7 +7994,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                       type="button"
                       className="settings-primary-btn"
                       onClick={() => {
-                        setIsSettingsOpen(true);
+                        setActiveSection("Settings");
                         setActiveSettingsCategory("Billing");
                       }}
                     >
@@ -7841,7 +8062,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                   hasDeskFeatureAccess={hasDeskFeatureAccess}
                   sharedWatchlistLocked={sharedWatchlistLocked}
                   lockedPlanLabel={lockedWatchlistPlanLabel}
-                  onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+                  onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
                 />
               </>
             ) : (
@@ -7883,7 +8104,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               hasDeskFeatureAccess={hasDeskFeatureAccess}
               sharedWatchlistLocked={sharedWatchlistLocked}
               lockedPlanLabel={lockedWatchlistPlanLabel}
-              onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+              onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
               onRefresh={handleRefreshWatchlist}
             />
               </>
@@ -7936,7 +8157,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 brokerageSummary={brokerageSummary}
                 hasDeskFeatureAccess={hasDeskFeatureAccess}
                 onOpenPlans={() => {
-                  setIsSettingsOpen(true);
+                  setActiveSection("Settings");
                   setActiveSettingsCategory("Billing");
                 }}
                 indicatorContext={routeState.indicatorContext}
@@ -7959,10 +8180,9 @@ const handleOptionTradeClosed = async (tradeId) => {
        {activeSection === "Analytics" && !shouldRenderGuestPreview && (
         <PlanLockOverlay
           locked={!!lockedFor("Analytics")}
-          requiredPlan={lockedFor("Analytics") || "pro"}
-          title="Analytics"
-          description="Advanced analytics and commodity intelligence are a Pro feature. Upgrade to unlock the full analytics workspace."
-          onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+          requiredPlan={lockedFor("Analytics") || "plus"}
+          section="Analytics"
+          onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
         >
         <div className="view-container">
           <AnalyticsModule
@@ -7987,10 +8207,9 @@ const handleOptionTradeClosed = async (tradeId) => {
         {activeSection === "Research" && !shouldRenderGuestPreview && (
           <PlanLockOverlay
             locked={!!lockedFor("Research")}
-            requiredPlan={lockedFor("Research") || "pro"}
-            title="Research"
-            description="Catalyst and research context is a Pro feature. Upgrade to unlock the research workspace."
-            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+            requiredPlan={lockedFor("Research") || "plus"}
+            section="Research"
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
           >
           <div className="view-container">
             <ResearchModule
@@ -8007,10 +8226,9 @@ const handleOptionTradeClosed = async (tradeId) => {
         {activeSection === "Options" && !shouldRenderGuestPreview && (
           <PlanLockOverlay
             locked={!!lockedFor("Options")}
-            requiredPlan={lockedFor("Options") || "desk"}
-            title="Options"
-            description="Options analytics and the strategy simulator are a Desk feature. Upgrade to unlock options trading intelligence."
-            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+            requiredPlan={lockedFor("Options") || "premium"}
+            section="Options"
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
           >
           <OptionsModule
             activeOptionsTrades={activeOptionsTrades}
@@ -8027,10 +8245,9 @@ const handleOptionTradeClosed = async (tradeId) => {
         {activeSection === "Predictions" && (
           <PlanLockOverlay
             locked={!!lockedFor("Predictions")}
-            requiredPlan={lockedFor("Predictions") || "desk"}
-            title="Predictions"
-            description="Prediction markets are a Desk feature. Upgrade to unlock Polymarket and Kalshi integration."
-            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+            requiredPlan={lockedFor("Predictions") || "premium"}
+            section="Predictions"
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
           >
           <PredictionMarketModule />
           </PlanLockOverlay>
@@ -8051,10 +8268,9 @@ const handleOptionTradeClosed = async (tradeId) => {
         {activeSection === "Journal" && !shouldRenderGuestPreview && (
           <PlanLockOverlay
             locked={!!lockedFor("Journal")}
-            requiredPlan={lockedFor("Journal") || "pro"}
-            title="Journal"
-            description="The decision journal and trade review workflow is a Pro feature. Upgrade to capture and review your decisions."
-            onUpgrade={() => { setActiveSettingsCategory("Billing"); setIsSettingsOpen(true); }}
+            requiredPlan={lockedFor("Journal") || "plus"}
+            section="Journal"
+            onUpgrade={() => { setActiveSettingsCategory("Billing"); setActiveSection("Settings"); }}
           >
           <JournalModule
             trades={trades}
@@ -8065,7 +8281,9 @@ const handleOptionTradeClosed = async (tradeId) => {
             multiChainCache={multiChainCache}
             spotPrices={spotPrices}
             journalThreadContext={journalThreadContext}
-            unifiedPortfolio={unifiedPortfolio}
+            unifiedPortfolio={unified}
+            connectedAccounts={connectedAccounts}
+            brokerageAccounts={brokerageAccounts}
           />
           </PlanLockOverlay>
         )}
@@ -8087,7 +8305,7 @@ const handleOptionTradeClosed = async (tradeId) => {
               </button>
             </div>
             {taxSubView === "tax" ? (
-              <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} unifiedPortfolio={unifiedPortfolio} />
+              <TaxEstimator trades={trades} portfolio={portfolioWithEntry} spotPrices={spotPrices} unifiedPortfolio={unified} />
             ) : (
               <PerpsCalculator />
             )}
@@ -8096,132 +8314,20 @@ const handleOptionTradeClosed = async (tradeId) => {
             </Suspense>
           </GenericErrorBoundary>
         )}
-      </main>
-      </div>
-
-      {viewportWidth <= 960 && (
-      <nav className="mobile-bottom-nav" aria-label="Primary navigation">
-        {MOBILE_PRIMARY_NAV.map((section) => {
-          const isActive = activeSection === section;
-          const enabled = accessibleSections.includes(section);
-          return (
-            <button
-              key={section}
-              type="button"
-              className={`mobile-bottom-nav-item ${isActive ? "active" : ""}`}
-              aria-current={isActive ? "page" : undefined}
-              disabled={!enabled}
-              onClick={() => enabled && openWorkspaceSection(section)}
-            >
-              <span className="mobile-bottom-nav-icon" aria-hidden="true">{sectionIcon(section)}</span>
-              <span className="mobile-bottom-nav-label">{section}</span>
-            </button>
-          );
-        })}
-      </nav>
-      )}
-
-      {showContextPanel && (
-        <aside className="context-panel" aria-label="Context panel" />
-      )}
-
-      {selectedAsset && (
-        <Suspense fallback={null}>
-          {normalizeAssetType(selectedAsset) === "indicator" ? (
-            <IndicatorCountryModal
-              asset={selectedAsset}
-              onClose={() => setSelectedAsset(null)}
-              isInWatchlist={isInWatchlist}
-              onToggleStar={toggleWatchlistStar}
-            />
-          ) : (
-            <AssetModal
-              asset={selectedAsset}
-              onClose={() => setSelectedAsset(null)}
-              onConfirm={null}
-              onCompare={({ kind, symbol }) => {
-                setSelectedAsset(null);
-                const k = String(kind || "equity").toLowerCase();
-                if (k === "etf") { openEtfResearch({ symbol, view: "compare" }); return; }
-                if (k === "forex" || k === "currency") { openCurrencyResearch({ symbol, view: "compare" }); return; }
-                navigateToCompare(symbol);
-              }}
-              researchOnly
-              isInWatchlist={isInWatchlist}
-              onToggleStar={toggleWatchlistStar}
-              onViewCompanyProfile={isEtfRouteAsset ? openEtfProfile : isCommodityRouteAsset ? openCommodityProfile : openCompanyProfile}
-              onOpenResearch={isEtfRouteAsset ? openEtfResearch : isCommodityRouteAsset ? openCommodityResearch : openAssetResearch}
-              onOpenDesk={() => setActiveSection("Analytics")}
-              portfolio={portfolioWithEntry}
-              balance={balance}
-              cashBalances={cashBalances}
-              trades={trades}
-              spotPrices={spotPrices}
-            />
-          )}
-        </Suspense>
-      )}
-
-      <AnimatedTradeToast toast={tradeToast} onDismiss={() => setTradeToast(null)} />
-
-      {alertBuilder?.open && (
-        <AssetAlertBuilder
-          open={alertBuilder.open}
-          asset={alertBuilder.asset}
-          onClose={() => setAlertBuilder({ open: false, asset: null })}
-          onToast={(msg) => setTradeToast({ id: Date.now(), type: "success", message: msg })}
-        />
-      )}
-
-      {compareDrawer?.open && (
-        <AssetCompareDrawer
-          open={compareDrawer.open}
-          assets={compareDrawer.assets}
-          onClose={() => setCompareDrawer({ open: false, assets: [] })}
-          onToast={(msg) => setTradeToast({ id: Date.now(), type: "info", message: msg })}
-        />
-      )}
-
-      {watchlistPrompt?.asset && (
-        <WatchlistCollectModal
-          asset={watchlistPrompt.asset}
-          themes={stockThemes}
-          categories={tradfiCategoryOptions}
-          watchlistAssets={watchlistAssets}
-          initialTheme={watchlistPrompt.theme || watchlistPrompt.customTheme || ""}
-          initialCategory={watchlistPrompt.category || ""}
-          submitting={watchlistPrompt.submitting}
-          error={watchlistPrompt.error}
-          onCancel={() => setWatchlistPrompt(null)}
-          onConfirm={submitWatchlistPrompt}
-          onOpenTheme={(category, theme) => {
-            startTransition(() => {
-              setWatchlistPrompt(null);
-              setActiveSection("Watchlist");
-              setActiveCategory(category || "stocks");
-              setActiveTheme(theme);
-            });
-          }}
-        />
-      )}
-
-      {isSettingsOpen && (
+      {activeSection === "Settings" && (
         <div
           id="zenin-workspace-settings"
-          className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-          role="dialog"
-          aria-modal="true"
+          className="view-container"
+          role="region"
           aria-label="Workspace settings"
-          onClick={() => setIsSettingsOpen(false)}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
-              setIsSettingsOpen(false);
+              setActiveSection("Home");
             }
           }}
         >
-          <div className="flex flex-col w-full max-w-4xl max-h-[90vh] bg-[var(--color-surface-card)] border border-[var(--color-border)] rounded-lg shadow-2xl overflow-hidden" ref={settingsPanelRef} onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-between items-start px-8 py-6 border-b border-[var(--color-border)]">
+            <div className="flex justify-between items-start px-6 py-6 border-b border-[var(--color-border)]">
               <div className="flex flex-col gap-1">
                 <span className="settings-meta-label">Workspace control</span>
                 <h2 className="text-[var(--fs-xl)] font-medium text-[var(--color-text-primary)] m-0">Workspace Settings</h2>
@@ -8231,12 +8337,11 @@ const handleOptionTradeClosed = async (tradeId) => {
                 <span className="settings-live-dot" aria-hidden="true" />
                 <strong>Live</strong>
                 <em>{accountPlanLabel}</em>
-                <button className="text-2xl text-[var(--color-text-muted)] hover:text-white cursor-pointer ml-4 leading-none bg-transparent border-none p-1" onClick={() => setIsSettingsOpen(false)} aria-label="Close settings">&times;</button>
               </div>
             </div>
 
             <div className="flex flex-1 min-h-0">
-              <aside className="flex flex-col gap-1 w-[220px] p-6 pr-4 border-r border-[var(--color-border)] bg-[var(--color-bg-base)] overflow-y-auto" role="tablist" aria-label="Settings categories">
+              <aside className="flex flex-col gap-1 w-[var(--settings-nav-width)] p-6 pr-4 border-r border-[var(--color-border)] bg-[var(--color-bg-base)] overflow-y-auto" role="tablist" aria-label="Settings categories">
                 <div className="settings-index-label">Settings</div>
                 {settingsCategories.map((category) => (
                   <button
@@ -8257,7 +8362,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                 id="settings-content-panel"
                 role="tabpanel"
                 aria-labelledby={`settings-tab-${activeSettingsCategory.replace(/\s+/g, "-").toLowerCase()}`}
-                className="flex-1 p-8 overflow-y-auto bg-[var(--color-surface-card)]"
+                className="flex-1 p-6 overflow-y-auto bg-[var(--color-surface-card)]"
               >
                 {activeSettingsPanel === "Profile" && (
                   <>
@@ -9010,8 +9115,8 @@ const handleOptionTradeClosed = async (tradeId) => {
                               >
                                 <option value="">Real Plan (No simulation)</option>
                                 <option value="starter">Starter</option>
-                                <option value="pro">Pro</option>
-                                <option value="desk">Desk</option>
+                                <option value="plus">Plus</option>
+                                <option value="premium">Premium</option>
                               </select>
                             </label>
                             <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0" style={{ marginTop: "8px" }}>
@@ -9374,11 +9479,25 @@ const handleOptionTradeClosed = async (tradeId) => {
                             </button>
                             <span className="text-[12px] text-[var(--color-text-secondary)]">Read-only SnapTrade brokerage/aggregator link where supported. Zenin cannot trade or withdraw.</span>
                           </div>
-                          {connectedAccounts.length === 0 ? (
+                          { (connectedAccounts.length === 0 && !(unified?.sources?.length)) ? (
                             <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed m-0">No saved CEX, DEX, brokerage, or prediction market sources yet. Add a read-only API key, watch-only address, or SnapTrade link to preserve portfolio context; only supported providers can live sync today.</p>
                           ) : (
                             <div className="connected-accounts-list">
-                              {connectedAccounts.map((acc) => {
+                              { (connectedAccounts.length ? connectedAccounts : (unified?.sources || []).map((s) => ({
+                                id: `${s.sourceType}-${s.provider}-${s.external_connection_id || s.id}`,
+                                provider: s.provider,
+                                exchange: s.provider,
+                                username: s.label || `${s.provider} ${s.external_connection_id ? s.external_connection_id.slice(0, 10) : ""}`,
+                                venueType: s.sourceType === "brokerage" ? "broker" : s.sourceType === "prediction" ? "prediction" : s.sourceType === "wallet" ? "dex" : "cex",
+                                apiKeyMasked: "Synced via unified pipeline",
+                                providerTrust: { cannotTrade: true, cannotWithdraw: true },
+                                syncAvailable: true,
+                                connectionCapability: { syncAvailable: true },
+                                connectedAt: null,
+                                lastSyncAt: s.lastSyncAt || null,
+                                lastSyncStatus: s.status || "synced",
+                                lastSyncMeta: {}
+                              }))).map((acc) => {
                                 const trust = getProviderTrustForAccount(acc);
                                 const badge = getScopeBadge(acc);
                                 const lastSyncedRel = formatRelativeTime(trust.lastSyncedAt);
@@ -9391,23 +9510,29 @@ const handleOptionTradeClosed = async (tradeId) => {
                                     <div className="connected-account-trust-head">
                                       <div className="connected-account-trust-title">
                                         <strong>{trust.providerLabel || acc.provider}</strong>
+                                        <span className="connected-account-label">{acc.username}</span>
                                         <span className={`provider-trust-pill provider-trust-pill-${badge.tone}`}>{badge.label}</span>
                                       </div>
                                       <div className="connected-account-trust-actions">
                                         {acc.syncAvailable !== false && (
                                           <button
                                             type="button"
-                                            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                                            className="settings-mini-btn"
                                             disabled={actionState === "syncing"}
                                             onClick={() => handleAccountSync(acc)}
                                           >
-                                            {actionState === "syncing" ? "Syncing…" : "Sync now"}
+                                            {actionState === "syncing" ? (
+                                              <span className="inline-flex items-center gap-2">
+                                                <span className="am-spinner spin" aria-hidden />
+                                                Syncing…
+                                              </span>
+                                            ) : "Sync now"}
                                           </button>
                                         )}
                                         {!isGuestUser && (
                                           <button
                                             type="button"
-                                            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                                            className="settings-mini-btn"
                                             disabled={actionState === "verifying"}
                                             onClick={() => handleAccountVerifyScope(acc)}
                                           >
@@ -9423,7 +9548,7 @@ const handleOptionTradeClosed = async (tradeId) => {
                                             <div className="connected-account-confirm-actions">
                                               <button
                                                 type="button"
-                                                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+                                                className="settings-mini-btn"
                                                 onClick={() => setConfirmRemoveAccount(null)}
                                               >
                                                 Cancel
@@ -9602,6 +9727,126 @@ const handleOptionTradeClosed = async (tradeId) => {
                     )}
                   </div>
                 )}
+
+                {activeSettingsPanel === "Referrals" && (
+                  <div className="settings-panel settings-referrals-panel">
+                    {isGuestUser ? (
+                      <div className="p-4 mb-6 text-sm text-[var(--color-text-secondary)] bg-[var(--color-surface-elevated)] border border-[var(--color-border-subtle)] rounded-md">
+                        Referral tracking is available for signed-in users. Sign in to share your link and earn rewards.
+                      </div>
+                    ) : (
+                      <>
+                        {referralLoading ? (
+                          <div className="p-8 text-center text-[var(--color-text-secondary)]">
+                            Loading referral details…
+                          </div>
+                        ) : (
+                          <>
+                            {/* Shareable link + code */}
+                            <div className="border border-[var(--color-border)] rounded-md mb-4 overflow-hidden">
+                              <div className="flex justify-between items-center px-5 py-4 bg-[var(--color-surface-elevated)] text-[var(--fs-base)] font-medium text-[var(--color-text-primary)]">
+                                <span>Your Referral Link</span>
+                              </div>
+                              <div className="p-5">
+                                {referralCodeData ? (
+                                  <>
+                                    <p className="text-[13px] text-[var(--color-text-secondary)] mb-3">
+                                      Share your personal link. When someone signs up through it, you both benefit.
+                                    </p>
+                                    <div className="flex gap-3 items-center">
+                                      <code className="flex-1 px-3 py-2 bg-[var(--color-surface-elevated)] border border-[var(--color-border)] rounded text-[14px] font-mono break-all">
+                                        {referralCodeData.code}
+                                      </code>
+                                      <button
+                                        className={cn(buttonVariants({ variant: "secondary" }))}
+                                        onClick={async () => {
+                                          try {
+                                            await navigator.clipboard.writeText(referralCodeData.code || "");
+                                          } catch {
+                                            // fallback
+                                          }
+                                        }}
+                                      >
+                                        Copy Code
+                                      </button>
+                                    </div>
+                                    <button
+                                      className={cn(buttonVariants({ variant: "default" }))}
+                                      style={{ marginTop: "14px" }}
+                                      onClick={async () => {
+                                        const url = referralCodeData.referralLink || `${window.location.origin}/?ref=${referralCodeData.code}`;
+                                        try {
+                                          await navigator.clipboard.writeText(url);
+                                        } catch {
+                                          // fallback
+                                        }
+                                      }}
+                                    >
+                                      Copy Referral Link
+                                    </button>
+                                    <p className="text-[13px] text-[var(--color-text-secondary)] mt-2 m-0">
+                                      Created: {referralCodeData.created ? new Date(referralCodeData.created).toLocaleDateString() : "—"}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <button
+                                    className={cn(buttonVariants({ variant: "default" }))}
+                                    onClick={() => void loadReferralData()}
+                                  >
+                                    Generate Referral Code
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Stats */}
+                            {referralStats && (
+                              <>
+                                <h3 className="text-[var(--fs-base)] font-medium text-[var(--color-text-primary)] mb-3">
+                                  Referral Performance
+                                </h3>
+                                <div className="grid grid-cols-3 gap-3 mb-4">
+                                  <div className="bg-[var(--color-surface-elevated)] border border-[var(--color-border)] rounded-md p-4 text-center">
+                                    <div className="text-2xl font-bold text-[var(--color-text-primary)]">{referralStats.clicks}</div>
+                                    <div className="text-[11px] text-[var(--color-text-secondary)]">Clicks</div>
+                                  </div>
+                                  <div className="bg-[var(--color-surface-elevated)] border border-[var(--color-border)] rounded-md p-4 text-center">
+                                    <div className="text-2xl font-bold text-[var(--color-text-primary)]">{referralStats.signups}</div>
+                                    <div className="text-[11px] text-[var(--color-text-secondary)]">Signups</div>
+                                  </div>
+                                  <div className="bg-[var(--color-surface-elevated)] border border-[var(--color-border)] rounded-md p-4 text-center">
+                                    <div className="text-2xl font-bold text-[var(--color-text-primary)]">{referralStats.conversions}</div>
+                                    <div className="text-[11px] text-[var(--color-text-secondary)]">Conversions</div>
+                                  </div>
+                                </div>
+
+                                {referralStats.recentEvents.length > 0 ? (
+                                  <div className="border border-[var(--color-border)] rounded-md overflow-hidden">
+                                    <div className="px-4 py-2 bg-[var(--color-surface-elevated)] text-[var(--fs-sm)] font-medium text-[var(--color-text-primary)]">
+                                      Recent Activity
+                                    </div>
+                                    <div className="divide-y divide-[var(--color-border)]">
+                                      {referralStats.recentEvents.map((event, idx) => (
+                                        <div key={idx} className="flex justify-between items-center px-4 py-2 text-[13px]">
+                                          <span className="capitalize text-[var(--color-text-secondary)]">{event.type}</span>
+                                          <span className="text-[var(--color-text-secondary)]">
+                                            {event.createdAt ? new Date(event.createdAt).toLocaleString() : "—"}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="text-[13px] text-[var(--color-text-secondary)]">No activity yet. Share your link to get started.</p>
+                                )}
+                              </>
+                            )}
+                          </>
+                        )}
+                      </>
+                        )}
+                      </div>
+                    )}
               </section>
             </div>
 
@@ -9880,7 +10125,14 @@ const handleOptionTradeClosed = async (tradeId) => {
                             onClick={connectAccount}
                             disabled={isSyncingAccount || !accountForm.apiKey.trim() || (showApiSecretField && !accountForm.apiSecret.trim())}
                           >
-                            {isSyncingAccount ? (selectedProviderCanSync ? "Syncing..." : "Saving...") : (selectedProviderCanSync ? "Save and sync" : "Save metadata")}
+                            {isSyncingAccount ? (
+                              <span className="inline-flex items-center gap-2">
+                                <span className="am-spinner spin" aria-hidden />
+                                {selectedProviderCanSync ? "Syncing…" : "Saving…"}
+                              </span>
+                            ) : (
+                              selectedProviderCanSync ? "Save and sync" : "Save metadata"
+                            )}
                           </button>
                         </div>
                           </>
@@ -9891,9 +10143,128 @@ const handleOptionTradeClosed = async (tradeId) => {
                 </div>
               </div>
             )}
-          </div>
         </div>
       )}
+      </main>
+      <WhileYouWereGoneModal
+        open={showSinceYouLeft}
+        onClose={() => setShowSinceYouLeft(false)}
+        idleSince={idleSince}
+        holdings={portfolioWithEntry || []}
+        watchlist={watchlistAssets || []}
+      />
+      <LiveDataPausedToast
+        paused={liveDataPaused}
+        onReconnect={bumpUserActivity}
+      />
+      </div>
+
+      {viewportWidth <= 960 && (
+      <nav className="mobile-bottom-nav" aria-label="Primary navigation">
+        {MOBILE_PRIMARY_NAV.map((section) => {
+          const isActive = activeSection === section;
+          const enabled = accessibleSections.includes(section);
+          return (
+            <button
+              key={section}
+              type="button"
+              className={`mobile-bottom-nav-item ${isActive ? "active" : ""}`}
+              aria-current={isActive ? "page" : undefined}
+              disabled={!enabled}
+              onClick={() => enabled && openWorkspaceSection(section)}
+            >
+              <span className="mobile-bottom-nav-icon" aria-hidden="true">{sectionIcon(section)}</span>
+              <span className="mobile-bottom-nav-label">{section}</span>
+            </button>
+          );
+        })}
+      </nav>
+      )}
+
+      {showContextPanel && (
+        <aside className="context-panel" aria-label="Context panel" />
+      )}
+
+      {selectedAsset && (
+        <Suspense fallback={null}>
+          {normalizeAssetType(selectedAsset) === "indicator" ? (
+            <IndicatorCountryModal
+              asset={selectedAsset}
+              onClose={() => setSelectedAsset(null)}
+              isInWatchlist={isInWatchlist}
+              onToggleStar={toggleWatchlistStar}
+            />
+          ) : (
+            <AssetModal
+              asset={selectedAsset}
+              onClose={() => setSelectedAsset(null)}
+              onConfirm={null}
+              onCompare={({ kind, symbol }) => {
+                setSelectedAsset(null);
+                const k = String(kind || "equity").toLowerCase();
+                if (k === "etf") { openEtfResearch({ symbol, view: "compare" }); return; }
+                if (k === "forex" || k === "currency") { openCurrencyResearch({ symbol, view: "compare" }); return; }
+                navigateToCompare(symbol);
+              }}
+              researchOnly
+              isInWatchlist={isInWatchlist}
+              onToggleStar={toggleWatchlistStar}
+              onViewCompanyProfile={isEtfRouteAsset ? openEtfProfile : isCommodityRouteAsset ? openCommodityProfile : openCompanyProfile}
+              onOpenResearch={isEtfRouteAsset ? openEtfResearch : isCommodityRouteAsset ? openCommodityResearch : openAssetResearch}
+              onOpenDesk={() => setActiveSection("Analytics")}
+              portfolio={portfolioWithEntry}
+              balance={balance}
+              cashBalances={cashBalances}
+              trades={trades}
+              spotPrices={spotPrices}
+            />
+          )}
+        </Suspense>
+      )}
+
+      <AnimatedTradeToast toast={tradeToast} onDismiss={() => setTradeToast(null)} />
+
+      {alertBuilder?.open && (
+        <AssetAlertBuilder
+          open={alertBuilder.open}
+          asset={alertBuilder.asset}
+          onClose={() => setAlertBuilder({ open: false, asset: null })}
+          onToast={(msg) => setTradeToast({ id: Date.now(), type: "success", message: msg })}
+        />
+      )}
+
+      {compareDrawer?.open && (
+        <AssetCompareDrawer
+          open={compareDrawer.open}
+          assets={compareDrawer.assets}
+          onClose={() => setCompareDrawer({ open: false, assets: [] })}
+          onToast={(msg) => setTradeToast({ id: Date.now(), type: "info", message: msg })}
+        />
+      )}
+
+      {watchlistPrompt?.asset && (
+        <WatchlistCollectModal
+          asset={watchlistPrompt.asset}
+          themes={stockThemes}
+          categories={tradfiCategoryOptions}
+          watchlistAssets={watchlistAssets}
+          initialTheme={watchlistPrompt.theme || watchlistPrompt.customTheme || ""}
+          initialCategory={watchlistPrompt.category || ""}
+          submitting={watchlistPrompt.submitting}
+          error={watchlistPrompt.error}
+          onCancel={() => setWatchlistPrompt(null)}
+          onConfirm={submitWatchlistPrompt}
+          onOpenTheme={(category, theme) => {
+            startTransition(() => {
+              setWatchlistPrompt(null);
+              setActiveSection("Watchlist");
+              setActiveCategory(category || "stocks");
+              setActiveTheme(theme);
+            });
+          }}
+        />
+      )}
+
       <NotificationCenter
         open={isNotificationCenterOpen}
         onOpenChange={(open) => {
@@ -9923,9 +10294,7 @@ const handleOptionTradeClosed = async (tradeId) => {
           if (!asset) return;
           const kind = String(asset.kind || "").toLowerCase();
           const sym = String(asset.symbol || "").toUpperCase();
-          if (kind === "commodity") openCommodityResearch({ symbol: sym });
-          else if (kind === "company" || kind === "stock") openCompanyProfile({ symbol: sym, name: asset.name, type: "stock" });
-          else setSelectedAsset({ symbol: sym, type: kind, marketType: kind, category: asset.category });
+          setSelectedAsset({ symbol: sym, name: asset.name, type: kind, marketType: kind, category: asset.category });
         }}
       />
       <Suspense fallback={null}>

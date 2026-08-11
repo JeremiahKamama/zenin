@@ -25,9 +25,12 @@ export function AssetChart({
   formatChartVolume,
   formatChartTime,
   formatChartReadout,
-  crosshairEnabled
+  crosshairEnabled,
+  compactWhenEmpty = false
 }) {
-  const chartHeight = chartExpanded ? 440 : 300;
+  const hasHistory = history.length > 0;
+  const showCompactEmpty = compactWhenEmpty && !hasHistory && !loading;
+  const chartHeight = showCompactEmpty ? 152 : chartExpanded ? 440 : 300;
   const toggleIndicator = (id) =>
     setVisibleIndicators((prev) => ({ ...prev, [id]: !prev[id] }));
 
@@ -46,7 +49,7 @@ export function AssetChart({
           </span>
         </div>
 
-        <div className="am-chart-controls">
+        {!showCompactEmpty ? <div className="am-chart-controls">
           <div className="am-type-toggle" role="group" aria-label="Chart type">
             <button className={chartType === "line" ? "active" : ""} onClick={() => setChartType("line")}>Line</button>
             <button className={chartType === "candlestick" ? "active" : ""} onClick={() => setChartType("candlestick")}>Candle</button>
@@ -76,14 +79,14 @@ export function AssetChart({
           <button className="am-expand-btn" onClick={() => setChartExpanded((v) => !v)} title="Expand chart">
             {chartExpanded ? "–" : "⤢"}
           </button>
-        </div>
+        </div> : null}
       </div>
 
       <div
         className={`am-chart-container ${chartExpanded ? "expanded" : ""}`}
         style={{ height: `${chartHeight}px`, minHeight: `${chartHeight}px` }}
       >
-        {history.length > 0 ? (
+        {hasHistory ? (
           <TradingViewChart
             series={chartData}
             height={chartHeight}
@@ -101,7 +104,9 @@ export function AssetChart({
             <span className="am-spinner spin">⟳</span>
           </div>
         ) : (
-          <div className="am-chart-empty">No chart data available.</div>
+          <div className={showCompactEmpty ? "am-chart-empty am-chart-empty--compact" : "am-chart-empty"}>
+            {showCompactEmpty ? "No chart history is available for this ETF." : "No chart data available."}
+          </div>
         )}
         {loading && history.length > 0 ? (
           <div className="am-chart-refresh">
@@ -110,14 +115,14 @@ export function AssetChart({
         ) : null}
       </div>
 
-      {chartRange ? (
+      {chartRange && !showCompactEmpty ? (
         <div className="am-chart-range">
           <span className="am-range-label">{chartRange.label}</span>
           <span className="am-range-dates font-mono">{chartRange.start} — {chartRange.end}</span>
         </div>
       ) : null}
 
-      <div className="am-interval-row" role="group" aria-label="Interval">
+      {!showCompactEmpty ? <div className="am-interval-row" role="group" aria-label="Interval">
         {intervals.map((int) => {
           const perf = performanceMap[int];
           return (
@@ -136,7 +141,7 @@ export function AssetChart({
             </div>
           );
         })}
-      </div>
+      </div> : null}
     </section>
   );
 }

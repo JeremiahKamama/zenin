@@ -10,6 +10,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAssetKind } from "../utils/assetRegistry.js";
+import { AssetLogo } from "./AssetLogo";
 
 const THEME_CARD_THRESHOLD = 12; // < this many themes → cards, else searchable list
 
@@ -269,6 +270,7 @@ export default function WatchlistCollectModal({
         {/* Asset summary — pinned while the body scrolls */}
         <div className="wc-summary">
           <div className="wc-summary-id">
+            <AssetLogo asset={{ symbol: symbol, ...asset }} size="md" />
             <span className="wc-summary-symbol">{symbol || "—"}</span>
             <span className="wc-summary-kind">{kindLabel}</span>
           </div>

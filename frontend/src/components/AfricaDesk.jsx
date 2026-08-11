@@ -13,6 +13,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { zeninFetchJson } from "../utils/zeninFetch";
 import { isMyStocksWired } from "../utils/DataCoverageRegistry";
+import { AssetLogo } from "./AssetLogo";
 
 const SUPPORTED = [
   { mic: "XNSE", label: "NSE (Kenya)" },
@@ -141,7 +142,7 @@ export function AfricaDesk() {
               <ul className="africa-movers">
                 {(movers?.data?.items || []).slice(0, 12).map((row, idx) => (
                   <li key={row.symbol || idx} className="africa-mover-row">
-                    <span className="africa-mover-symbol">{row.symbol}</span>
+                    <span className="africa-mover-symbol"><AssetLogo asset={row} size="xs" />{row.symbol}</span>
                     <span className="africa-mover-price">{row.price != null ? row.price : "—"}</span>
                     <span className={`africa-mover-chg ${(row.changePercent ?? 0) >= 0 ? "up" : "down"}`}>
                       {row.changePercent != null ? `${row.changePercent.toFixed(2)}%` : ""}

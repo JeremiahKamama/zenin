@@ -14,6 +14,28 @@
 
 "use strict";
 
+const { z } = require("zod");
+
+// Validation for alert rule create/update payloads. The engine only evaluates
+// priceAbove / priceBelow / changePercentAbove / changePercentBelow today, so we
+// constrain conditions to those known numeric keys and force channels to the single
+// supported "inApp" channel (no push/email provider is wired).
+const SUPPORTED_CONDITION_KEYS = [
+  "priceAbove", "priceBelow", "changePercentAbove", "changePercentBelow",
+  "totalValueAbove", "minSeverity"
+];
+
+const alertRuleInputSchema = z.object({
+  name: z.string().trim().min(1, "name is required").max(200),
+  eventType: z.string().trim().max(50).optional().default("PRICE_CHANGE"),
+  symbol: z.string().trim().max(20).optional().nullable(),
+  conditions: z.record(z.union([z.number(), z.string()])).optional().default({}),
+  channels: z.array(z.enum(["inApp"])).optional().default(["inApp"]),
+  enabled: z.boolean().optional().default(true)
+}).strict();
+
+const alertRulePatchSchema = alertRuleInputSchema.partial();
+
 /**
  * @param {Object} app              Express app
  * @param {Object} deps
@@ -294,13 +316,15 @@ function registerMarketIntelRoutes(app, deps = {}) {
     app.post("/api/market/alerts", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, wrap(async (req) => {
       const userId = req.auth?.userId;
       const workspaceId = req.workspace?.workspace?.id;
-      const rule = await alertRules.createRule(userId, workspaceId, req.body);
+      const parsed = alertRuleInputSchema.parse(req.body);
+      const rule = await alertRules.createRule(userId, workspaceId, parsed);
       return { rule };
     }));
 
     app.patch("/api/market/alerts/:id", requireSignedIn, attachActiveWorkspace, wrap(async (req) => {
       const userId = req.auth?.userId;
-      const rule = await alertRules.updateRule(req.params.id, userId, req.body);
+      const updates = alertRulePatchSchema.parse(req.body);
+      const rule = await alertRules.updateRule(req.params.id, userId, updates);
       return { rule };
     }));
 

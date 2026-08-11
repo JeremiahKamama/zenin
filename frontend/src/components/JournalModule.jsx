@@ -22,6 +22,10 @@ import {
 import { CompactPageHeader, FilterPopover, GuidedEmptyState, InlineControlGroup, MetricStrip } from "./CompactWorkspaceUI";
 import { AsyncState, DataFreshnessSummary, ResponsiveActionBar, normalizeFreshnessStatus } from "@/components/ui/async-state";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
+import { Checkbox } from "./ui/checkbox";
+import { ChevronDown, Search } from "lucide-react";
+import { buildConnectionRegistry, resolveAssetIdentity } from "../utils/tradePerformance";
 import DecisionComposer from "./DecisionComposer";
 import { fetchDecisionOutcomes } from "../utils/decisionOutcomes";
 
@@ -58,16 +62,18 @@ function isWithinJournalDateWindow(value, windowKey) {
   return parsed.getTime() >= Date.now() - 30 * 24 * 60 * 60 * 1000;
 }
 
-export function JournalModule({ 
-  trades = [], 
-  portfolio = [], 
-  balance = 0, 
+export function JournalModule({
+  trades = [],
+  portfolio = [],
+  balance = 0,
   accountEquity = null,
   activeOptionsTrades = [],
   multiChainCache = {},
   spotPrices = {},
   journalThreadContext = null,
-  unifiedPortfolio = null
+  unifiedPortfolio = null,
+  connectedAccounts = [],
+  brokerageAccounts = []
 }) {
   const [reportPage, setReportPage] = useState(1);
   const [recentPage, setRecentPage] = useState(1);
@@ -79,6 +85,9 @@ export function JournalModule({
   const [symbolsButtonLabel, setSymbolsButtonLabel] = useState("All Symbols");
   const [calendarSearch, setCalendarSearch] = useState("");
   const [selectedSymbols, setSelectedSymbols] = useState([]);
+  // Multi-select set of connection ids (empty = All Sources). Driven by the
+  // shared buildConnectionRegistry so option ids match trade source ids.
+  const [selectedSources, setSelectedSources] = useState(() => new Set());
   const [livePriceBySymbol, setLivePriceBySymbol] = useState({});
   const [lastReportPriceRefreshAt, setLastReportPriceRefreshAt] = useState(null);
   const [nowTs, setNowTs] = useState(Date.now());
@@ -90,6 +99,13 @@ export function JournalModule({
   // any snapshot has been generated).
   const [snapshotsByDate, setSnapshotsByDate] = useState(() => new Map());
   const [snapshotsLoadedFor, setSnapshotsLoadedFor] = useState("");
+  // Lifecycle for the snapshot fetch (Fix #6: distinguish data/zero/empty/error).
+  //   "idle"      never attempted this month
+  //   "loading"   in flight
+  //   "empty"     200 OK, zero snapshot rows (real — no history)
+  //   "error"     non-OK (401/429/5xx/network) — must NOT render as zero
+  //   "ready"     200 OK with data
+  const [snapshotFetchState, setSnapshotFetchState] = useState("idle");
 
   // Unified read model is the single source of truth for transactions when active
   // (covers Hyperliquid + SnapTrade brokerage + exchanges + manual). Falls back to
@@ -97,26 +113,81 @@ export function JournalModule({
   // trade shape the rest of this module expects.
   const displayTransactions = useMemo(() => {
     if (unifiedPortfolio && unifiedPortfolio.isUnified && Array.isArray(unifiedPortfolio.transactions) && unifiedPortfolio.transactions.length > 0) {
-      return unifiedPortfolio.transactions.map((t) => ({
-        executedAt: t.executedAt,
-        date: t.executedAt,
-        symbol: t.symbol,
-        side: String(t.side || "").toUpperCase() === "BUY" ? "BUY" : String(t.side || "").toUpperCase() === "SELL" ? "SELL" : (t.side || "BUY"),
-        type: t.type || (t.sourceType === "wallet" ? "crypto" : "equity"),
-        notional: Number(t.notional || 0),
-        fee: Number(t.fee || 0),
-        quantity: Number(t.quantity || 0),
-        unitPrice: Number(t.unitPrice || 0),
-        currency: t.currency || "USD",
-        platform: t.provider || t.sourceType || "unknown",
-        sourceType: t.sourceType,
-        // Realized P&L for perps/crypto comes from closedPnl when present.
-        pnl: Number(t.closedPnl != null ? t.closedPnl : (t.pnl != null ? t.pnl : 0)),
-        accountEquityAfter: null
-      }));
+      return unifiedPortfolio.transactions.map((t) => {
+        // Coherent asset identity. The canonical identifier is the instrument
+        // symbol; prediction-market fills frequently carry `symbol` = null with
+        // the human-readable market/question in `name`, so fall back through
+        // `name` before reaching the explicit "UNKNOWN" sentinel (which Journal's
+        // analytics would otherwise surface verbatim).
+        const symbol = t.symbol || null;
+        const name = t.name || t.symbol || null;
+        const asset = symbol || name || null;
+        // Stable, source+account+external-identity key. `providerTxId` is the
+        // canonical external trade/fill id written during ingestion
+        // (portfolio_source_transactions.provider_tx_id). Falls back to the legacy
+        // composite only when no stable external id exists — eliminating the
+        // false `UNKNOWN-*` keys that broke Journal-entry linking.
+        const sourceTradeKey = t.providerTxId
+          ? `${t.provider || "unknown"}::${t.sourceAccountId || 0}::${t.providerTxId}`
+          : null;
+        return {
+          executedAt: t.executedAt,
+          date: t.executedAt,
+          symbol: symbol,
+          name: name,
+          asset: asset,
+          sourceType: t.sourceType,
+          sourceAccountId: t.sourceAccountId || t.sourceType || "",
+          sourceTradeKey,
+          side: String(t.side || "").toUpperCase() === "BUY" ? "BUY" : String(t.side || "").toUpperCase() === "SELL" ? "SELL" : (t.side || "BUY"),
+          type: t.type || (t.sourceType === "wallet" ? "crypto" : "equity"),
+          notional: Number(t.notional || 0),
+          fee: Number(t.fee || 0),
+          quantity: Number(t.quantity || 0),
+          unitPrice: Number(t.unitPrice || 0),
+          currency: t.currency || "USD",
+          platform: t.provider || t.sourceType || "unknown",
+          provider: t.provider || t.sourceType || "unknown",
+          // Realized P&L for perps/crypto comes from closedPnl when present.
+          pnl: Number(t.closedPnl != null ? t.closedPnl : (t.pnl != null ? t.pnl : t.realizedPnl || 0)),
+          realizedPnl: Number(t.realizedPnl || 0),
+          accountEquityAfter: null
+        };
+      });
     }
     return Array.isArray(trades) ? trades : [];
   }, [unifiedPortfolio, trades]);
+
+  // Connection registry — single source of truth for source attribution + the
+  // multi-select filter options. Reuses the shared util so option ids match the
+  // ids resolved onto each trade (buildConnectionRegistry.resolve).
+  const registry = useMemo(
+    () => buildConnectionRegistry({ connectedAccounts, brokerageAccounts }),
+    [connectedAccounts, brokerageAccounts]
+  );
+  const connOptions = useMemo(
+    () => registry.list.map((c) => ({ value: c.id, label: c.label })),
+    [registry]
+  );
+  // Resolve a trade/row to a stable connection id (falls back to platform/provider).
+  const resolveSourceId = useCallback(
+    (trade) => {
+      const conn = registry.resolve(trade);
+      if (conn) return conn.id;
+      return String(trade?.platform || trade?.provider || trade?.sourceType || "manual");
+    },
+    [registry]
+  );
+  const resolveSourceLabel = useCallback(
+    (trade) => {
+      const conn = registry.resolve(trade);
+      if (conn) return conn.label;
+      const raw = String(trade?.platform || trade?.provider || trade?.sourceType || "manual");
+      return raw === "manual" ? "Manual" : (raw.charAt(0).toUpperCase() + raw.slice(1));
+    },
+    [registry]
+  );
+
   // Phase 3: trade-journaling "Needs journaling" queue + event drawer.
   // Loaded lazily when the queue tab is active; refreshed after actions.
   const [needsJournaling, setNeedsJournaling] = useState([]);
@@ -276,8 +347,7 @@ export function JournalModule({
     search: "",
     regime: "all",
     side: "all",
-    status: "all",
-    source: "all"
+    status: "all"
   });
   const [expandedExecutionGroups, setExpandedExecutionGroups] = useState({});
   const [journalView, setJournalView] = useState("overview");
@@ -663,7 +733,6 @@ export function JournalModule({
   }, [reportSymbols]);
 
   const executionRows = useMemo(() => {
-    const normalizeSymbol = (value) => String(value || "UNKNOWN").trim().toUpperCase();
     const ordered = [...displayTransactions].sort((a, b) => {
       const ta = new Date(a.executedAt || a.date || 0).getTime() || 0;
       const tb = new Date(b.executedAt || b.date || 0).getTime() || 0;
@@ -673,7 +742,7 @@ export function JournalModule({
 
     const runningPosition = new Map();
     const rows = ordered.map((trade) => {
-      const symbol = normalizeSymbol(trade.asset);
+      const { symbol, name } = resolveAssetIdentity(trade);
       const quantity = Math.max(0, Number(trade.quantity) || 0);
       const price = Number(trade.price) || 0;
       const side = String(trade.side || trade.type || "").toLowerCase() === "sell" ? "sell" : "buy";
@@ -788,7 +857,14 @@ export function JournalModule({
   const analytics = useMemo(() => {
     const dayMs = 24 * 60 * 60 * 1000;
     const eps = 1e-8;
-    const normalizeSymbol = (value) => String(value || "UNKNOWN").trim().toUpperCase();
+    // Centralized asset identity: never emits "UNKNOWN" when a usable symbol/name
+    // exists (e.g. prediction-market questions). Accepts either a raw value or a
+    // trade/holding object so name is available as a fallback.
+    const normalizeSymbol = (value) => {
+      const tradeObj = (value && typeof value === "object") ? value : { symbol: value, asset: value };
+      const resolved = resolveAssetIdentity(tradeObj);
+      return resolved.symbol;
+    };
     const safeNum = (val) => {
       const n = Number(val);
       return Number.isFinite(n) ? n : 0;
@@ -827,7 +903,7 @@ export function JournalModule({
 
     for (const trade of sortedTrades) {
       const type = (trade.type || "").toUpperCase();
-      const asset = normalizeSymbol(trade.asset);
+      const asset = normalizeSymbol(trade);
       const reportKey = buildReportKey(asset, trade);
       const optionTrade = isOptionTrade(trade);
       const strategy = normalizeStrategy(trade?.strategyName || trade?.strategy || "");
@@ -868,6 +944,8 @@ export function JournalModule({
             strategy,
             isOption: optionTrade,
             marketType: optionTrade ? "options" : (trade.marketType || trade.market_type || ""),
+            // Source attribution so analytics can roll up P&L by connection.
+            source: String(trade?.platform || trade?.sourceType || "unknown"),
             pnl,
             holdDays,
             qty: matchedQty,
@@ -1065,7 +1143,7 @@ export function JournalModule({
 
     const portfolioPositionMap = new Map();
     for (const holding of portfolio || []) {
-      const symbol = normalizeSymbol(holding.symbol);
+      const symbol = normalizeSymbol(holding);
       portfolioPositionMap.set(symbol, (portfolioPositionMap.get(symbol) || 0) + safeNum(holding.quantity));
     }
 
@@ -1073,7 +1151,7 @@ export function JournalModule({
     for (const trade of sortedTrades) {
       const type = (trade.type || "").toUpperCase();
       if (type !== "BUY") continue;
-      const symbol = normalizeSymbol(trade.asset);
+      const symbol = normalizeSymbol(trade);
       const price = safeNum(trade.price);
       if (price > 0) {
         lastBuyPriceBySymbol.set(symbol, price);
@@ -1082,7 +1160,7 @@ export function JournalModule({
 
     const portfolioPriceMap = new Map();
     for (const holding of portfolio || []) {
-      const symbol = normalizeSymbol(holding.symbol);
+      const symbol = normalizeSymbol(holding);
       const price = safeNum(holding.price);
       if (price > 0) {
         portfolioPriceMap.set(symbol, price);
@@ -1142,6 +1220,28 @@ export function JournalModule({
         return a.symbol.localeCompare(b.symbol);
       });
 
+    // Per-source realized-P&L rollup. Groups closed round-trips by their
+    // connection source so the Journal can surface win rate / realized P&L /
+    // volume per connection — a capability the source filter makes meaningful.
+    const sourceStats = new Map();
+    for (const r of realized) {
+      const src = String(r.source || "unknown");
+      const row = sourceStats.get(src) || { source: src, trades: 0, wins: 0, losses: 0, breakevens: 0, realizedPnl: 0, volume: 0 };
+      row.trades += 1;
+      row.realizedPnl += Number(r.pnl || 0);
+      row.volume += Number(r.volume || 0);
+      if (Number(r.pnl || 0) > eps) row.wins += 1;
+      else if (Number(r.pnl || 0) < -eps) row.losses += 1;
+      else row.breakevens += 1;
+      sourceStats.set(src, row);
+    }
+    const bySource = [...sourceStats.values()]
+      .map((row) => {
+        const decisive = row.wins + row.losses;
+        return { ...row, winRate: decisive ? (row.wins / decisive) * 100 : 0 };
+      })
+      .sort((a, b) => Math.abs(b.realizedPnl) - Math.abs(a.realizedPnl));
+
     const unrealizedFromOpenLots = [...lotsByAsset.entries()].reduce((sum, [symbol, lots]) => {
       const currentPrice =
         safeNum(livePriceBySymbol[symbol]) ||
@@ -1158,7 +1258,7 @@ export function JournalModule({
 
     const openLotSymbols = new Set([...lotsByAsset.keys()]);
     const unrealizedFromPortfolioFallback = (portfolio || []).reduce((sum, holding) => {
-      const symbol = normalizeSymbol(holding.symbol);
+      const symbol = normalizeSymbol(holding);
       if (openLotSymbols.has(symbol)) return sum;
       const currentPrice = safeNum(holding.price);
       const qty = safeNum(holding.quantity);
@@ -1200,6 +1300,7 @@ export function JournalModule({
       maxConsecutiveLoss,
       largestLoss: Math.abs(largestLoss) <= eps ? 0 : largestLoss,
       tradedAssetsReport,
+      bySource,
       realizedTrades: realized
     };
   }, [displayTransactions, portfolio, livePriceBySymbol, nowTs, activeOptionsTrades, multiChainCache, spotPrices]);
@@ -1356,24 +1457,38 @@ export function JournalModule({
     const year = calendarCursor.getFullYear();
     const month = calendarCursor.getMonth() + 1;
     const key = `${year}-${String(month).padStart(2, "0")}`;
-    if (snapshotsLoadedFor === key) return undefined;
+    if (snapshotsLoadedFor === key && snapshotFetchState === "ready") return undefined;
     let cancelled = false;
+    setSnapshotFetchState(snapshotsLoadedFor === key ? "idle" : "loading");
     (async () => {
       try {
         const res = await zeninFetch(`/api/history/daily?year=${year}&month=${month}`);
+        if (cancelled) return;
+        if (!res || !res.ok) {
+          // Non-2xx (401/429/5xx) — must NOT render as zero P&L (Fix #6/#17).
+          setSnapshotFetchState("error");
+          setSnapshotsLoadedFor(key);
+          return;
+        }
         const data = res && typeof res.json === "function" ? await res.json() : res;
         const list = (data && Array.isArray(data.snapshots) ? data.snapshots : []) || [];
         if (cancelled) return;
         const map = new Map();
         list.forEach((s) => { if (s && s.date) map.set(s.date, s); });
         setSnapshotsByDate(map);
+        // Distinguish real empty (200 OK, no rows) from an error.
+        setSnapshotFetchState(list.length === 0 ? "empty" : "ready");
         setSnapshotsLoadedFor(key);
       } catch {
-        // Snapshot service unavailable or no history yet — legacy fallback applies.
+        // Network failure / circuit-open — do not render as zero (Fix #6/#17).
+        if (!cancelled) {
+          setSnapshotFetchState("error");
+          setSnapshotsLoadedFor(key);
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [journalView, calendarCursor, snapshotsLoadedFor]);
+  }, [journalView, calendarCursor, snapshotsLoadedFor, snapshotFetchState]);
 
   const frequentTradedSymbols = analytics.tradedAssetsReport
     .filter((row) => row.tradeCount > 0)
@@ -1411,7 +1526,9 @@ export function JournalModule({
       const eq = Number.isFinite(eqRaw)
         ? eqRaw
         : (Number.isFinite(balRaw) && Number.isFinite(pvRaw) ? balRaw + pvRaw : null);
-      if (Number.isFinite(eq)) {
+      // Do NOT store missing equity as $0 — that would fabricate days at zero
+      // (Fix #18: null !== 0). Only real equity observations are recorded.
+      if (Number.isFinite(eq) && eq !== 0) {
         // keep last execution equity snapshot of that day
         equityByDate.set(dayKey, eq);
       }
@@ -1419,18 +1536,25 @@ export function JournalModule({
 
     const today = new Date();
     const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    if (Number.isFinite(totalAccountEquity)) {
+    if (Number.isFinite(totalAccountEquity) && totalAccountEquity !== 0) {
       equityByDate.set(todayKey, Number(totalAccountEquity));
     }
 
     const orderedDates = [...equityByDate.keys()].sort();
     const pnlByDate = new Map();
-    let prevEquity = 10000; // Set initial balance instead of null so first day records PNL
+    // Do not fabricate a $10,000 seed baseline — that would manufacture P&L on
+    // the first known day. Derive the baseline from the first recorded equity; if
+    // only one day exists, P&L for that day is 0 (no delta to compare against).
+    let prevEquity = null;
     for (const day of orderedDates) {
       const eq = Number(equityByDate.get(day));
       if (!Number.isFinite(eq)) continue;
-      pnlByDate.set(day, eq - prevEquity);
-      prevEquity = eq;
+      if (prevEquity == null) {
+        prevEquity = eq; // first observation — no P&L to compute yet
+      } else {
+        pnlByDate.set(day, eq - prevEquity);
+        prevEquity = eq;
+      }
     }
 
     if (selectedSymbols.length === 0) {
@@ -1690,7 +1814,8 @@ export function JournalModule({
 
   const displayedExecutionRows = useMemo(() => {
     const rows = executionRows.slice(0, 8).filter((row) => {
-      if (selectedSymbols.length > 0 && !selectedSymbols.includes(String(row?.asset || "").toUpperCase())) return false;
+      if (selectedSources.size > 0 && !selectedSources.has(resolveSourceId(row))) return false;
+      if (selectedSymbols.length > 0 && !selectedSymbols.includes(String(row?.asset || "").toUpperCase()) && !selectedSymbols.includes(String(row?.name || ""))) return false;
       const entry = mapBySourceTradeKey.get(String(row?.clientId || row?.id || ""));
       if (journalFilters.search.trim()) {
         const blob = `${row?.asset || ""} ${entry?.preThesis || ""} ${entry?.postReview || ""}`.toLowerCase();
@@ -1707,7 +1832,7 @@ export function JournalModule({
       return true;
     });
     return rows;
-  }, [executionRows, selectedSymbols, mapBySourceTradeKey, journalFilters]);
+  }, [executionRows, selectedSymbols, selectedSources, resolveSourceId, mapBySourceTradeKey, journalFilters]);
 
   const todayNotes = useMemo(() => {
     const todayKey = new Date().toISOString().slice(0, 10);
@@ -1780,8 +1905,18 @@ export function JournalModule({
     return {
       id: linked?.id || key,
       sourceId: key,
-      symbol: String(row?.asset || linked?.symbol || "—").toUpperCase(),
+      // Asset identity: canonical symbol first, then the human-readable name
+      // (prediction-market questions, human labels), then the linked Journal
+      // entry's identity. Never collapse a usable identity to "UNKNOWN"/"—".
+      symbol: row?.asset || row?.symbol || row?.name || linked?.symbol || linked?.name || "—",
+      asset: row?.asset || row?.symbol || row?.name || linked?.symbol || linked?.name || null,
+      name: row?.name || row?.asset || row?.symbol || linked?.name || linked?.symbol || "—",
       assetType: String(row?.marketType || linked?.marketType || "Spot"),
+      // Source attribution via the shared connection registry (falls back to the
+      // raw platform/provider string). Drives the multi-select source filter +
+      // the per-source P&L breakdown.
+      source: resolveSourceId(row),
+      sourceLabel: resolveSourceLabel(row),
       date: row?.executionDate || linked?.tradeDate || linked?.createdAt || "—",
       rawDate: row?.executedAt || row?.date || linked?.tradeDate || linked?.createdAt,
       setup: linked?.setupTag || linked?.strategy || row?.strategyName || "Breakout",
@@ -1846,7 +1981,8 @@ export function JournalModule({
       if (!haystack.includes(query)) return false;
     }
     if (!isWithinJournalDateWindow(row.rawDate || row.date, journalFilters.dateWindow)) return false;
-    if (selectedSymbols.length && !selectedSymbols.includes(row.symbol)) return false;
+    if (selectedSources.size > 0 && !selectedSources.has(row.source)) return false;
+    if (selectedSymbols.length && !selectedSymbols.includes(row.symbol) && !selectedSymbols.includes(row.name)) return false;
     if (journalFilters.strategy !== "all" && String(row.setup || "").toLowerCase() !== journalFilters.strategy) return false;
     if (journalFilters.regime !== "all" && String(row.regime || "").toLowerCase() !== journalFilters.regime) return false;
     if (journalFilters.side !== "all" && String(row.side || "").toLowerCase() !== journalFilters.side) return false;
@@ -1901,7 +2037,8 @@ export function JournalModule({
 
   const resetFilters = () => {
     setSelectedSymbols([]);
-    setJournalFilters((prev) => ({ ...prev, dateWindow: "all", strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", source: "all", search: "" }));
+    setSelectedSources(new Set());
+    setJournalFilters((prev) => ({ ...prev, dateWindow: "all", strategy: "all", timeframe: "all", regime: "all", side: "all", status: "all", search: "" }));
   };
 
   const saveJournalNoteEntry = ({ title, body, status = "Saved", learned = "" }) => {
@@ -2240,6 +2377,7 @@ export function JournalModule({
               formatValue={formatValue}
             />
           ) : journalView === "overview" ? (
+            <>
             <JournalDebriefDashboard
               dateKey={activeDebriefDate}
               syncTimestampLabel={syncTimestampLabel}
@@ -2278,6 +2416,8 @@ export function JournalModule({
               reviewModeActive={isReviewModeActive}
               onClassify={handleClassifyEvent}
             />
+            <JournalBySourcePanel bySource={analytics.bySource} connOptions={connOptions} formatValue={formatValue} />
+            </>
           ) : journalView === "entries" ? (
             <JournalEntriesView
               rows={entriesPageRows}
@@ -2294,6 +2434,9 @@ export function JournalModule({
               regimeOptions={regimeOptions}
               selectedSymbols={selectedSymbols}
               setSelectedSymbols={setSelectedSymbols}
+              connOptions={connOptions}
+              selectedSources={selectedSources}
+              setSelectedSources={setSelectedSources}
               onReset={resetFilters}
               onNewEntry={openNewEntry}
               onOpenDetail={openTradeDetail}
@@ -2306,6 +2449,7 @@ export function JournalModule({
               calendarMonthLabel={calendarMonthLabel}
               monthDateRangeLabel={monthDateRangeLabel}
               calendarCells={calendarCells}
+              snapshotFetchState={snapshotFetchState}
               selectedDay={selectedDay}
               selectedDayTrades={selectedDayTrades}
               onSelectDay={setSelectedCalendarDay}
@@ -2558,8 +2702,8 @@ function JournalDebriefDashboard(props) {
             </div>
           </div>
           <div className="journal-debrief-queue-list">
-            {reviewQueueItems.length ? reviewQueueItems.map((item) => (
-              <div key={item.title} className={`journal-debrief-queue-item ${item.tone || "info"}`}>
+            {reviewQueueItems.length ? reviewQueueItems.map((item, rqi) => (
+              <div key={`${item.title || "item"}-${rqi}`} className={`journal-debrief-queue-item ${item.tone || "info"}`}>
                 <strong>{item.title}</strong>
                 <p>{item.detail}</p>
               </div>
@@ -2598,7 +2742,7 @@ function JournalDebriefDashboard(props) {
                   const tone = Number(row.pnl || 0) >= 0 ? "positive" : "negative";
                   const reviewCopy = row.review || row.entry?.postReview || row.entry?.preThesis || "No review note logged.";
                   return (
-                    <tr key={`${row.id || row.sourceId || row.symbol}-${index}`} onClick={() => onOpenTrade(row)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" ? onOpenTrade(row) : null}>
+                    <tr key={`trade-${index}-${row.sourceId || row.id || row.symbol}-${row.rawDate || row.date || ""}`} onClick={() => onOpenTrade(row)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" ? onOpenTrade(row) : null}>
                       <td><JournalSymbolCell row={row} /></td>
                       <td>{row.setup || "Setup"}</td>
                       <td><JournalSideChip side={row.side} /></td>
@@ -2638,8 +2782,8 @@ function JournalDebriefDashboard(props) {
             </div>
           </div>
           <div className="journal-debrief-pattern-list">
-            {behaviorPatterns.map((item) => (
-              <div key={item.label} className={`journal-debrief-pattern ${item.tone || "neutral"}`}>
+            {behaviorPatterns.map((item, bpi) => (
+              <div key={`${item.label || "pattern"}-${bpi}`} className={`journal-debrief-pattern ${item.tone || "neutral"}`}>
                 <span>{item.label}</span>
                 <strong>{item.value}</strong>
                 <p>{item.helper}</p>
@@ -2832,6 +2976,9 @@ function JournalEntriesView({
   regimeOptions,
   selectedSymbols,
   setSelectedSymbols,
+  connOptions = [],
+  selectedSources,
+  setSelectedSources,
   onReset,
   onNewEntry,
   onOpenDetail,
@@ -2853,6 +3000,9 @@ function JournalEntriesView({
         regimeOptions={regimeOptions}
         selectedSymbols={selectedSymbols}
         setSelectedSymbols={setSelectedSymbols}
+        connOptions={connOptions}
+        selectedSources={selectedSources}
+        setSelectedSources={setSelectedSources}
         onReset={onReset}
       />
       {rows.length ? (
@@ -2873,7 +3023,159 @@ function JournalEntriesView({
   );
 }
 
-function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilters, symbolOptions, setupOptions, regimeOptions, selectedSymbols, setSelectedSymbols, onReset }) {
+// Per-source realized-P&L breakdown. Renders each connection's win rate, realized
+// P&L, and volume from the analytics.bySource rollup. Source ids resolve to the
+// connection registry labels; unresolved ids fall back to a title-cased string.
+function JournalBySourcePanel({ bySource = [], connOptions = [], formatValue = (v) => v }) {
+  const labelFor = useMemo(() => {
+    const map = new Map(connOptions.map((o) => [o.value, o.label]));
+    return (id) => {
+      if (map.has(id)) return map.get(id);
+      return id === "unknown" ? "Unknown" : (String(id).charAt(0).toUpperCase() + String(id).slice(1));
+    };
+  }, [connOptions]);
+  if (!Array.isArray(bySource) || bySource.length === 0) return null;
+  return (
+    <section className="journal-by-source-panel">
+      <div className="journal-by-source-head">
+        <h3>Performance by Source</h3>
+        <p>Realized P&amp;L, win rate, and volume per connected source.</p>
+      </div>
+      <DataTable
+        columns={[
+          { key: "sourceLabel", header: "Source", sortable: false, cell: (row) => <strong>{row.sourceLabel}</strong> },
+          { key: "trades", header: "Trades", sortable: false, align: "right" },
+          {
+            key: "winRate",
+            header: "Win Rate",
+            sortable: false,
+            align: "right",
+            cell: (row) => <span className={row.winRate >= 50 ? "positive" : "negative"}>{row.winRate.toFixed(1)}%</span>,
+          },
+          {
+            key: "realizedPnl",
+            header: "Realized P&L",
+            sortable: false,
+            align: "right",
+            cell: (row) => <span className={row.realizedPnl >= 0 ? "positive" : "negative"}>{formatValue(row.realizedPnl, true)}</span>,
+          },
+          { key: "volume", header: "Volume", sortable: false, align: "right", cell: (row) => formatValue(row.volume) },
+        ]}
+        data={bySource.map((row) => ({ ...row, sourceLabel: labelFor(row.source) }))}
+        getRowId={(row) => row.source}
+        emptyState={<div className="journal-by-source-empty">No closed trades yet.</div>}
+        className="journal-by-source-table"
+      />
+    </section>
+  );
+}
+
+// Searchable multi-select for ticker/name filtering. Empty selection = all.
+function JournalSymbolMultiSelect({ symbolOptions = [], selectedSymbols = [], setSelectedSymbols }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selectedSet = useMemo(() => new Set(selectedSymbols), [selectedSymbols]);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return symbolOptions;
+    return symbolOptions.filter((s) => String(s).toLowerCase().includes(q));
+  }, [symbolOptions, query]);
+  const label = selectedSet.size === 0
+    ? "All Symbols"
+    : selectedSet.size === 1
+      ? [...selectedSet][0]
+      : `${selectedSet.size} symbols`;
+  const toggle = (symbol) => setSelectedSymbols((prev) => {
+    const set = new Set(prev);
+    if (set.has(symbol)) set.delete(symbol); else set.add(symbol);
+    return [...set];
+  });
+  return (
+    <div className="journal-filter-field">
+      <span className="journal-filter-label">Symbol</span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type="button" className="journal-multiselect-trigger">
+            <span>{label}</span>
+            <ChevronDown size={14} aria-hidden />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="journal-multiselect-pop">
+          <div className="journal-multiselect-search">
+            <Search size={14} aria-hidden />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search symbols..."
+              className="journal-multiselect-input"
+            />
+          </div>
+          {selectedSet.size > 0 && (
+            <button type="button" className="journal-multiselect-clear" onClick={() => setSelectedSymbols([])}>Clear</button>
+          )}
+          <div className="journal-multiselect-list">
+            {filtered.length === 0 && <div className="journal-multiselect-empty">No symbols</div>}
+            {filtered.map((symbol) => (
+              <label key={symbol} className="journal-multiselect-item">
+                <Checkbox checked={selectedSet.has(symbol)} onCheckedChange={() => toggle(symbol)} />
+                <span>{symbol}</span>
+              </label>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+// Multi-select for connected sources. Empty selection = All Sources. Options come
+// from the live connection registry (connectedAccounts + brokerageAccounts).
+function JournalSourceMultiSelect({ connOptions = [], selectedSources, setSelectedSources }) {
+  const [open, setOpen] = useState(false);
+  const label = !selectedSources || selectedSources.size === 0
+    ? "All Sources"
+    : selectedSources.size === 1
+      ? (connOptions.find((o) => o.value === [...selectedSources][0])?.label || "1 source")
+      : `${selectedSources.size} sources`;
+  const toggle = (value) => setSelectedSources((prev) => {
+    const next = new Set(prev);
+    if (next.has(value)) next.delete(value); else next.add(value);
+    return next;
+  });
+  return (
+    <div className="journal-filter-field">
+      <span className="journal-filter-label">Source</span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type="button" className="journal-multiselect-trigger">
+            <span>{label}</span>
+            <ChevronDown size={14} aria-hidden />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="journal-multiselect-pop">
+          <div className="journal-multiselect-head">
+            <span className="journal-multiselect-title">Connections</span>
+            {selectedSources && selectedSources.size > 0 && (
+              <button type="button" className="journal-multiselect-clear" onClick={() => setSelectedSources(new Set())}>Clear</button>
+            )}
+          </div>
+          <div className="journal-multiselect-list">
+            {connOptions.length === 0 && <div className="journal-multiselect-empty">No connected sources</div>}
+            {connOptions.map((opt) => (
+              <label key={opt.value} className="journal-multiselect-item">
+                <Checkbox checked={!!selectedSources && selectedSources.has(opt.value)} onCheckedChange={() => toggle(opt.value)} />
+                <span>{opt.label}</span>
+              </label>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilters, symbolOptions, setupOptions, regimeOptions, selectedSymbols, setSelectedSymbols, connOptions = [], selectedSources, setSelectedSources, onReset }) {
   return (
     <div className="journal-filter-toolbar">
       <InlineControlGroup className="journal-filter-chip-row">
@@ -2892,13 +3194,16 @@ function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilte
           Last 30D
         </button>
       </InlineControlGroup>
-      <label>
-        <span>Symbol</span>
-        <select value={selectedSymbols[0] || ""} onChange={(event) => setSelectedSymbols(event.target.value ? [event.target.value] : [])}>
-          <option value="">All Symbols</option>
-          {symbolOptions.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
-        </select>
-      </label>
+      <JournalSymbolMultiSelect
+        symbolOptions={symbolOptions}
+        selectedSymbols={selectedSymbols}
+        setSelectedSymbols={setSelectedSymbols}
+      />
+      <JournalSourceMultiSelect
+        connOptions={connOptions}
+        selectedSources={selectedSources}
+        setSelectedSources={setSelectedSources}
+      />
       <label>
         <span>Setup</span>
         <select value={filters.strategy} onChange={(event) => setFilters((prev) => ({ ...prev, strategy: event.target.value }))}>
@@ -2930,16 +3235,6 @@ function JournalFilters({ filters, setFilters, showMoreFilters, setShowMoreFilte
               <option value="open">Open</option>
               <option value="closed">Closed</option>
               <option value="review">Review</option>
-            </select>
-          </label>
-          <label>
-            <span>Source</span>
-            <select value={filters.source} onChange={(event) => setFilters((prev) => ({ ...prev, source: event.target.value }))}>
-              <option value="all">All Sources</option>
-              <option value="hyperliquid">Hyperliquid</option>
-              <option value="brokerage">Brokerage (SnapTrade)</option>
-              <option value="exchange">Exchange</option>
-              <option value="manual">Manual</option>
             </select>
           </label>
           <button type="button" className="journal-btn secondary" onClick={onReset}>Reset</button>
@@ -3029,11 +3324,17 @@ function JournalEntryCard({ row, onOpenDetail, formatValue }) {
 }
 
 function JournalSymbolCell({ row }) {
+  // Human-readable label hierarchy: canonical symbol first; when no ticker
+  // symbol exists (prediction-market fills, human labels), surface the name
+  // instead of a generic "Unknown"/"—" sentinel.
+  const symbol = row?.symbol || row?.asset || null;
+  const label = symbol || row?.name || "Unknown";
+  const display = String(label).toUpperCase();
   return (
     <div className="journal-symbol-cell">
-      <span>{String(row.symbol || "A")[0]}</span>
+      <span>{String(display || "A")[0]}</span>
       <div>
-        <strong>{row.symbol}</strong>
+        <strong>{display}</strong>
         <small>{row.assetType || "Spot"}</small>
       </div>
     </div>
@@ -3056,7 +3357,7 @@ function ConfidenceDots({ value }) {
   return <span className="journal-confidence" aria-label={`Confidence ${count} of 5`}>{"●".repeat(count)}{"○".repeat(5 - count)}</span>;
 }
 
-function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendarCells, selectedDay, selectedDayTrades, onSelectDay, onMoveMonth, onViewTrades, selectedSymbol, setSelectedSymbols, symbolOptions, monthPnL, bestDay, worstDay, avgDayPnL, profitableDays, losingDays, breakevenDays, formatValue }) {
+function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendarCells, snapshotFetchState, selectedDay, selectedDayTrades, onSelectDay, onMoveMonth, onViewTrades, selectedSymbol, setSelectedSymbols, symbolOptions, monthPnL, bestDay, worstDay, avgDayPnL, profitableDays, losingDays, breakevenDays, formatValue }) {
   const summary = [
     ["Month P&L", monthPnL, monthPnL >= 0 ? "positive" : "negative", true],
     ["Best Day", bestDay, "positive", true],
@@ -3089,6 +3390,21 @@ function JournalCalendarView({ calendarMonthLabel, monthDateRangeLabel, calendar
           </select>
         </div>
       </div>
+      {snapshotFetchState === "loading" && (
+        <div className="journal-calendar-state" role="status">
+          <span className="journal-calendar-state-text">Loading historical data…</span>
+        </div>
+      )}
+      {snapshotFetchState === "error" && (
+        <div className="journal-calendar-state journal-calendar-state-error" role="status">
+          <span className="journal-calendar-state-text">Historical data unavailable for this period.</span>
+        </div>
+      )}
+      {snapshotFetchState === "empty" && calendarCells.every((c) => c.type !== "day") && (
+        <div className="journal-calendar-state journal-calendar-state-empty" role="status">
+          <span className="journal-calendar-state-text">No historical data for this period.</span>
+        </div>
+      )}
       <div className="journal-calendar-layout">
         <div>
           <div className="journal-week-header">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div>
@@ -3428,10 +3744,10 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
             </div>
 
             <div className="journal-day-trades-list">
-              {visibleRows.length ? visibleRows.map((row) => {
+              {visibleRows.length ? visibleRows.map((row, tri) => {
                 const tradeTime = new Date(row.rawDate || row.date || Date.now());
                 return (
-                  <article key={row.id} className="journal-day-trade-row">
+                  <article key={`${row.id || row.sourceId || `trade-${tri}`}-${tri}`} className="journal-day-trade-row">
                     <div className="journal-day-trade-time">
                       <strong>{tradeTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</strong>
                       <span>{tradeTime.toLocaleDateString()}</span>
@@ -3517,8 +3833,8 @@ function JournalCalendarDayView({ dateKey, rows, availableDateKeys, onBack, onNa
               <section className="journal-card">
                 <div className="journal-section-head"><h3>Review</h3></div>
                 <div className="journal-day-notes-list">
-                  {notesBlocks.map((item) => (
-                    <div key={item.label}>
+                  {notesBlocks.map((item, nbi) => (
+                    <div key={`${item.label || "note"}-${nbi}`}>
                       <span>{item.label}</span>
                       <p>{item.value}</p>
                     </div>
@@ -4370,8 +4686,8 @@ function JournalReportsView({ onToast = () => {}, formatValue = () => "" }) {
                   <div className="journal-report-symbols">
                     <span className="zenin-eyebrow">Top symbols</span>
                     <div className="journal-report-symbol-chips">
-                      {s.topSymbols.map((t) => (
-                        <span key={t.symbol} className="journal-report-symbol-chip">{t.symbol} · {t.count}</span>
+                      {s.topSymbols.map((t, tsi) => (
+                        <span key={`${t.symbol || "sym"}-${tsi}`} className="journal-report-symbol-chip">{t.symbol} · {t.count}</span>
                       ))}
                     </div>
                   </div>

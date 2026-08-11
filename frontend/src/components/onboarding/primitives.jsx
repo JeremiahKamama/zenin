@@ -157,9 +157,9 @@ export function SetupPreview({ plan, answers }) {
       ? "Not imported"
       : answers.portfolio.method.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
     : "Not imported";
-  const modules = plan === "pro"
+  const modules = plan === "plus" || plan === "pro"
     ? ["Research", "Journal", "Decisions", "Portfolio", "Options Desk"]
-    : plan === "desk"
+    : plan === "premium" || plan === "desk"
     ? ["Research", "Journal", "Decisions", "Portfolio", "Team"]
     : ["Research", "Journal", "Decisions", "Portfolio"];
   const optMode = answers.horizon ? answers.horizon.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—";

@@ -18,6 +18,10 @@ const formatMacroValue = (value, key = "") => {
 
 const formatMetricDate = (value) => {
   if (!value) return "—";
+  const str = String(value).trim();
+  // World Bank series are year-granularity (e.g. "2025"). new Date("2025")
+  // parses as Jan 1 of that year, so show the year directly instead of "01/01".
+  if (/^\d{4}$/.test(str)) return str;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
   const day = String(parsed.getDate()).padStart(2, "0");

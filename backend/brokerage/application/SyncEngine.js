@@ -53,6 +53,10 @@ function createSyncEngine(options) {
   if (!repository) {
     throw new TypeError("createSyncEngine requires a brokerage repository.");
   }
+  // Optional dual-write hook (e.g. unified portfolio canonical layer). Called
+  // with a normalized source object after a successful connection sync. No-op
+  // when not provided, so it can never affect the primary brokerage sync.
+  const onSourceSync = typeof options.onSourceSync === "function" ? options.onSourceSync : null;
 
   const retryOptions = options.retry || {};
   const rateLimitDefaults = options.rateLimit || {};
@@ -133,6 +137,9 @@ function createSyncEngine(options) {
 
       /** @type {Map<string, number>} providerAccountId -> db id */
       const accountIdMap = new Map();
+      const sourceAccounts = [];
+      const sourcePositions = [];
+      const sourceTransactions = [];
 
       for (const account of accounts) {
         if (accountFilter && !accountFilter.has(String(account.id))) continue;
@@ -184,6 +191,34 @@ function createSyncEngine(options) {
             latestExecutedAt = tx.executedAt;
           }
         }
+        sourceAccounts.push({ externalAccountId: String(account.id), label: String(account.name || account.institutionName || account.id), nativeCurrency: String(account.currency || "USD") });
+        for (const h of holdingRows) {
+          sourcePositions.push({
+            symbol: String(h.symbol || "").toUpperCase(),
+            name: String(h.name || h.symbol || ""),
+            assetType: String(h.asset_type || "other").toLowerCase(),
+            quantity: Number(h.quantity || 0),
+            averageEntryPrice: h.average_entry_price != null ? Number(h.average_entry_price) : null,
+            currentPrice: h.current_price != null ? Number(h.current_price) : null,
+            marketValue: h.market_value != null ? Number(h.market_value) : (Number(h.quantity || 0) * Number(h.current_price || 0)) || null,
+            currency: String(h.currency || "USD").toUpperCase(),
+            accountId: String(account.id)
+          });
+        }
+        for (const tx of transactions.map(mapTransactionToDb)) {
+          sourceTransactions.push({
+            providerTxId: String(tx.provider_tx_id || `${tx.symbol}-${tx.executed_at}`),
+            type: String(tx.type || "other"),
+            side: tx.side || null,
+            symbol: tx.symbol || null,
+            quantity: tx.quantity != null ? Number(tx.quantity) : null,
+            unitPrice: tx.unit_price != null ? Number(tx.unit_price) : null,
+            notional: tx.notional != null ? Number(tx.notional) : null,
+            fee: tx.fee != null ? Number(tx.fee) : null,
+            currency: String(tx.currency || "USD").toUpperCase(),
+            executedAt: tx.executed_at
+          });
+        }
       }
 
       const syncedAt = new Date().toISOString();
@@ -203,6 +238,37 @@ function createSyncEngine(options) {
         syncedAt,
         meta: nextMeta
       });
+
+      // Dual-write to any registered canonical layer (flag-gated on the
+      // consumer side; never throws into the primary brokerage sync).
+      if (onSourceSync && (sourceAccounts.length || sourcePositions.length)) {
+        try {
+          await Promise.resolve(onSourceSync({
+            workspaceId: connection.workspaceId || null,
+            sourceType: "brokerage",
+            provider: provider.providerKey,
+            label: provider.providerKey,
+            externalConnectionId: String(connection.id),
+            accessMode: "oauth_read",
+            connectionStatus: "connected",
+            syncStatus: "synced",
+            capabilities: { positions: true, cash: false, transactions: true },
+            metadata: { connectionId: String(connection.id), providerUserRef: connection.providerUserRef || null },
+            nativeCurrency: "USD",
+            accounts: sourceAccounts,
+            positions: sourcePositions,
+            cash: [],
+            transactions: sourceTransactions
+          }));
+        } catch (dualWriteErr) {
+          sentry.addBreadcrumb({
+            category: "brokerage.sync",
+            type: "error",
+            message: "onSourceSync failed (non-fatal)",
+            data: { error: String(dualWriteErr && dualWriteErr.message || dualWriteErr) }
+          });
+        }
+      }
 
       sentry.addBreadcrumb({
         category: "brokerage.sync",

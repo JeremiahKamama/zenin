@@ -4,7 +4,7 @@ import "./public.css";
 import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
 import { zeninFetchJson } from "./utils/zeninFetch";
-import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/backendAuth";
+import { persistZeninAuth, startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/backendAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { PasswordRequirementsList } from "@/components/ui/async-state";
 
@@ -146,6 +146,12 @@ export default function AuthPage() {
     if (!me?.authenticated || !me?.user) {
       throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
     }
+    // Persist the real auth user so App.jsx's hydration does not fall through
+    // to dev-full-access or guest mode (stale snapshot bleed-through). This
+    // also ensures `zenin_auth_user` reflects the real account, not the
+    // dev-full-access stub from a prior guest session.
+    persistZeninAuth(me);
+    try { localStorage.removeItem("zenin_guest_full_access"); } catch {}
     redirectToApp();
   };
 

@@ -20,7 +20,114 @@ function isEnabled() {
   return String(process.env.ZENIN_UNIFIED_PORTFOLIO || "").toLowerCase() === "true";
 }
 
-const USD_EQUIVALENTS = new Set(["USD", "USDC"]);
+// FX-equivalent currencies (treated 1:1 with the USD base) come from the shared
+// stablecoin registry. Importantly this includes USDT — previously this set was
+// {USD, USDC} only, so a USDT cash row was flagged `missing_fx` and silently
+// dropped from the headline. Now USDT/USDC/BUSD/DAI/... all convert 1:1.
+const { USD_EQUIVALENTS } = require("./stablecoins");
+
+// Yahoo Finance benchmark feed (token-free) for SPY / crypto benchmarks.
+const { loadYahooSeries } = require("./portfolioSnapshots");
+
+// ---------------------------------------------------------------------------
+// Transaction type classification (source-of-truth)
+// ---------------------------------------------------------------------------
+// `type` is the transaction / event type. `side` is the buy/sell direction.
+// Exchange fills are executions: their `type` should be "trade" or "fill",
+// NEVER "buy"/"sell" (which is the side). The legacy negative-list
+// classification (`!["trade","fill","other"].includes(type)`) treated
+// buy/sell sides as cash flows — a financial-integrity bug that polluted
+// portfolio_cash_flows and could corrupt TWR/MWR/performance.
+//
+// EXECUTION_TYPES — rows that are trade/fill executions, NOT cash flows.
+// CASH_FLOW_TYPES — rows that are genuine external capital events.
+// ---------------------------------------------------------------------------
+const EXECUTION_TYPES = new Set(["trade", "fill", "buy", "sell", "crypto"]);
+const CASH_FLOW_TYPES = new Set([
+  "deposit", "deposit_cash", "transfer_in", "withdrawal", "withdrawal_cash",
+  "transfer_out", "transfer", "dividend", "interest", "fee", "tax",
+  "corporate_action", "split", "adjustment"
+]);
+
+// Normalize a raw type/side into a canonical execution vs cash-flow decision.
+// Returns null for execution types (they are NOT cash flows) and the canonical
+// flow type string for genuine cash-flow events.
+function classifyCashFlow(rawType) {
+  const txType = String(rawType || "trade").toLowerCase().trim();
+  // Execution / fill / position events are never cash flows.
+  if (EXECUTION_TYPES.has(txType)) return null;
+  if (CASH_FLOW_TYPES.has(txType)) {
+    if (["deposit", "deposit_cash", "transfer_in"].includes(txType)) return "deposit";
+    if (["withdrawal", "withdrawal_cash", "transfer_out", "transfer"].includes(txType)) return "withdrawal";
+    if (txType === "dividend") return "dividend";
+    if (txType === "interest") return "interest";
+    if (["fee", "tax"].includes(txType)) return "fee";
+    if (txType === "corporate_action" || txType === "split" || txType === "adjustment") return "corporate_action";
+    return txType;
+  }
+  // Unknown types: do NOT fabricate cash flows. Surface as "other" cash only
+  // when there is a positive notional/amount (a real monetary movement).
+  return null;
+}
+
+// Normalize a transaction type so executions carry "trade"/"fill" and side stays
+// in `side`. This collapses legacy conflation where exchange fills stored
+// type=buy/sell (the side) into a proper event type.
+function normalizeTxType(rawType) {
+  const t = String(rawType || "").toLowerCase().trim();
+  if (EXECUTION_TYPES.has(t)) return "trade";
+  if (CASH_FLOW_TYPES.has(t)) return t;
+  return t || "other";
+}
+
+// Whether a canonical transaction row is a renderable execution (trade/fill)
+// suitable for the Home Execution Log, vs a cash/event/position row.
+function isExecutableTx(tx) {
+  if (!tx) return false;
+  const t = String(tx.type || "trade").toLowerCase().trim();
+  return EXECUTION_TYPES.has(t);
+}
+
+// Normalise a raw source transaction into the canonical display shape used by
+// the Home Execution Log. Collapses the legacy {asset, price} schema and the
+// unified {symbol, unitPrice, executedAt, providerTxId} schema into one
+// predictable shape.
+function normalizeTransaction(t) {
+  const ts = new Date(t?.executedAt ?? t?.date ?? t?.executed_at ?? 0).getTime();
+  const symbol = String(t?.symbol || t?.asset || "").trim().toUpperCase();
+  const unitPrice = t?.unitPrice != null ? Number(t.unitPrice)
+    : (t?.price != null ? Number(t.price) : null);
+  const quantity = t?.quantity != null ? Number(t.quantity) : null;
+  const notionalSrc = t?.notional != null ? Number(t.notional) : null;
+  const notional = Number.isFinite(notionalSrc) && notionalSrc > 0
+    ? notionalSrc
+    : (Number.isFinite(unitPrice) && Number.isFinite(quantity) && unitPrice > 0 && quantity > 0
+      ? unitPrice * quantity
+      : null);
+  const validTs = Number.isFinite(ts) && ts > 0;
+  const validSymbol = symbol.length > 0;
+  const validValue = Number.isFinite(notional) && notional > 0;
+  // Executions need a timestamp, an instrument, and a positive value.
+  const valid = validTs && validSymbol && validValue && isExecutableTx(t);
+  return {
+    id: t?.id || t?.txnId || t?.providerTxId || (symbol && validTs ? `${symbol}-${ts}` : null),
+    symbol,
+    name: String(t?.name || t?.asset || symbol || ""),
+    type: normalizeTxType(t?.type || "trade"),
+    side: String(t?.side || "").toLowerCase() === "sell" ? "sell" : "buy",
+    orderType: String(t?.orderType || t?.order_type || "MKT").trim().toUpperCase(),
+    quantity: quantity,
+    unitPrice: unitPrice,
+    notional: notional,
+    timestamp: validTs ? ts : null,
+    status: t?.status || (valid ? "Filled" : null),
+    source: t?.provider || t?.source || t?.providerName || null,
+    account: t?.sourceAccountId || t?.sourceAccount || null,
+    providerTxId: t?.providerTxId || null,
+    raw: t,
+    valid
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Schema (create + migrate existing Phase-A tables)
@@ -79,10 +186,12 @@ async function ensureUnifiedPortfolioSchema(db) {
       converted_value DOUBLE PRECISION,
       base_currency TEXT NOT NULL DEFAULT 'USD',
       as_of TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      position_metadata JSONB,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
+    );\n  `);
+  // Add position_metadata (idempotent; table may predate this column).
+  await db.query(`ALTER TABLE portfolio_source_positions ADD COLUMN IF NOT EXISTS position_metadata JSONB;`);
   await db.query(`
     CREATE TABLE IF NOT EXISTS portfolio_source_cash (
       id SERIAL PRIMARY KEY,
@@ -139,7 +248,33 @@ async function ensureUnifiedPortfolioSchema(db) {
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(base, quote)
     );
-  `);
+`);
+  // Cash-flow ledger: external capital movements (deposits, withdrawals,
+  // transfers, dividends, interest, fees) that are NOT investment PNL.
+  // Required so that TWR/MWR and the performance curve can distinguish
+  // portfolio returns from external capital flows. Idempotent per
+  // (workspace_id, source_id, provider_tx_id).
+  await db.query(`CREATE TABLE IF NOT EXISTS portfolio_cash_flows (
+      id SERIAL PRIMARY KEY,
+      workspace_id INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+      source_id INTEGER REFERENCES portfolio_sources(id) ON DELETE CASCADE,
+      source_account_id INTEGER REFERENCES portfolio_source_accounts(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      amount DOUBLE PRECISION NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      base_amount DOUBLE PRECISION,
+      base_currency TEXT NOT NULL DEFAULT 'USD',
+      executed_at TIMESTAMPTZ NOT NULL,
+      external_id TEXT,
+      description TEXT,
+      metadata JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(source_id, external_id)
+    );`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_portfolio_cash_flows_workspace ON portfolio_cash_flows (workspace_id, executed_at);`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_portfolio_cash_flows_source ON portfolio_cash_flows (source_id, executed_at);`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_portfolio_cash_flows_txid ON portfolio_cash_flows (source_id, external_id);`);
 
   // Stable source identity + enrichment columns (migrate Phase-A tables).
   // MUST run before the unique index that references external_connection_id.
@@ -162,6 +297,8 @@ async function ensureUnifiedPortfolioSchema(db) {
   await db.query(`ALTER TABLE portfolio_source_positions ADD COLUMN IF NOT EXISTS leverage DOUBLE PRECISION;`);
   await db.query(`ALTER TABLE portfolio_source_positions ADD COLUMN IF NOT EXISTS liquidation_price DOUBLE PRECISION;`);
   await db.query(`ALTER TABLE portfolio_source_positions ADD COLUMN IF NOT EXISTS unrealized_pnl DOUBLE PRECISION;`);
+  await db.query(`ALTER TABLE portfolio_source_transactions ADD COLUMN IF NOT EXISTS name TEXT;`);
+  await db.query(`ALTER TABLE portfolio_source_transactions ADD COLUMN IF NOT EXISTS realized_pnl DOUBLE PRECISION;`);
 
   // CRITICAL IDENTITY FIX (spec Invariant 3/4): the original unique key
   // (source_id, COALESCE(account_id,0), symbol) collided BTC spot vs BTC perp
@@ -407,17 +544,25 @@ function mapExchangeWalletToSource(output, { workspaceId, address, connectionId,
     accounts: [{ externalAccountId: String(address || provider), label: `${normalizedProvider} ${normalizedSourceType === "exchange" ? "Exchange" : "Wallet"}`, nativeCurrency: String(output.currency || "USDC").toUpperCase() }],
     positions,
     cash,
-    transactions: (Array.isArray(output.trades) ? output.trades : []).map((t, idx) => ({
-      providerTxId: t.platformTradeId || t.id || `txn-${idx}`,
-      type: t.side || t.type || "trade",
+    transactions: (Array.isArray(output.tradeFills) ? output.tradeFills : (Array.isArray(output.trades) ? output.trades : [])).map((t, idx) => ({
+      // Prefer tradeFills: they carry per-fill realized PnL (Hyperliquid
+      // `closedPnl`) which is the correct source for Best Trades / Asset
+      // Performance. `output.trades` (record.trade) lacks realizedPnl.
+      providerTxId: t.platformFillId || t.platformTradeId || t.id || `txn-${idx}`,
+      // `type` is the transaction/event type (trade/fill/dividend/etc.), NEVER the
+      // buy/sell side. `tradeFill` records from buildTradeAndFillRecord carry no
+      // `type` field (the type is implied to be a trade/fill), so default to "trade".
+      // Using t.side here would corrupt cash-flow classification downstream.
+      type: normalizeTxType(t.type || "trade"),
       side: t.side || null,
-      symbol: t.symbol || null,
+      symbol: t.symbol || t.asset || null,
       quantity: t.quantity != null ? Number(t.quantity) : null,
       unitPrice: t.price != null ? Number(t.price) : (t.unitPrice != null ? Number(t.unitPrice) : null),
       notional: t.notional != null ? Number(t.notional) : null,
-      fee: t.fee != null ? Number(t.fee) : null,
+      fee: t.fee != null ? Number(t.fee) : (t.feeAmount != null ? Number(t.feeAmount) : null),
       currency: t.currency || t.feeCurrency || "USD",
-      executedAt: t.executedAt || t.executed_at || t.date || null
+      executedAt: t.executedAt || t.executed_at || t.date || null,
+      realizedPnl: t.realizedPnl != null ? Number(t.realizedPnl) : null
     }))
   };
 }
@@ -534,7 +679,11 @@ function mapSnapTradeToSource({ accounts, holdings, positions, transactions, con
   });
   const txList = (transactions || []).map((t) => ({
     providerTxId: String(t.provider_tx_id || `${t.symbol}-${t.executed_at}`),
-    type: String(t.type || "other"),
+    // Canonicalize execution types: buy/sell conflate with side, so map them to
+    // "trade". Only genuine cash-flow event types (deposit/withdrawal/etc.) are
+    // preserved here; everything else defaults to "other". This prevents the
+    // negative-list cash-flow classifier from treating fills as cash flows.
+    type: normalizeTxType(t.type || "other"),
     side: t.side || null,
     symbol: t.symbol || null,
     quantity: t.quantity != null ? Number(t.quantity) : null,
@@ -561,7 +710,7 @@ function mapSnapTradeToSource({ accounts, holdings, positions, transactions, con
   };
 }
 
-function mapPredictionWalletToSource({ walletAddress, provider = "polymarket", positions = [], transactions = [], connectionId, label, nativeCurrency = "USD" } = {}) {
+function mapPredictionWalletToSource({ walletAddress, provider = "polymarket", positions = [], transactions = [], cashBalance, cash = [], connectionId, label, nativeCurrency = "USD" } = {}) {
   const normalizedAddress = String(walletAddress || connectionId || provider).trim();
   const positionList = (positions || []).map((p) => {
     const symbol = String(p.symbol || p.marketId || p.slug || p.question || "PREDICTION").toUpperCase();
@@ -582,14 +731,16 @@ function mapPredictionWalletToSource({ walletAddress, provider = "polymarket", p
       currentPrice: price,
       marketValue,
       currency: String(p.currency || nativeCurrency || "USD").toUpperCase(),
-      accountId: normalizedAddress
+      accountId: normalizedAddress,
+      metadata: p.metadata && typeof p.metadata === "object" ? p.metadata : null
     };
   });
   const txList = (transactions || []).map((t) => ({
     providerTxId: String(t.providerTxId || t.id || `${t.marketId || t.symbol || "prediction"}-${t.executedAt || t.createdAt || Date.now()}`),
-    type: String(t.type || "prediction_trade"),
+    type: normalizeTxType(t.type || "trade"),
     side: t.side || null,
     symbol: t.symbol || t.marketId || null,
+    name: t.name || null,
     quantity: t.quantity != null ? Number(t.quantity) : null,
     unitPrice: t.unitPrice != null ? Number(t.unitPrice) : t.price != null ? Number(t.price) : null,
     notional: t.notional != null ? Number(t.notional) : null,
@@ -606,11 +757,23 @@ function mapPredictionWalletToSource({ walletAddress, provider = "polymarket", p
     accessMode: "wallet_public",
     connectionStatus: "connected",
     syncStatus: "synced",
-    capabilities: { positions: true, cash: false, transactions: true, publicMarketFeed: true },
+    capabilities: { positions: true, cash: true, transactions: true, publicMarketFeed: true },
     metadata: { walletAddress: normalizedAddress },
     accounts: [{ externalAccountId: normalizedAddress, label: "Prediction wallet", nativeCurrency: String(nativeCurrency || "USD").toUpperCase() }],
     positions: positionList,
-    cash: [],
+    // Materialize a USDC cash row when a balance is supplied. Polymarket settles in
+    // USDC; the fetcher currently reports 0 until a live balance source is wired
+    // (see syncPolymarket TODO). When 0/absent we emit no row rather than fabricate
+    // a $0 balance — capabilities.cash stays true so the consumer knows cash is
+    // supported, but the canonical layer only stores a real balance.
+    cash: (() => {
+      const explicit = (Array.isArray(cash) ? cash : []).map((c) => ({ currency: String(c.currency || nativeCurrency || "USD").toUpperCase(), amount: Number(c.amount || 0) })).filter((c) => Number.isFinite(c.amount) && c.amount !== 0);
+      const balance = Number(cashBalance);
+      if (Number.isFinite(balance) && balance !== 0) {
+        return [{ currency: String(nativeCurrency || "USD").toUpperCase(), amount: balance }];
+      }
+      return explicit;
+    })(),
     transactions: txList
   };
 }
@@ -627,10 +790,17 @@ async function recordSourceSync(db, workspaceId, source) {
   const identity = [workspaceId, source.provider, source.sourceType, source.externalConnectionId || ""];
   let sourceId;
   try {
+    // Dedup on (workspace, provider, source_type, external_connection_id).
+    // ALSO fall back to matching the resolved wallet address (wallet sources) so
+    // re-connecting the same address reuses one source instead of spawning dupes.
+    const addr = source.metadata && source.metadata.address ? String(source.metadata.address) : null;
     const existing = await db.query(
       `SELECT id FROM portfolio_sources
-       WHERE workspace_id=$1 AND provider=$2 AND source_type=$3 AND COALESCE(external_connection_id,'')=$4`,
-      identity
+       WHERE workspace_id=$1 AND provider=$2 AND source_type=$3
+         AND (COALESCE(external_connection_id,'')=$4
+              ${addr ? "OR metadata->>'address'=$5" : ""})
+       LIMIT 1`,
+      addr ? [...identity, addr] : identity
     );
     if (existing.rows.length) {
       sourceId = existing.rows[0].id;
@@ -687,8 +857,8 @@ async function recordSourceSync(db, workspaceId, source) {
         `INSERT INTO portfolio_source_positions
           (source_id, account_id, symbol, instrument_key, name, asset_type, instrument_type, position_type, side,
            quantity, average_entry_price, cost_basis, current_price, market_value, notional_value, collateral_value,
-           leverage, liquidation_price, unrealized_pnl, native_currency, base_currency)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'USD')
+           leverage, liquidation_price, unrealized_pnl, native_currency, base_currency, position_metadata)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'USD',$21)
           ON CONFLICT (source_id, COALESCE(account_id,0), symbol, COALESCE(instrument_type,'spot'), COALESCE(position_type,'balance'), COALESCE(side,'balance')) DO UPDATE SET
             instrument_key=EXCLUDED.instrument_key, name=EXCLUDED.name, asset_type=EXCLUDED.asset_type,
             instrument_type=EXCLUDED.instrument_type, position_type=EXCLUDED.position_type, side=EXCLUDED.side,
@@ -697,14 +867,14 @@ async function recordSourceSync(db, workspaceId, source) {
             market_value=EXCLUDED.market_value, notional_value=EXCLUDED.notional_value,
             collateral_value=EXCLUDED.collateral_value, leverage=EXCLUDED.leverage,
             liquidation_price=EXCLUDED.liquidation_price, unrealized_pnl=EXCLUDED.unrealized_pnl,
-            native_currency=EXCLUDED.native_currency,
+            native_currency=EXCLUDED.native_currency, position_metadata=EXCLUDED.position_metadata,
             updated_at=NOW()`,
         [sourceId, acctId, p.symbol, p.instrumentKey || normalizeInstrumentKey(p.symbol), p.name || "",
          p.assetType || "other", p.instrumentType || "spot", p.positionType || "balance", p.side || null,
          p.quantity || 0, p.averageEntryPrice, p.costBasis, p.currentPrice, p.marketValue,
          p.notionalValue, p.collateralValue, p.leverage, p.liquidationPrice,
          p.unrealizedPnl != null ? Number(p.unrealizedPnl) : null,
-         p.currency || "USD"]
+         p.currency || "USD", p.metadata && typeof p.metadata === "object" ? JSON.stringify(p.metadata) : null]
       );
     }
     for (const c of source.cash || []) {
@@ -718,11 +888,46 @@ async function recordSourceSync(db, workspaceId, source) {
     for (const t of source.transactions || []) {
       await db.query(
         `INSERT INTO portfolio_source_transactions
-          (source_id, provider_tx_id, type, side, symbol, quantity, unit_price, notional, fee, currency, executed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (source_id, provider_tx_id) DO NOTHING`,
-        [sourceId, t.providerTxId, t.type || "other", t.side || null, t.symbol || null,
-         t.quantity, t.unitPrice, t.notional, t.fee, t.currency || "USD", t.executedAt]
+          (source_id, provider_tx_id, type, side, symbol, name, quantity, unit_price, notional, fee, currency, executed_at, realized_pnl)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (source_id, provider_tx_id) DO UPDATE SET
+           name=EXCLUDED.name, symbol=EXCLUDED.symbol, side=EXCLUDED.side,
+           quantity=EXCLUDED.quantity, unit_price=EXCLUDED.unit_price, notional=EXCLUDED.notional,
+           fee=EXCLUDED.fee, currency=EXCLUDED.currency, realized_pnl=EXCLUDED.realized_pnl
+         `,
+        [sourceId, t.providerTxId, t.type || "other", t.side || null, t.symbol || null, t.name || null,
+         t.quantity, t.unitPrice, t.notional, t.fee, t.currency || "USD", t.executedAt,
+         t.realizedPnl != null ? Number(t.realizedPnl) : null]
+      );
+    }
+    // Cash flows: extract deposits, withdrawals, dividends, interest, fees,
+    // corporate actions, etc. — genuine external capital events — from the
+    // source's transactions. Executions (trade/fill/buy/sell/crypto) are NOT cash
+    // flows. These go into portfolio_cash_flows so TWR/MWR can distinguish
+    // portfolio returns from external capital flows. Idempotent per
+    // (source_id, external_id).
+    for (const t of source.transactions || []) {
+      const flowType = classifyCashFlow(t.type || "trade");
+      if (!flowType) continue;
+      await db.query(
+        `INSERT INTO portfolio_cash_flows
+          (workspace_id, source_id, source_account_id, type, amount, currency,
+           base_amount, base_currency, executed_at, external_id, description, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'USD',$8,$9,$10,$11,$12::jsonb)
+         ON CONFLICT (source_id, external_id) DO UPDATE SET
+           amount=EXCLUDED.amount, type=EXCLUDED.type,
+           executed_at=EXCLUDED.executed_at, description=EXCLUDED.description,
+           metadata=EXCLUDED.metadata`,
+        [workspaceId, sourceId,
+         t.accountId ? accountIdMap.get(t.accountId) : null,
+         flowType,
+         t.notional != null ? Number(t.notional) : (t.amount != null ? Number(t.amount) : 0),
+         t.currency || "USD",
+         t.notional != null ? Number(t.notional) : (t.amount != null ? Number(t.amount) : 0),
+         t.executedAt || t.date || new Date().toISOString(),
+         t.providerTxId || t.externalId || null,
+         t.description || null,
+         JSON.stringify(t.metadata || {})]
       );
     }
     return sourceId;
@@ -862,15 +1067,32 @@ async function getUnifiedSummary(pool, workspaceId) {
     [workspaceId]
   );
 
+  // Today's cash flows (deposits/withdrawals) from canonical transactions, so the
+  // EOD snapshot can store real flows — which TWR's flow-adjustment path and MWR's
+  // intermediate cash flows depend on. Sums notional in base-equivalent currency.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const flowsToday = await pool.query(
+    `SELECT COALESCE(SUM(CASE WHEN LOWER(type) IN ('deposit','deposit_cash','dividend','interest','reward') THEN notional ELSE 0 END), 0) AS deposits,
+            COALESCE(SUM(CASE WHEN LOWER(type) IN ('withdrawal','withdrawal_cash','fee','tax') THEN notional ELSE 0 END), 0) AS withdrawals
+     FROM portfolio_source_transactions pst
+     JOIN portfolio_sources ps ON ps.id = pst.source_id
+     WHERE ps.workspace_id = $1
+       AND pst.executed_at::date >= $2::date
+       AND pst.executed_at::date < ($2::date + INTERVAL '1 day')`,
+    [workspaceId, todayIso]
+  ).catch(() => ({ rows: [{ deposits: 0, withdrawals: 0 }] }));
+  const depositsToday = Number(flowsToday.rows[0]?.deposits || 0);
+  const withdrawalsToday = Number(flowsToday.rows[0]?.withdrawals || 0);
+
   // Wallet / prediction / exchange / brokerage — all sources flow through the
   // canonical layer (recordSourceSync writes all provider types). Single query,
   // single processing loop — no separate legacy brokerage_holdings path.
   const canonicalConnected = await pool.query(
     `SELECT sp.symbol, sp.instrument_key, sp.name, sp.asset_type, sp.instrument_type,
-            sp.position_type, sp.side, sp.quantity, sp.current_price, sp.market_value,
+            sp.position_type, sp.side, sp.quantity, sp.current_price, sp.average_entry_price, sp.market_value,
             sp.notional_value, sp.collateral_value, sp.leverage, sp.liquidation_price,
             sp.unrealized_pnl,
-            sp.native_currency AS currency, ps.provider, ps.source_type,
+            sp.native_currency AS currency, ps.id AS source_id, ps.provider, ps.source_type,
             sp.as_of, sp.updated_at, psa.account_type
      FROM portfolio_source_positions sp
      JOIN portfolio_sources ps ON ps.id = sp.source_id
@@ -998,6 +1220,8 @@ async function getUnifiedSummary(pool, workspaceId) {
       side: sem.side,
       quantity: qty,
       marketValue: rawMv,
+      averageEntryPrice: row.average_entry_price != null ? Number(row.average_entry_price) : null,
+      currentPrice: price,
       portfolioValue: portfolioValueBase.value,
       grossExposure: grossExposureBase,
       netExposure: netExposureBase,
@@ -1032,10 +1256,12 @@ async function getUnifiedSummary(pool, workspaceId) {
     return true;
   };
 
-  const ensureSource = (sourceType, provider, label) => {
+  const ensureSource = (sourceType, provider, label, id) => {
     const key = `${sourceType}:${provider}`;
     if (!sourceMap.has(key)) {
-      sourceMap.set(key, { sourceType, provider, label: label || provider, positions: [] });
+      sourceMap.set(key, { id: id != null ? id : undefined, sourceType, provider, label: label || provider, positions: [] });
+    } else if (id != null && sourceMap.get(key).id == null) {
+      sourceMap.get(key).id = id;
     }
     return sourceMap.get(key);
   };
@@ -1043,7 +1269,7 @@ async function getUnifiedSummary(pool, workspaceId) {
   for (const row of canonicalConnected.rows) {
     const sourceType = row.source_type || "wallet";
     const provider = row.provider || sourceType;
-    const src = ensureSource(sourceType, provider, provider);
+    const src = ensureSource(sourceType, provider, provider, row.source_id);
     const v = valueRow(row, provider);
     if (v) {
       if (addPosition(v)) {
@@ -1112,6 +1338,7 @@ async function getUnifiedSummary(pool, workspaceId) {
   for (const [, src] of sourceMap) {
     if (src.positions.length === 0) continue;
     sources.push({
+      id: src.id != null ? src.id : undefined,
       sourceType: src.sourceType,
       provider: src.provider,
       label: src.label,
@@ -1123,21 +1350,21 @@ async function getUnifiedSummary(pool, workspaceId) {
     });
   }
 
-  if (manualSummary.count > 0) {
-    sources.push({
-      sourceType: "manual",
-      provider: "manual",
-      label: connectedHasValued ? "Manual (excluded)" : "Manual holdings",
-      status: "synced",
-      positionCount: manualSummary.count,
-      marketValue: manualSummary.marketValue,
-      grossExposure: manualSummary.grossExposure,
-      netExposure: manualSummary.netExposure,
-      excluded: connectedHasValued
-    });
-  }
+  // NOTE: per product decision, manual holdings are intentionally NOT surfaced
+  // as a connected source/broker anywhere in the UI (there is no manual
+  // position entry path on the web app). Manual positions still contribute to
+  // the headline per the exclusion rule above, but we do not emit a "Manual
+  // holdings" source object so it cannot appear in Connected Accounts / the
+  // SOURCES strip / or be targeted by Remove.
 
   const totalValue = investedValue + cashValue + manualValue;
+  // Compute total unrealized PNL across all valued connected + manual positions.
+  // Each position's valueRow already resolved its instrument-specific
+  // unrealized_pnl (provider-reported for derivatives, cost-basis for spot).
+  let unrealizedValue = 0;
+  for (const p of positions) {
+    if (p.unrealizedPnl != null) unrealizedValue += Number(p.unrealizedPnl);
+  }
   // isPartial = REAL valuation gaps only (some positions we couldn't value).
   // Routine manual-exclusion is informational, not a "partial" state — split it out
   // so the "partial" badge doesn't fire on every workspace that mixes manual + connected.
@@ -1153,6 +1380,7 @@ async function getUnifiedSummary(pool, workspaceId) {
     totalValue,
     cashValue,
     investedValue,
+    unrealizedValue,
     manualValue,
     excludedManualValue,
     unvaluedTotal,
@@ -1165,7 +1393,12 @@ async function getUnifiedSummary(pool, workspaceId) {
     warnings,
     sources,
     sourceCoverage,
-    positions
+    positions,
+    // Today's cash flows so recordUnifiedSnapshot can persist them (TWR/MWR).
+    deposits: depositsToday,
+    withdrawals: withdrawalsToday,
+    snapshots: await getUnifiedSnapshots(pool, workspaceId, 400),
+    snapshotTimeline: null
   };
 }
 
@@ -1277,7 +1510,7 @@ async function getUnifiedSources(pool, workspaceId) {
               id, source_type, provider, external_connection_id, label, native_currency,
               access_mode, connection_status, sync_status, capabilities, metadata,
               status, last_sync_at, last_attempted_sync_at, last_error
-       FROM portfolio_sources WHERE workspace_id=$1
+       FROM portfolio_sources WHERE workspace_id=$1 AND source_type <> 'manual'
        ORDER BY provider, source_type, last_sync_at DESC NULLS LAST, id DESC`,
       [workspaceId]
     );
@@ -1357,14 +1590,33 @@ async function getUnifiedSyncStatus(pool, workspaceId) {
   return { enabled: true, sources, anyConnectedHasData, lastSyncRun: lastRun };
 }
 
-// Unified transactions across all sources, most recent first (capped for payload).
+// Unified transactions across all sources, most recent first.
+// The requested `limit` applies to the COMPLETE unified result set (across all
+// sources including Polymarket), enforced as a single outer LIMIT on the UNION
+// ALL result — NOT per-branch. Previously Polymarket's branch had no LIMIT, so
+// the effective row count was `limit non-Polymarket + ALL Polymarket`, which
+// could vastly exceed the requested page size and break pagination/ordering.
 async function getUnifiedTransactions(pool, workspaceId, limit = 100) {
   const rows = await pool.query(
-    `SELECT s.provider, s.source_type, t.symbol, t.type, t.side, t.quantity,
-            t.unit_price, t.notional, t.fee, t.currency, t.executed_at
-     FROM portfolio_source_transactions t
+    `SELECT s.provider, s.source_type, t.provider_tx_id, t.symbol, t.name, t.type, t.side, t.quantity,
+            t.unit_price, t.notional, t.fee, t.currency, t.executed_at, t.realized_pnl, t.account_id,
+            t.id AS txn_id
+     FROM (
+        (SELECT t.id, t.provider_tx_id, t.symbol, t.name, t.type, t.side, t.quantity,
+                t.unit_price, t.notional, t.fee, t.currency, t.executed_at, t.realized_pnl, t.account_id,
+                t.source_id
+         FROM portfolio_source_transactions t
+         JOIN portfolio_sources s ON s.id = t.source_id
+         WHERE s.workspace_id=$1 AND s.provider <> 'polymarket')
+        UNION ALL
+        (SELECT t.id, t.provider_tx_id, t.symbol, t.name, t.type, t.side, t.quantity,
+                t.unit_price, t.notional, t.fee, t.currency, t.executed_at, t.realized_pnl, t.account_id,
+                t.source_id
+         FROM portfolio_source_transactions t
+         JOIN portfolio_sources s ON s.id = t.source_id
+         WHERE s.workspace_id=$1 AND s.provider = 'polymarket')
+     ) t
      JOIN portfolio_sources s ON s.id = t.source_id
-     WHERE s.workspace_id=$1
      ORDER BY t.executed_at DESC
      LIMIT $2`,
     [workspaceId, limit]
@@ -1372,7 +1624,9 @@ async function getUnifiedTransactions(pool, workspaceId, limit = 100) {
   return rows.rows.map((t) => ({
     provider: t.provider,
     sourceType: t.source_type,
+    providerTxId: t.provider_tx_id,
     symbol: t.symbol,
+    name: t.name || null,
     type: t.type,
     side: t.side,
     quantity: t.quantity,
@@ -1380,8 +1634,64 @@ async function getUnifiedTransactions(pool, workspaceId, limit = 100) {
     notional: t.notional,
     fee: t.fee,
     currency: t.currency,
-    executedAt: t.executed_at
+    executedAt: t.executed_at,
+    realizedPnl: t.realized_pnl != null ? Number(t.realized_pnl) : null,
+    sourceAccountId: t.account_id,
+    txnId: t.txn_id || null
   }));
+}
+
+// Historical data remediation for the transaction-type / cash-flow bug.
+//
+// Prior to the type fix, exchange fills stored `type = side` (e.g. 'buy'/'sell')
+// in portfolio_source_transactions. The old negative-list cash-flow classifier
+// (`!['trade','fill','other'].includes(type)`) then treated those fills as cash
+// flows, inserting false deposit/withdrawal/fee rows into portfolio_cash_flows
+// with type = 'buy'/'sell'/'crypto'. This corrupted TWR/MWR/performance snapshots.
+//
+// This function is idempotent and safe to run repeatedly:
+//  1. Repairs portfolio_source_transactions.type: maps legacy side-valued types
+//     back to canonical event types. Fills (which have a `side`) → 'trade'.
+//     This only touches rows whose type looks like a raw side; genuine cash-flow
+//     event types (deposit/withdrawal/dividend/...) are left untouched.
+//  2. Removes false cash-flow rows from portfolio_cash_flows whose type is a
+//     known execution-side artifact ('buy'/'sell'/'crypto') — these are
+//     executions, not capital events.
+//
+// Does NOT delete: legitimate deposits, withdrawals, dividends, interest, fees,
+// transfers, or any cash flow with a proper event type.
+// See: Execution Log Empty-Row / Phantom Execution Audit §12, §35-§37.
+async function reconcileCashFlows(pool, workspaceId) {
+  if (!isEnabled()) return { repairedTxTypes: 0, removedFalseFlows: 0 };
+
+  // 1. Repair source transaction types: legacy 'buy'/'sell' (which were stored
+  //    from `t.side`) are reclassified to canonical 'trade'. We only touch rows
+  //    whose current type is exactly a known side value AND have a side column
+  //    populated (genuine fills). Rows already using proper types are untouched.
+  const repairRes = await pool.query(
+    `UPDATE portfolio_source_transactions t
+       SET type = 'trade'
+     WHERE t.type IN ('buy', 'sell')
+       AND t.side IS NOT NULL
+       AND EXISTS (SELECT 1 FROM portfolio_sources s
+                     WHERE s.id = t.source_id AND s.workspace_id = $1)`,
+    [workspaceId]
+  );
+  const repairedTxTypes = Number(repairRes.rowCount || 0);
+
+  // 2. Remove false cash-flow rows whose type was an execution-side artifact.
+  //    These were created by the old negative-list classifier treating 'buy'/
+  //    'sell'/'crypto' as cash-flow types. Genuine event types are preserved.
+  const cleanupRes = await pool.query(
+    `DELETE FROM portfolio_cash_flows cf
+     WHERE cf.type IN ('buy', 'sell', 'crypto', 'other')
+       AND EXISTS (SELECT 1 FROM portfolio_sources s
+                     WHERE s.id = cf.source_id AND s.workspace_id = $1)`,
+    [workspaceId]
+  );
+  const removedFalseFlows = Number(cleanupRes.rowCount || 0);
+
+  return { repairedTxTypes, removedFalseFlows };
 }
 
 // Reconciliation: detect duplicate instruments across sources (same normalized
@@ -1435,17 +1745,40 @@ async function recordUnifiedSnapshot(pool, workspaceId, summary) {
     [workspaceId, today]
   );
   if (existing.rows.length) return existing.rows[0].id; // immutable: keep the day's first snapshot
+  // Compute daily P&L/return from the most recent prior snapshot (immutable).
+  const prevSnapshot = await pool.query(
+    `SELECT portfolio_value, benchmark_value FROM portfolio_daily_snapshots
+     WHERE workspace_id=$1 AND snapshot_date < $2 ORDER BY snapshot_date DESC LIMIT 1`,
+    [workspaceId, today]
+  );
+  const prevValue = prevSnapshot.rows.length > 0 ? Number(prevSnapshot.rows[0].portfolio_value) : null;
+  const dailyPnl = prevValue != null ? Number(summary.totalValue || 0) - prevValue : 0;
+  const dailyReturn = prevValue ? dailyPnl / prevValue : 0;
   const res = await pool.query(
     `INSERT INTO portfolio_daily_snapshots
        (workspace_id, snapshot_date, portfolio_value, cash, invested_capital,
+        daily_pnl, daily_return, realized_pnl, unrealized_pnl,
+        benchmark_value, benchmark_return, benchmark_relative_return,
+        deposits, withdrawals, fees, dividends,
         holdings_json, allocation_json, is_unified, base_currency, source_breakdown, estimated)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8,$9,FALSE)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,TRUE,$19,$20,FALSE)
      RETURNING id`,
     [
       workspaceId, today,
       Number(summary.totalValue || 0),
       Number(summary.cashValue || 0),
       Number(summary.investedValue || 0),
+      dailyPnl,
+      dailyReturn,
+      0, // realized_pnl: computed during backfill from source transactions
+      Number(summary.unrealizedValue || 0), // unrealized_pnl: sum of provider-reported unrealized
+      null, // benchmark_value (populated during backfill)
+      null, // benchmark_return
+      null, // benchmark_relative_return
+      Number(summary.deposits || 0),
+      Number(summary.withdrawals || 0),
+      0, // fees
+      0, // dividends
       JSON.stringify(Array.isArray(summary.positions) ? summary.positions : []),
       JSON.stringify([]),
       summary.baseCurrency || "USD",
@@ -1459,9 +1792,13 @@ async function recordUnifiedSnapshot(pool, workspaceId, summary) {
 async function getUnifiedSnapshots(pool, workspaceId, limit = 30) {
   const rows = await pool.query(
     `SELECT id, snapshot_date, portfolio_value, cash, invested_capital,
-            is_unified, base_currency, source_breakdown, snapshot_created_at
+            realized_pnl, unrealized_pnl, daily_pnl, daily_return,
+            benchmark_value, benchmark_return, benchmark_relative_return,
+            deposits, withdrawals, fees, dividends,
+            is_unified, base_currency, source, source_breakdown,
+            snapshot_created_at, estimated
      FROM portfolio_daily_snapshots
-     WHERE workspace_id=$1 AND is_unified=TRUE
+     WHERE workspace_id=$1
      ORDER BY snapshot_date DESC LIMIT $2`,
     [workspaceId, limit]
   );
@@ -1471,9 +1808,22 @@ async function getUnifiedSnapshots(pool, workspaceId, limit = 30) {
     portfolioValue: Number(r.portfolio_value),
     cash: Number(r.cash),
     investedCapital: Number(r.invested_capital),
+    realizedPnl: Number(r.realized_pnl || 0),
+    unrealizedPnl: Number(r.unrealized_pnl || 0),
+    dailyPnl: Number(r.daily_pnl || 0),
+    dailyReturn: r.daily_return != null ? Number(r.daily_return) : 0,
+    benchmarkValue: r.benchmark_value != null ? Number(r.benchmark_value) : null,
+    benchmarkReturn: r.benchmark_return != null ? Number(r.benchmark_return) : null,
+    benchmarkRelativeReturn: r.benchmark_relative_return != null ? Number(r.benchmark_relative_return) : null,
+    deposits: Number(r.deposits || 0),
+    withdrawals: Number(r.withdrawals || 0),
+    fees: Number(r.fees || 0),
+    dividends: Number(r.dividends || 0),
     baseCurrency: r.base_currency,
+    source: r.source,
     sourceBreakdown: r.source_breakdown,
-    snapshotCreatedAt: r.snapshot_created_at
+    snapshotCreatedAt: r.snapshot_created_at,
+    estimated: r.estimated === true
   }));
 }
 
@@ -1485,7 +1835,8 @@ async function getUnifiedSnapshots(pool, workspaceId, limit = 30) {
 // fills in reverse, subtracting realised P&L that occurred AFTER each point.
 // This yields "what was equity just before these realised P&Ls" — approximate
 // (assumes unrealised contribution is roughly constant), clearly labelled.
-async function getUnifiedEquityCurveFromFills(pool, workspaceId, limit = 180) {
+async function getUnifiedEquityCurveFromFills(pool, workspaceId, limit = 180, opts = {}) {
+  const { from = null, to = null, benchmark: benchmarkSymbol = "SPY" } = opts || {};
   const summary = await getUnifiedSummary(pool, workspaceId);
   const currentEquity = Number(summary.totalValue) || 0;
   const rows = await pool.query(
@@ -1509,11 +1860,71 @@ async function getUnifiedEquityCurveFromFills(pool, workspaceId, limit = 180) {
   for (let i = n - 2; i >= 0; i--) after[i] = after[i + 1] + fills[i + 1].realized;
 
   // Build one point per fill: equity before that fill's realised P&L.
-  const pts = fills.map((f, i) => ({ t: f.t, equity: currentEquity - after[i] }));
+  const allPts = fills.map((f, i) => ({ t: f.t, equity: currentEquity - after[i] }));
   // Append the live current point.
-  pts.push({ t: Date.now(), equity: currentEquity });
+  allPts.push({ t: Date.now(), equity: currentEquity, live: true });
 
-  // Resample to <= limit points (daily-ish) to keep payload small.
+  // Daily forward-fill: emit one point per UTC day from the first fill to today,
+  // carrying the last known equity forward. Real fill days keep estimated=false;
+  // carry-forward (incl. weekends/holidays) are estimated=true. This guarantees a
+  // continuous curve even for short windows with few/no fills, so the 1D/1W chart
+  // is never blank and dailyReturn is non-degenerate.
+  const DAY = 86400000;
+  const startDay = Math.floor(allPts[0].t / DAY) * DAY;
+  const endDay = Math.floor(Date.now() / DAY) * DAY;
+  const lastByDay = new Map(); // utcDayTs -> point (latest fill/live point that day)
+  for (const p of allPts) {
+    const day = Math.floor(p.t / DAY) * DAY;
+    const prev = lastByDay.get(day);
+    if (!prev || p.t > prev.t) lastByDay.set(day, { ...p, estimated: false });
+  }
+  const dailyPts = [];
+  let carried = null;
+  for (let dayTs = startDay; dayTs <= endDay; dayTs += DAY) {
+    const real = lastByDay.get(dayTs);
+    if (real) {
+      carried = real;
+      dailyPts.push({ ...real, t: dayTs, estimated: false });
+    } else if (carried) {
+      // No fill that day: carry the last known equity forward (estimated).
+      dailyPts.push({ t: dayTs, equity: carried.equity, estimated: true });
+    }
+  }
+  // Fallback: if forward-fill produced nothing (shouldn't happen), use raw points.
+  const ptsSource = dailyPts.length ? dailyPts : allPts.map((p) => ({ ...p, estimated: false }));
+
+  // Apply optional [from, to] window (epoch ms or ISO date) before resampling.
+  const lo = from != null ? (String(from).length <= 10 ? new Date(`${from}T00:00:00Z`).getTime() : Number(from)) : null;
+  const hi = to != null ? (String(to).length <= 10 ? new Date(`${to}T00:00:00Z`).getTime() : Number(to)) : null;
+  const pts = ptsSource.filter((p) => (lo == null || p.t >= lo) && (hi == null || p.t <= hi));
+  if (!pts.length) return [];
+
+  // Attach a real benchmark close (Yahoo, token-free) per point so the frontend
+  // Benchmark card + buildBenchmarkSeries light up. Honors the caller-selected
+  // benchmark symbol (e.g. SPY/QQQ/VT) instead of hardcoding SPY. Best-effort:
+  // on any failure the benchmark stays null and the card falls back to "—".
+  let benchMap = null;
+  try {
+    const series = await loadYahooSeries(String(benchmarkSymbol || "SPY").toUpperCase());
+    if (series && series.size) {
+      benchMap = series;
+      for (const p of pts) {
+        const d = new Date(p.t).toISOString().slice(0, 10);
+        let v = benchMap.get(d);
+        if (v == null) {
+          for (let k = 1; k <= 7; k++) {
+            const dd = new Date(p.t - k * DAY).toISOString().slice(0, 10);
+            if (benchMap.has(dd)) { v = benchMap.get(dd); break; }
+          }
+        }
+        p.benchmark = v != null ? Number(v) : null;
+      }
+    }
+  } catch (_) {
+    /* benchmark is best-effort */
+  }
+
+  // Resample to <= limit points to keep payload small.
   if (pts.length > limit) {
     const step = Math.ceil(pts.length / limit);
     const sampled = [];
@@ -1528,11 +1939,26 @@ async function getUnifiedEquityCurveFromFills(pool, workspaceId, limit = 180) {
 // performance chart shows REAL account history (e.g. June 2024 -> now) instead
 // of only "today". Day-buckets the fill-anchored curve; one row per UTC day.
 // Idempotent: a day that already has a snapshot is left untouched.
+//
+// NOTE: This fill-curve path is a TEMPORARY gap-filler for fresh wallets that
+// have trade fills but no EOD snapshot history. It is NOT the canonical
+// historical reconstruction path. The canonical path uses
+// DailySnapshotService.runEod() with historical position + price reconstruction
+// via assembleSnapshotInputs(). Once real snapshots exist, the fill-curve
+// backfill is skipped (ON CONFLICT DO NOTHING).
 async function backfillUnifiedSnapshotsFromFills(pool, workspaceId, limit = 365) {
   if (!isEnabled()) return 0;
   const curve = await getUnifiedEquityCurveFromFills(pool, workspaceId, limit);
   if (!Array.isArray(curve) || curve.length === 0) return 0;
-  // Day-bucket: keep the latest point per UTC day.
+  // Fetch the current summary once so backfilled rows carry the REAL cash + base
+  // currency (previously cash was 0, invested_capital was faked to equity, and
+  // base_currency was hardcoded USD — corrupting downstream cash/allocation reads).
+  // invested_capital is unknown from fills, so we write 0 (honest) rather than fabricate.
+  const summary = await getUnifiedSummary(pool, workspaceId).catch(() => null);
+  const cashValue = Number(summary?.cashValue || 0);
+  const baseCurrency = summary?.baseCurrency || "USD";
+  // Day-bucket: keep the latest point per UTC day (the curve is already
+  // daily-forward-filled, but multiple fills could still share a day).
   const byDay = new Map();
   for (const pt of curve) {
     const d = new Date(pt.t);
@@ -1541,21 +1967,37 @@ async function backfillUnifiedSnapshotsFromFills(pool, workspaceId, limit = 365)
     const prev = byDay.get(day);
     if (!prev || pt.t > prev.t) byDay.set(day, { day, t: pt.t, equity: Number(pt.equity) || 0 });
   }
+  // Sort days chronologically to compute daily P&L and return.
+  const sortedDays = Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
   let inserted = 0;
-  for (const { day, equity } of byDay.values()) {
+  let prevEquity = null;
+  for (const { day, equity } of sortedDays) {
     try {
       const existing = await pool.query(
         `SELECT id FROM portfolio_daily_snapshots WHERE workspace_id=$1 AND snapshot_date=$2`,
         [workspaceId, day]
       );
-      if (existing.rows.length) continue; // immutable: never overwrite a real EOD row
+      if (existing.rows.length) {
+        prevEquity = prevEquity != null ? prevEquity : equity;
+        continue; // immutable: never overwrite a real EOD row
+      }
+      const dailyPnl = prevEquity != null ? equity - prevEquity : 0;
+      const dailyReturn = prevEquity ? dailyPnl / prevEquity : 0;
       await pool.query(
         `INSERT INTO portfolio_daily_snapshots
            (workspace_id, snapshot_date, portfolio_value, cash, invested_capital,
-            holdings_json, allocation_json, is_unified, base_currency, source_breakdown, estimated)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8,$9,TRUE)`,
-        [workspaceId, day, equity, 0, equity, JSON.stringify([]), JSON.stringify([]), "USD", JSON.stringify([])]
+            daily_pnl, daily_return, realized_pnl, unrealized_pnl,
+            holdings_json, allocation_json,
+            is_unified, base_currency, source_breakdown, estimated, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12,$13,TRUE,'fill_curve')`,
+        [
+          workspaceId, day, equity, cashValue, 0,
+          dailyPnl, dailyReturn, 0, 0,
+          JSON.stringify([]), JSON.stringify([]),
+          baseCurrency, JSON.stringify([])
+        ]
       );
+      prevEquity = equity;
       inserted++;
     } catch (_) { /* best-effort per-day */ }
   }
@@ -1597,18 +2039,6 @@ async function runWorkspaceSync(pool, workspaceId) {
   const runId = runRes.rows[0].id;
   const perSource = [];
   try {
-    // Backfill Manual source into the canonical layer (flag-gated dual-write),
-    // reading the REAL current manual data (user_workspace_portfolio).
-    if (isEnabled()) {
-      const manualRows = await pool.query(
-        `SELECT symbol, name, market_type, quantity, current_price, price, market_value, currency
-         FROM user_workspace_portfolio WHERE workspace_id=$1`,
-        [workspaceId]
-      );
-      if (manualRows.rows.length) {
-        await recordSourceSync(pool, workspaceId, mapManualToSource(manualRows.rows, { workspaceId }));
-      }
-    }
     const summary = await getUnifiedSummary(pool, workspaceId);
     for (const s of summary.sources) {
       perSource.push({ provider: s.provider, status: s.status, positionCount: s.positionCount, excluded: !!s.excluded });
@@ -1629,6 +2059,11 @@ async function runWorkspaceSync(pool, workspaceId) {
   // historical backfill from the reconstructed equity curve so the performance
   // chart shows real account history, not just today.
   if (isEnabled()) {
+    // Historical data remediation: repair legacy buy/sell transaction types
+    // and remove any false cash-flow rows that were created by the old
+    // negative-list classifier (type bug before this fix). Best-effort,
+    // idempotent, never throws — see Execution Log Audit §12, §35-§37.
+    try { await reconcileCashFlows(pool, workspaceId); } catch (_) { /* best-effort */ }
     try { await recordUnifiedSnapshot(pool, workspaceId, summary); } catch (_) { /* history is best-effort */ }
     try { await backfillUnifiedSnapshotsFromFills(pool, workspaceId); } catch (_) { /* history is best-effort */ }
   }
@@ -1640,6 +2075,7 @@ module.exports = {
   ensureUnifiedPortfolioSchema,
   recordSourceSync,
   recordSyncStart,
+  reconcileCashFlows,
   getUnifiedSummary,
   getUnifiedPositions,
   getUnifiedSources,
@@ -1660,5 +2096,11 @@ module.exports = {
   mapPredictionWalletToSource,
   normalizeSourceContract,
   mapSnapTradeToSource,
-  normalizeInstrumentKey
+  normalizeInstrumentKey,
+  classifyCashFlow,
+  normalizeTxType,
+  isExecutableTx,
+  normalizeTransaction,
+  EXECUTION_TYPES,
+  CASH_FLOW_TYPES
 };

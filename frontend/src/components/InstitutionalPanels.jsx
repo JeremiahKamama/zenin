@@ -330,10 +330,10 @@ export function PortfolioInstitutionalSuite({
   if (!hasDeskFeatureAccess) {
     return (
       <section className="desk-feature-lock institutional-desk-lock" role="status">
-        <span>Desk feature</span>
-        <h2>Institutional desk tools require Desk</h2>
+        <span>Premium feature</span>
+        <h2>Institutional tools require Premium</h2>
         <p>
-          Shared decisions, report templates, AI desk briefs, treasury monitoring, and portfolio command workflows are only available on a Desk workspace.
+          Shared decisions, report templates, AI desk briefs, treasury monitoring, and portfolio command workflows are only available on a Premium workspace.
         </p>
         {onOpenPlans ? (
           <button type="button" className="settings-primary-btn" onClick={onOpenPlans}>

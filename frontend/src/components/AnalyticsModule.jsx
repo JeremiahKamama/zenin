@@ -20,7 +20,7 @@ import { COMMODITY_GROUP_DEFS, COMMODITY_GROUP_ORDER, getGroupDef } from "../uti
 import MacroContextEnhanced from "./market/MacroContextEnhanced";
 import { publishRegime } from "../utils/intelligenceBus";
 import { ExecutiveSignalStrip, DecisionBanner, buildMacroSignalTiles, buildCommoditySignalTiles, buildMacroDecisionText, buildCommodityDecisionText } from "./deskV2IA";
-import { GrowthInflationQuadrant, CrossAssetDashboard, MacroWatchlist, useMacroWatchlist, CrossDeskChain, CommodityRotationHeatmap, HonestUnavailable, CommodityAllocationGuidance } from "./deskV2Modules";
+import { CrossAssetDashboard, CrossDeskChain, CommodityRotationHeatmap, HonestUnavailable, CommodityAllocationGuidance } from "./deskV2Modules";
 import { ActiveTransmission, OpenExplorerButton, CommodityTransmissionContext } from "../transmission/TransmissionSurfaces";
 import { signalsFromMacroExecutive, signalsFromCommoditiesExecutive } from "../transmission/TransmissionRuleEngine";
 import { MacroCountryProvider, useMacroCountry } from "./macro/MacroCountryContext";
@@ -1052,6 +1052,7 @@ const ExecutivePanel = React.memo(function ExecutivePanel({ kind, exec, verdict,
 export function AnalyticsModule({
   backendUrl,
   hasDeskFeatureAccess = false,
+  initialTab = null,
   onCommoditySelect,
   onOpenCommodityResearch,
   onOpenCommodityProfile,
@@ -1096,6 +1097,12 @@ export function AnalyticsModule({
   // Unifies selectedMainCategory (summary) with activeTab (detail table + Actions column)
   // so the commodities Assets table (with Research/Profile/Transmission actions) is reachable.
   const DESK_TABS = ["crypto", "options", "equities", "macro", "commodities"];
+  useEffect(() => {
+    if (DESK_TABS.includes(initialTab)) {
+      setSelectedMainCategory(initialTab);
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   useEffect(() => {
     if (DESK_TABS.includes(selectedMainCategory) && selectedMainCategory !== activeTab) {
       setActiveTab(selectedMainCategory);
@@ -6641,7 +6648,6 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
   const visibleRail = rail.length ? rail : [{ label: "Source", value: "Pending", helper: "Awaiting data" }];
   const curveRows = visibleRows.slice(0, 6);
   const maxCurve = Math.max(...curveRows.map((row) => Math.abs(Number(String(row.secondary).replace(/[^0-9.-]/g, ""))) || 1), 1);
-  const [macroWatchPins, toggleMacroWatch] = useMacroWatchlist();
   const [commodityFilterGroup, setCommodityFilterGroup] = React.useState(null);
 
   if (isOptions) {
@@ -7194,14 +7200,17 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
     const fxRows = Array.isArray(macroMeta.forexMovers) ? macroMeta.forexMovers.slice(0, 6) : [];
     return (
       <section className="analytics-desk-shell analytics-macro-command">
-        {macroExecutive ? (
-          <ExecutivePanel
-            kind="macro"
-            exec={macroExecutive}
-            verdict={macroExecutive.regime || "Unavailable"}
-            verdictTone={macroExecutive.tone || "neutral"}
-          />
-        ) : null}
+        <div className="analytics-macro-regime-profile">
+          {macroExecutive ? (
+            <ExecutivePanel
+              kind="macro"
+              exec={macroExecutive}
+              verdict={macroExecutive.regime || "Unavailable"}
+              verdictTone={macroExecutive.tone || "neutral"}
+            />
+          ) : null}
+          <MacroCountryProfileModule countryCode={selectedGeoCode} />
+        </div>
         <ExecutiveSignalStrip tiles={buildMacroSignalTiles({ macroRows: sourceOverviewRows, riskRows, fxRates: fxRows, exec: macroExecutive })} />
         <DecisionBanner text={buildMacroDecisionText({ regimeLabel: macroExecutive?.regime, exec: macroExecutive })} />
 
@@ -7238,13 +7247,14 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
             Reuse the canonical cross-asset map (CROSS_ASSET_BY_COUNTRY) + regime label.
             Real symbol mapping; live price/beta feeds pending → honest Unavailable. */}
         <MacroRiskAppetiteModule regimeLabel={macroExecutive?.regime || null} regimeTone={macroExecutive?.tone || "neutral"} />
-        <MacroCrossAssetModule countryCode={selectedGeoCode} />
-        <MacroTransmissionModule countryCode={selectedGeoCode} regimeLabel={macroExecutive?.regime || null} regimeTone={macroExecutive?.tone || "neutral"} />
+        <div className="analytics-macro-cross-transmission-row">
+          <MacroCrossAssetModule countryCode={selectedGeoCode} />
+          <MacroTransmissionModule countryCode={selectedGeoCode} regimeLabel={macroExecutive?.regime || null} regimeTone={macroExecutive?.tone || "neutral"} />
+        </div>
 
-        {/* Phase 5 — Country Profile + Macro Research Workspace entry.
-            Country Profile is real reference data (CountryRegistry). Research
-            Workspace bridges to the existing app research surface. */}
-        <MacroCountryProfileModule countryCode={selectedGeoCode} />
+        {/* Phase 5 — Macro Research Workspace entry.
+            Country Profile is real reference data (CountryRegistry) and appears
+            directly under Macro Regime. Research bridges to the app research surface. */}
         <MacroResearchWorkspaceModule
           countryCode={selectedGeoCode}
           regimeLabel={macroExecutive?.regime || null}
@@ -7252,37 +7262,8 @@ const AnalyticsSpecializedDesk = React.memo(function AnalyticsSpecializedDesk({ 
           onOpenResearch={onOpenResearch}
         />
 
-        <div className="analytics-macro-topline">
-          <div className="analytics-desk-hero analytics-macro-hero">
-            <div>
-              <span>{config.kicker}</span>
-              {config.hideTitle ? null : <h2>{config.title}</h2>}
-              <p>{config.summary}</p>
-              <SourceQualityStrip fallback={config.quality} items={[config.quality, ...sourceOverviewRows.slice(0, 2), ...riskRows.slice(0, 1)]} />
-              <MacroCountryMetaStrip countryCode={selectedGeoCode} exec={macroExecutive} updatedAt={updatedAt} />
-            </div>
-            <div className="analytics-desk-command amber">
-              <span>{config.primaryLabel}</span>
-              <strong>{config.primaryValue}</strong>
-              <em>{config.primaryDelta}</em>
-              <SourceQualityBadge quality={config.quality} compact />
-            </div>
-          </div>
-          <div className="analytics-macro-metrics">
-            {metrics.map((metric, idx) => (
-              <article key={`${metric.label}-${idx}`} className={`analytics-macro-tile ${metric.tone || "neutral"}`}>
-                <span>{metric.label}</span>
-                <strong>{metric.value}</strong>
-                <em>{metric.helper}</em>
-              </article>
-            ))}
-          </div>
-        </div>
-
         <div className="analytics-macro-grid">
-          <GrowthInflationQuadrant macroRows={sourceOverviewRows} exec={macroExecutive} />
           <CrossAssetDashboard riskRows={riskRows} countryCode={selectedGeoCode} />
-          <MacroWatchlist macroRows={sourceOverviewRows} pins={macroWatchPins} onToggle={toggleMacroWatch} />
           <ActiveTransmission
             signals={[
               ...(macroExecutive ? signalsFromMacroExecutive(macroExecutive).map((s) => ({ label: s.label, positive: s.positive !== false })) : []),

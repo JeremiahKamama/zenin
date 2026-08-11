@@ -28,12 +28,15 @@ export async function fetchUnifiedSources({ signal } = {}) {
 
 // GET /api/portfolio/unified/equity-curve
 // Approximate equity curve reconstructed from synced fills (fresh wallets w/o EOD snapshots).
-export async function fetchUnifiedEquityCurve({ signal, limit = 180 } = {}) {
-  const data = await zeninFetchJson(`/portfolio/unified/equity-curve?limit=${limit}`, { signal, timeoutMs: 8000 });
+export async function fetchUnifiedEquityCurve({ signal, limit = 180, from = null, to = null } = {}) {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+  const data = await zeninFetchJson(`/portfolio/unified/equity-curve?${qs.toString()}`, { signal, timeoutMs: 8000 });
   const curve = data && Array.isArray(data.curve) ? data.curve : [];
   return curve
     .filter((p) => Number.isFinite(Number(p.t)) && Number.isFinite(Number(p.equity)))
-    .map((p) => ({ t: Number(p.t), equity: Number(p.equity) }));
+    .map((p) => ({ t: Number(p.t), equity: Number(p.equity), benchmark: p.benchmark != null ? Number(p.benchmark) : null }));
 }
 
 // POST /api/portfolio/prediction-wallet/sync
@@ -100,7 +103,27 @@ export async function fetchUnifiedSnapshots({ signal, limit } = {}) {
   return data && Array.isArray(data.snapshots) ? data.snapshots : [];
 }
 
-// GET /api/portfolio/unified/shadow-compare (staged rollout validation:
+// POST /api/portfolio/unified/backfill — triggers historical snapshot backfill.
+// Replays transactions up to each historical date at historical close prices.
+// Idempotent (ON CONFLICT DO NOTHING). Returns async status; backend runs in
+// background via setImmediate — frontend should poll snapshots after triggering.
+export async function triggerHistoricalBackfill({ from, through, maxDays, batchSize, signal } = {}) {
+  const body = JSON.stringify({
+    ...(from && { from }),
+    ...(through && { through }),
+    ...(maxDays && { maxDays }),
+    ...(batchSize && { batchSize }),
+  });
+  const data = await zeninFetchJson("/portfolio/unified/backfill", {
+    method: "POST",
+    body,
+    signal,
+    timeoutMs: 10000,
+  });
+  return data || null;
+}
+
+// GET /api/portfolio/unified/sync-status
 // legacy manual book vs unified manual slice + expected connected-book divergence).
 export async function fetchUnifiedShadowComparison({ signal } = {}) {
   const data = await zeninFetchJson("/portfolio/unified/shadow-compare", { signal, timeoutMs: 8000 });

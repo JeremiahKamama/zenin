@@ -279,9 +279,17 @@ test("optionsCalculationSchema accepts valid input", () => {
 test("historyQuerySchema applies defaults", () => {
   const result = historyQuerySchema.safeParse({ symbol: "aapl" });
   assert.ok(result.success);
-  assert.equal(result.data.interval, "1d");
+  assert.equal(result.data.interval, "1D");
   assert.equal(result.data.range, "1mo");
   assert.equal(result.data.marketType, "equity");
+});
+
+test("historyQuerySchema accepts Display intervals (4H/1D/1W/1M/3M/1Y/YTD/MAX)", () => {
+  for (const iv of ["4H", "1D", "1W", "1M", "3M", "1Y", "YTD", "MAX"]) {
+    const result = historyQuerySchema.safeParse({ symbol: "AAPL", interval: iv });
+    assert.ok(result.success, `expected ${iv} to parse`);
+    assert.equal(result.data.interval, iv);
+  }
 });
 
 test("historyQuerySchema rejects invalid interval", () => {
@@ -302,6 +310,11 @@ test("pricesQuerySchema applies defaults", () => {
 test("searchQuerySchema accepts valid query", () => {
   const result = searchQuerySchema.safeParse({ q: "apple", type: "tradfi" });
   assert.ok(result.success);
+});
+
+test("searchQuerySchema accepts unified and bond discovery queries", () => {
+  assert.ok(searchQuerySchema.safeParse({ q: "treasury", type: "all" }).success);
+  assert.ok(searchQuerySchema.safeParse({ q: "treasury", type: "bond" }).success);
 });
 
 test("searchQuerySchema rejects empty q", () => {

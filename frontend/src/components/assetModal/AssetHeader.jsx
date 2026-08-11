@@ -1,4 +1,5 @@
 import { Button } from "../ui/button";
+import { AssetLogo } from "../AssetLogo";
 
 export function AssetHeader({
   asset,
@@ -12,7 +13,8 @@ export function AssetHeader({
   isInWatchlist,
   onToggleStar,
   onViewCompanyProfile,
-  onClose
+  onClose,
+  showProfileAction = true
 }) {
   const isWatching = Boolean(isInWatchlist?.(asset, undefined, { strictStockMeta: true }));
   const changePositive = displayedChangePercent >= 0;
@@ -28,6 +30,7 @@ export function AssetHeader({
     <header className="am-header">
       <div className="am-header-main">
         <div className="am-header-id">
+          <AssetLogo asset={asset} size="lg" />
           <h2 className="am-name font-mono">{asset?.symbol}</h2>
           <div className="am-sub">
             <span className="am-company">{asset?.name}</span>
@@ -73,14 +76,16 @@ export function AssetHeader({
         >
           ★
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onViewCompanyProfile?.(asset)}
-          title="Open company profile"
-        >
-          Profile
-        </Button>
+        {showProfileAction ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onViewCompanyProfile?.(asset)}
+            title="Open company profile"
+          >
+            Profile
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="icon"

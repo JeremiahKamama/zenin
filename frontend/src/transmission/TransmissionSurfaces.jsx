@@ -127,7 +127,7 @@ export function ResearchTransmissionContext({ regime, affectedHoldings, portfoli
 // WATCHLIST — per-row "Transmission N Active" + hover.
 export function WatchlistTransmission({ count, node }) {
   const { openExplorer } = useTransmissionExplorer();
-  if (!count) return <span className="tx-watchlist-count tx-muted">Transmission 0 Active</span>;
+  if (!count) return <span className="tx-watchlist-count tx-muted">0</span>;
   return (
     <button type="button" className="tx-watchlist-count" onClick={() => openExplorer(node, { source: "watchlist" })} title="Open transmission">
       Transmission {count} Active

@@ -20,8 +20,8 @@ import { useCallback } from "react";
 // action -> which host handler to invoke, and how to build its argument.
 // This table is the single source of routing truth (no per-desk branching).
 const ACTION_MAP = {
-  research: { handler: "onOpenResearch", arg: (n) => (n.entity ? { symbol: n.entity } : null) },
-  workspace: { handler: "onOpenAnalytics", arg: () => null },
+  research: { handler: "onOpenResearch", arg: (n) => (n.entity ? { symbol: typeof n.entity === "object" ? n.entity.symbol || n.entity.ticker || n.entity.name : n.entity } : null) },
+  workspace: { handler: "onOpenAnalytics", arg: (n) => n.workspace || null },
   asset: { handler: "onSelectAsset", arg: (n) => n.entity },
   company: { handler: "onSelectAsset", arg: (n) => n.entity },
   transmission: { handler: "onOpenAnalytics", arg: () => null },

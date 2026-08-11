@@ -24,20 +24,20 @@ test("buildPublicRuntimeConfig includes auth section", () => {
 test("buildPublicRuntimeConfig includes subscription section", () => {
   const config = buildPublicRuntimeConfig();
   assert.ok(config.subscription);
-  assert.deepEqual(config.subscription.validPlans, ["starter", "pro", "desk"]);
+  assert.deepEqual(config.subscription.validPlans, ["starter", "plus", "premium"]);
   assert.deepEqual(config.subscription.validBillingCycles, ["monthly", "yearly"]);
   assert.equal(config.subscription.yearlyDiscountRate, 0.2);
   assert.ok(config.subscription.monthlyPrices);
   assert.equal(config.subscription.monthlyPrices.starter, 0);
-  assert.equal(config.subscription.monthlyPrices.pro, 29);
-  assert.equal(config.subscription.monthlyPrices.desk, 99);
+  assert.equal(config.subscription.monthlyPrices.plus, 29);
+  assert.equal(config.subscription.monthlyPrices.premium, 99);
 });
 
 test("buildPublicRuntimeConfig returns a deep clone (mutations do not affect source)", () => {
   const config1 = buildPublicRuntimeConfig();
-  config1.subscription.monthlyPrices.pro = 999;
+  config1.subscription.monthlyPrices.plus = 999;
   const config2 = buildPublicRuntimeConfig();
-  assert.equal(config2.subscription.monthlyPrices.pro, 29);
+  assert.equal(config2.subscription.monthlyPrices.plus, 29);
 });
 
 // ── buildAppRuntimeConfig ─────────────────────────────────────────────────────
@@ -53,8 +53,8 @@ test("buildAppRuntimeConfig includes subscription with planRank", () => {
   assert.ok(config.subscription);
   assert.ok(config.subscription.planRank);
   assert.equal(config.subscription.planRank.starter, 0);
-  assert.equal(config.subscription.planRank.pro, 1);
-  assert.equal(config.subscription.planRank.desk, 2);
+  assert.equal(config.subscription.planRank.plus, 1);
+  assert.equal(config.subscription.planRank.premium, 2);
 });
 
 test("buildAppRuntimeConfig includes sectionMinPlan", () => {
@@ -62,8 +62,8 @@ test("buildAppRuntimeConfig includes sectionMinPlan", () => {
   const smp = config.subscription.sectionMinPlan;
   assert.ok(smp);
   assert.equal(smp.Home, "starter");
-  assert.equal(smp.Analytics, "pro");
-  assert.equal(smp.Options, "desk");
+  assert.equal(smp.Analytics, "plus");
+  assert.equal(smp.Options, "premium");
 });
 
 test("buildAppRuntimeConfig includes watchlist fallback data", () => {

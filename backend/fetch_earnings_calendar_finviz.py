@@ -7,6 +7,8 @@ from datetime import date, datetime
 
 import requests
 
+from posthog_client import posthog_client
+
 
 MONTHS = {
     "jan": 1,
@@ -149,6 +151,14 @@ def main():
             if item:
                 items.append(item)
 
+        if posthog_client:
+            posthog_client.capture(
+                event="earnings_calendar_loaded",
+                properties={
+                    "requested_symbol_count": len(symbols),
+                    "resolved_earnings_count": sum(1 for item in items if item["nextEarnings"]),
+                },
+            )
         print(json.dumps({"items": items}))
     except Exception as error:
         print(json.dumps({"items": [], "error": str(error)}))

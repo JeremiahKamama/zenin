@@ -8,7 +8,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
+import { SortableHeader } from "./SortableHeader";
 import { cn } from "@/lib/utils";
 import {
   Table,
@@ -121,6 +121,8 @@ export function DataTable({
   const renderHeader = (header) => {
     const align = header.column.columnDef.meta?.align || "left";
     const isSorted = header.column.getIsSorted();
+    const isActive = Boolean(isSorted);
+    const direction = isSorted === "asc" ? "asc" : isSorted === "desc" ? "desc" : null;
     return (
       <TableHead
         key={header.id}
@@ -130,16 +132,17 @@ export function DataTable({
         )}
       >
         {header.column.getCanSort() ? (
-          <button
-            type="button"
+          <SortableHeader
+            label={flexRender(header.column.columnDef.header, header.getContext())}
+            active={isActive}
+            direction={direction}
+            align={align}
             onClick={header.column.getToggleSortingHandler()}
-            className="inline-flex items-center gap-1 uppercase tracking-wide transition-opacity hover:opacity-80"
-          >
-            {flexRender(header.column.columnDef.header, header.getContext())}
-            <SortIcon dir={isSorted} />
-          </button>
+          />
         ) : (
-          flexRender(header.column.columnDef.header, header.getContext())
+          <span className="whitespace-nowrap">
+            {flexRender(header.column.columnDef.header, header.getContext())}
+          </span>
         )}
       </TableHead>
     );
@@ -197,13 +200,15 @@ export function DataTable({
                   </td>
                 </tr>
               ) : (
-                virtualRows.map((vr) => {
-                  const row = rows[vr.index];
-                  return renderRow(row, {
-                    height: `${vr.size}px`,
-                    transform: `translateY(${vr.start}px)`,
-                  });
-                })
+                virtualRows
+                  .filter((vr) => vr.index < rows.length)
+                  .map((vr) => {
+                    const row = rows[vr.index];
+                    return renderRow(row, {
+                      height: `${vr.size}px`,
+                      transform: `translateY(${vr.start}px)`,
+                    });
+                  })
               )}
               {/* Spacer to give the virtual container its full scroll height. */}
               {totalHeight > 0 && (
@@ -217,12 +222,6 @@ export function DataTable({
       </Table>
     </div>
   );
-}
-
-function SortIcon({ dir }) {
-  if (dir === "asc") return <ChevronUp className="h-3 w-3" />;
-  if (dir === "desc") return <ChevronDown className="h-3 w-3" />;
-  return <ChevronsUpDown className="h-3 w-3 opacity-40" />;
 }
 
 export default DataTable;

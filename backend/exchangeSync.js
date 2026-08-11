@@ -1,7 +1,5 @@
 const crypto = require("crypto");
-
-const USD_LIKE_QUOTES = ["USD", "USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP"];
-const STABLE_ASSETS = new Set(["USD", "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "USDD"]);
+const { STABLE_ASSETS, USD_LIKE_QUOTES, isStable } = require("./stablecoins");
 
 async function resolveFetch() {
   const fetch = (await import("node-fetch")).default;
@@ -11,6 +9,15 @@ async function resolveFetch() {
 function toNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+// Polymarket's Data API returns timestamps in SECONDS (unix), while JS Date
+// expects milliseconds. Normalize any sub-1e12 value (seconds) to ms so fills
+// don't collapse to 1970-01-21. Pass-through for already-ms values/dates.
+function toMillis(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e12 ? n * 1000 : n;
 }
 
 function roundMoney(value) {
@@ -85,6 +92,7 @@ function buildTradeAndFillRecord({
   strategyName,
   liquidityRole = null,
   referencePrice = null,
+  realizedPnl = null,
   rawPayload = {},
   executionMeta = {}
 }) {
@@ -144,6 +152,7 @@ function buildTradeAndFillRecord({
       liquidityRole,
       executedAt: ts,
       referencePrice: referencePrice == null ? null : toNumber(referencePrice),
+      realizedPnl: realizedPnl == null ? null : toNumber(realizedPnl),
       rawPayload
     }
   };
@@ -317,6 +326,7 @@ async function syncHyperliquid(apiKey, extraData = {}, context = {}) {
       feeSource: "exchange_reported",
       strategyName: "Hyperliquid Perp",
       liquidityRole: fill.crossed === false ? "maker" : fill.crossed === true ? "taker" : null,
+      realizedPnl: toNumber(fill.closedPnl),
       rawPayload: fill,
       executionMeta: {
         direction: fill.dir || null,
@@ -433,6 +443,111 @@ async function syncLighter(apiKey, extraData = {}, context = {}) {
   return { holdings, trades, tradeFills, cashBalance, currency: "USDC", syncContext: context };
 }
 
+// Polymarket — keyless, read-only, queried by L1/proxy wallet address via the
+// public Data API. Positions/trades are per-outcome prediction shares (USDC
+// settled). Never attempts auth or writes. Full re-pull, no cursors (matches
+// the Lighter/Hyperliquid family).
+async function syncPolymarket(apiKey, extraData = {}, context = {}) {
+  const fetch = await resolveFetch();
+  const looksLikeAddress = (v) => typeof v === "string" && /^0x[a-fA-F0-9]{8,}$/.test(v.trim());
+  const address = (extraData && looksLikeAddress(extraData.address))
+    ? String(extraData.address).trim()
+    : (looksLikeAddress(apiKey) ? String(apiKey).trim() : (extraData && extraData.address) || apiKey);
+  if (!address || !looksLikeAddress(address)) throw new Error("Polymarket wallet address is required");
+
+  const positionsUrl = `https://data-api.polymarket.com/positions?user=${encodeURIComponent(address)}`;
+  const tradesUrl = `https://data-api.polymarket.com/trades?user=${encodeURIComponent(address)}`;
+
+  const rawPositions = await fetchJsonOrThrow(fetch, positionsUrl, undefined, "Polymarket positions fetch failed").catch(() => []);
+  const positionRows = Array.isArray(rawPositions) ? rawPositions : [];
+  const holdings = positionRows
+    .filter((p) => p && Math.abs(toNumber(p.size)) > 0)
+    .map((p) => {
+      const symbol = String(p.slug || p.conditionId || p.title || "PREDICTION").toUpperCase();
+      const size = toNumber(p.size);
+      const curPrice = toNumber(p.curPrice ?? p.currentPrice ?? p.price);
+      const marketValue = toNumber(p.currentValue ?? p.estimatedValue ?? (size * (curPrice || 0)));
+      return {
+        symbol,
+        name: String(p.title || p.question || p.slug || symbol),
+        quantity: size,
+        currentPrice: curPrice,
+        averageEntryPrice: toNumber(p.avgPrice ?? p.averageEntryPrice),
+        marketValue,
+        costBasis: toNumber(p.initialValue ?? (size * (toNumber(p.avgPrice) || 0))),
+        side: size > 0 ? "long" : size < 0 ? "short" : "unknown",
+        currency: "USDC",
+        type: "prediction",
+        market_type: "prediction",
+        strategyName: "Polymarket",
+        metadata: {
+          conditionId: p.conditionId,
+          asset: p.asset,
+          outcome: p.outcome,
+          outcomeIndex: p.outcomeIndex,
+          slug: p.slug,
+          proxyWallet: p.proxyWallet,
+          endDate: p.endDate,
+          negativeRisk: p.negativeRisk,
+          redeemable: p.redeemable
+        },
+        date_added: new Date().toISOString()
+      };
+    });
+
+  const rawTrades = await fetchJsonOrThrow(fetch, tradesUrl, undefined, "Polymarket trades fetch failed").catch(() => []);
+  const tradeRows = Array.isArray(rawTrades) ? rawTrades : [];
+  // Resolve each fill's market question from the positions we already fetched
+  // (the trades API only returns conditionId/slug, not the human question).
+  const conditionTitle = new Map();
+  positionRows.forEach((p) => {
+    const key = String(p.conditionId || p.slug || p.asset || p.title || "").trim().toLowerCase();
+    if (key && p.title) conditionTitle.set(key, String(p.title));
+  });
+  const trades = [];
+  const tradeFills = [];
+  tradeRows.forEach((t, idx) => {
+    const asset = String(t.asset || t.slug || t.conditionId || "").trim().toUpperCase();
+    const titleKey = String(t.conditionId || t.slug || t.asset || "").trim().toLowerCase();
+    const marketTitle = conditionTitle.get(titleKey) || String(t.title || p?.title || "").trim() || asset;
+    const side = t.side === "SELL" ? "sell" : "buy";
+    const price = toNumber(t.price ?? t.avgPrice ?? t.curPrice);
+    const size = Math.abs(toNumber(t.size ?? t.amount ?? t.quantity));
+    const record = buildTradeAndFillRecord({
+      platform: "polymarket",
+      clientId: `pm-${t.id ?? t.transactionHash ?? idx}`,
+      platformTradeId: t.id ?? t.transactionHash,
+      platformFillId: t.id ?? t.transactionHash,
+      executedAt: toIsoString(toMillis(t.timestamp ?? t.time ?? t.createdAt)),
+      asset,
+      name: marketTitle,
+      type: "prediction",
+      side,
+      marketType: "prediction",
+      quantity: size,
+      price,
+      notional: size * (price || 0),
+      fee: Math.abs(toNumber(t.fee ?? 0)),
+      feeCurrency: "USDC",
+      feeSource: "exchange_reported",
+      strategyName: "Polymarket",
+      rawPayload: t,
+      executionMeta: { side: t.side, role: t.role }
+    });
+    trades.push(record.trade);
+    tradeFills.push(record.tradeFill);
+  });
+
+  console.log(`[Polymarket] Found ${holdings.length} positions, ${trades.length} fills.`);
+  // TODO(polymarket-cash): the Data API /positions endpoint does not report USDC cash.
+  // A real balance must be fetched from a separate source (e.g. on-chain USDC balance
+  // via the Polygon RPC, or a Polymarket /value|/activity endpoint) before this is
+  // populated. Until then we report 0 so the canonical layer emits no fabricated cash
+  // row (capabilities.cash stays true; mapPredictionWalletToSource omits the row at 0).
+  const cashBalance = 0;
+  return { holdings, trades, tradeFills, cashBalance, currency: "USDC", syncContext: context };
+}
+
 async function syncBinance(apiKey, apiSecret, context = {}) {
   const fetch = await resolveFetch();
   if (!apiKey || !apiSecret) throw new Error("Binance API Key and Secret are required");
@@ -465,8 +580,13 @@ async function syncBinance(apiKey, apiSecret, context = {}) {
 
   const exchangeSymbols = new Set((exchangeInfo?.symbols || []).map((row) => String(row?.symbol || "").trim().toUpperCase()).filter(Boolean));
 
+  // Stable balances (USDT/USDC/BUSD/...) are folded into `cashBalance` below
+  // (stableSpotBalance sum), NOT emitted as holding rows — otherwise the same
+  // balance is double-counted (once as a holding, once as cash). This matches
+  // Hyperliquid/Lighter, where USDC collateral is cash, not a position.
   const spotHoldings = (spotAccount?.balances || [])
     .filter((row) => toNumber(row.free) + toNumber(row.locked) > 0)
+    .filter((row) => !isStable(row.asset))
     .map((row) => ({
       symbol: row.asset,
       name: row.asset,
@@ -1144,6 +1264,7 @@ async function syncIbkr(apiKey, apiSecret, context = {}) {
 module.exports = {
   syncHyperliquid,
   syncLighter,
+  syncPolymarket,
   syncBinance,
   syncBybit,
   syncIbkr,

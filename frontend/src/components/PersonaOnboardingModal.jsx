@@ -5,23 +5,23 @@ const PERSONAS = [
   {
     key: "casual_investor",
     label: "Casual investor",
-    description: "Portfolio → Watchlist → Daily briefing → Journal",
-    detail: "Track holdings, follow a few assets, read the daily briefing, and journal occasional decisions.",
-    sectionOrder: ["Home", "Briefing", "Portfolio", "Watchlist", "Research", "Journal"]
+    description: "Portfolio → Watchlist → Research → Journal",
+    detail: "Track holdings, follow a few assets, and journal occasional decisions.",
+    sectionOrder: ["Home", "Portfolio", "Watchlist", "Research", "Journal"]
   },
   {
     key: "active_trader",
     label: "Active trader",
-    description: "Briefing → Alerts → Execution history → Journal → Review",
-    detail: "Start every day with the briefing, act on alerts, review executions, journal outcomes, and run reviews.",
-    sectionOrder: ["Briefing", "Watchlist", "Portfolio", "Decisions", "Journal", "Analytics"]
+    description: "Watchlist → Alerts → Execution history → Journal → Review",
+    detail: "Act on alerts, review executions, journal outcomes, and run reviews.",
+    sectionOrder: ["Watchlist", "Portfolio", "Decisions", "Journal", "Analytics"]
   },
   {
     key: "small_team",
     label: "Small team",
     description: "Workspace activity → Research queue → Shared alerts → Decision review",
     detail: "Coordinate around workspace activity, share a research queue, triage alerts, and review decisions together.",
-    sectionOrder: ["Briefing", "Research", "Watchlist", "Decisions", "Journal", "Analytics"]
+    sectionOrder: ["Research", "Watchlist", "Decisions", "Journal", "Analytics"]
   }
 ];
 

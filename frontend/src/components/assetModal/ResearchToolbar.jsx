@@ -59,6 +59,7 @@ export function ResearchToolbar({
     bond: "Compare Asset",
   }[kind] || "Compare Asset";
   const supports = (a) => kindSupportsAction(kind, a);
+  const isEtf = kind === "etf";
 
   const actionDefs = [];
   if (supports("research")) {
@@ -73,7 +74,7 @@ export function ResearchToolbar({
     actionDefs.push({
       key: "profile",
       label: profileCta,
-      variant: "ghost",
+      variant: isEtf ? "primary" : "ghost",
       onClick: () => onViewCompanyProfile?.(asset)
     });
   }
@@ -107,10 +108,17 @@ export function ResearchToolbar({
     actionDefs.push({ key: "decisionLedger", label: "Decision Ledger", variant: "ghost", onClick: () => onDecisionLedger?.(asset) });
   }
 
+  const visibleActions = isEtf
+    ? actionDefs.filter((action) => ["profile", "compare"].includes(action.key))
+    : actionDefs;
+  const overflowActions = isEtf
+    ? actionDefs.filter((action) => !["profile", "watchlist", "compare"].includes(action.key))
+    : [];
+
   return (
     <footer className="am-toolbar" aria-label="Research actions">
       <div className="am-toolbar-actions">
-        {actionDefs.map((a) => (
+        {visibleActions.map((a) => (
           <Button
             key={a.key}
             variant={a.variant}
@@ -122,10 +130,18 @@ export function ResearchToolbar({
             {a.label}
           </Button>
         ))}
+        {overflowActions.length ? (
+          <details className="am-toolbar-overflow">
+            <summary>More actions</summary>
+            <div className="am-toolbar-overflow-menu">
+              {overflowActions.map((a) => (
+                <Button key={a.key} variant="ghost" size="sm" onClick={a.onClick}>{a.label}</Button>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </div>
-      <Button variant="secondary" size="sm" onClick={onClose} className="am-toolbar-close">
-        Close
-      </Button>
+      {!isEtf ? <Button variant="secondary" size="sm" onClick={onClose} className="am-toolbar-close">Close</Button> : null}
     </footer>
   );
 }

@@ -11,6 +11,7 @@ import { DataTable } from "../../data-table/DataTable";
 import { Badge } from "../../ui/badge";
 import { ORDER_STATUS, ORDER_STATUS_LABEL, ORDER_SIDE } from "../models/domainModels";
 import { formatMoney, formatQuantity, formatTimestamp, formatProgress, formatBps } from "../formatters";
+import { AssetLogo } from "../../../components/AssetLogo";
 
 const STATUS_TONE = {
   [ORDER_STATUS.WORKING]: "outline",
@@ -68,7 +69,10 @@ export function OrdersModule({ orders = [], onManageConnections, assetClassFilte
       sortable: true,
       cell: (o) => (
         <div className="flex flex-col">
-          <strong className="font-semibold">{o.symbol}</strong>
+          <div className="flex items-center gap-1.5">
+            <AssetLogo asset={o} size="xs" />
+            <strong className="font-semibold">{o.symbol}</strong>
+          </div>
           <span className="text-[var(--color-text-muted)] text-xs">{o.brokerName}</span>
         </div>
       ),

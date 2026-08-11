@@ -5,7 +5,9 @@
 
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 
-const SIMULATED_PLAN_VALUES = new Set(["starter", "pro", "desk"]);
+// Accept new tier ids (plus/premium) and legacy ids (pro/desk) for the dev
+// "simulate plan" override during the rename rollout.
+const SIMULATED_PLAN_VALUES = new Set(["starter", "plus", "premium", "pro", "desk"]);
 const CSRF_FETCH_TIMEOUT_MS = 12000;
 const CSRF_FETCH_ATTEMPTS = 1;
 let csrfTokenCache = null;

@@ -14,6 +14,7 @@ const signupSchema = z.object({
   email: emailSchema,
   password: passwordSchema,
   displayName: z.string().max(100).trim().optional(),
+  referralCode: z.string().min(2).max(20).trim().optional(),
 });
 
 const signinSchema = z.object({
@@ -121,7 +122,8 @@ const optionsCalculationSchema = z.object({
 
 const historyQuerySchema = z.object({
   symbol: symbolSchema,
-  interval: z.enum(["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]).optional().default("1d"),
+  type: z.enum(["stock", "etf", "crypto", "forex", "currency", "indicator", "bond", "commodity"]).optional(),
+  interval: z.enum(["4H", "1D", "1W", "1M", "3M", "1Y", "YTD", "MAX"]).optional().default("1D"),
   range: z.enum(["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]).optional().default("1mo"),
   marketType: z.enum(["spot", "perp", "equity", "options", "commodity", "forex", "macro"]).optional().default("equity"),
 });
@@ -162,7 +164,9 @@ const accountDeleteSchema = z.object({
 });
 
 const planUpdateSchema = z.object({
-  plan: z.enum(["starter", "pro", "desk"]),
+  // Accept the new tier ids (plus/premium) plus the legacy ids (pro/desk) for
+  // backward compatibility during the rename rollout.
+  plan: z.enum(["starter", "plus", "premium", "pro", "desk"]),
   billingCycle: z.enum(["monthly", "yearly"]),
 });
 

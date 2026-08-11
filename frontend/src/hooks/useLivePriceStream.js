@@ -23,6 +23,7 @@ export function useLivePriceStream({
   setWatchlistAssets,
   setPortfolio,
   setSelectedAsset,
+  paused = false,
 } = {}) {
   const [status, setStatus] = useState("idle");
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
@@ -55,6 +56,13 @@ export function useLivePriceStream({
   }, [portfolio, selectedAsset, watchlistAssets]);
 
   useEffect(() => {
+    // When paused (e.g. user idle > 30m), close any live sockets and stay idle
+    // without auto-reconnecting. Resuming flips `paused` back to false and the
+    // effect re-runs to re-establish the stream.
+    if (paused) {
+      setStatus("idle");
+      return;
+    }
     if (!canUseWebSocket()) {
       setStatus("degraded");
       return;
@@ -212,7 +220,7 @@ export function useLivePriceStream({
         try { ws.close(); } catch {}
       });
     };
-  }, [symbolsByType.crypto.join(","), symbolsByType.tradfi.join(","), retryCount]);
+  }, [symbolsByType.crypto.join(","), symbolsByType.tradfi.join(","), retryCount, paused]);
 
   return { liveStreamStatus: status, lastLivePriceAt: lastUpdatedAt };
 }

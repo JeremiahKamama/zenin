@@ -9,6 +9,16 @@
  * glassmorphism, no rounded marketing cards, green/red only for market meaning.
  */
 import React from "react";
+import { formatMacroNumber } from "./macro/MacroFormatter";
+
+function formatSignalReading(reading) {
+  const raw = String(reading ?? "").trim();
+  if (!raw || raw === "—") return "—";
+  const numeric = Number(raw.replace(/[$,%]/g, ""));
+  if (!Number.isFinite(numeric)) return raw;
+  const suffix = raw.includes("%") ? "%" : "";
+  return `${formatMacroNumber(numeric, { digits: 2 })}${suffix}`;
+}
 
 /* ---------- Signal tile (dense, no chart) ---------- */
 function SignalTile({ label, reading, direction = "flat", confidence = null, tone = "neutral" }) {
@@ -16,11 +26,11 @@ function SignalTile({ label, reading, direction = "flat", confidence = null, ton
   const dirColor =
     direction === "up" ? "var(--color-data-up)" : direction === "down" ? "var(--color-data-down)" : "var(--color-data-slate-dim)";
   return (
-    <div className={`deskv2-tile deskv2-tile-${tone}`} style={{ minWidth: 132 }}>
+    <div className={`deskv2-tile deskv2-tile-${tone}`}>
       <div className="deskv2-tile-label">{label}</div>
       <div className="deskv2-tile-reading">
         <span style={{ color: dirColor }}>{dirGlyph}</span>
-        <span>{reading || "—"}</span>
+        <span>{formatSignalReading(reading)}</span>
       </div>
       <div className="deskv2-tile-meta">
         {confidence != null ? <span>Conf {confidence}%</span> : <span>&nbsp;</span>}
@@ -78,7 +88,7 @@ export function buildMacroSignalTiles({ macroRows = [], riskRows = [], fxRates =
       const hay = `${norm(r?.indicator)} ${norm(r?.indicatorCode)} ${norm(r?.name)} ${norm(r?.label)}`;
       return keys.some((k) => hay.includes(k));
     });
-  const read = (r) => (r ? `${r.value ?? r.primary ?? r.secondary ?? "—"}${r.unit && r.unit !== "%" ? "" : ""}` : "—");
+  const read = (r) => (r ? formatMacroNumber(r.value ?? r.primary ?? r.secondary, { kind: r.unit === "%" ? "percentage" : "decimal", digits: 2 }) : "—");
   const toneOf = (v) => (v > 0 ? "positive" : v < 0 ? "negative" : "neutral");
 
   // Liquidity: no direct WB series; fall back to growth proxy when present.

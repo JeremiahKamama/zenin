@@ -6,6 +6,7 @@
 // callbacks. Monochrome, token-driven. No fabrication (seed only).
 import { useMemo, useState } from "react";
 import { browseEtfs, ETF_FACETS } from "../utils/etfIntelligence";
+import { AssetLogo } from "./AssetLogo";
 
 const FACET_VALUES = {
   assetClass: [["equity", "Equity"], ["bond", "Bond"], ["commodity", "Commodity"]],
@@ -56,6 +57,7 @@ export function EtfDiscovery({ onOpenResearch, onCompare, onAddWatchlist, onPort
         {results.length ? results.map((m) => (
           <article key={m.sym} className="etf-card">
             <header className="etf-card-head">
+              <AssetLogo asset={{ symbol: m.sym, name: m.name, kind: "etf" }} size="md" />
               <span className="etf-card-sym">{m.sym}</span>
               <span className="etf-card-cat">{m.category}</span>
             </header>

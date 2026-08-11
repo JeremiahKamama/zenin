@@ -128,7 +128,7 @@ async function initializeMarketIntelTables(db) {
       event_type      VARCHAR(50),
       symbol          VARCHAR(20),
       conditions      JSONB DEFAULT '{}',
-      channels        JSONB DEFAULT '["inApp","push"]',
+      channels        JSONB DEFAULT '["inApp"]',
       enabled         BOOLEAN DEFAULT true,
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       updated_at      TIMESTAMPTZ DEFAULT NOW()

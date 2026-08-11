@@ -67,22 +67,22 @@ export const STEP_REGISTRY = {
     required: false,
     component: "NotificationStep",
   },
-  // ---- Pro-only ----
+  // ---- Plus-only (legacy id: pro) ----
   [ONBOARDING_STEPS.RESEARCH_PREFERENCES]: {
     key: ONBOARDING_STEPS.RESEARCH_PREFERENCES,
     title: "Research preferences",
     description: "Tailor the Asset Research Workspace to how you analyze.",
-    plans: ["pro"],
+    plans: ["plus"],
     required: true,
     component: "ResearchPreferencesStep",
     validate: (a) => Boolean(a.researchStyle && a.horizon && a.layout),
   },
-  // ---- Desk-only ----
+  // ---- Premium-only (legacy id: desk) ----
   [ONBOARDING_STEPS.ORGANIZATION]: {
     key: ONBOARDING_STEPS.ORGANIZATION,
     title: "Organization",
-    description: "Name your desk workspace and set its identity.",
-    plans: ["desk"],
+    description: "Name your premium workspace and set its identity.",
+    plans: ["premium"],
     required: true,
     component: "WorkspaceStep",
     validate: (a) => Boolean(a.workspaceName && a.workspaceName.trim()),
@@ -91,7 +91,7 @@ export const STEP_REGISTRY = {
     key: ONBOARDING_STEPS.TEAM_SETUP,
     title: "Invite your team",
     description: "Add seats and set permissions. You can invite more later.",
-    plans: ["desk"],
+    plans: ["premium"],
     required: false, // can launch with just the owner
     component: "TeamSetupStep",
   },
@@ -119,8 +119,11 @@ export const STEP_REGISTRY = {
 // Ordered step keys for a given plan (shared steps first, then plan-specific,
 // then engine phases). This is the single source of truth for ordering.
 export function getStepOrderForPlan(plan) {
+  // Normalize legacy plan ids (pro/desk) to the new ids (plus/premium) so older
+  // callers still resolve the right step set during the rename rollout.
+  const normalizedPlan = plan === "pro" ? "plus" : plan === "desk" ? "premium" : plan;
   const order = Object.values(STEP_REGISTRY)
-    .filter((s) => s.plans.includes(plan))
+    .filter((s) => s.plans.includes(normalizedPlan))
     .sort((a, b) => a._ordinal - b._ordinal)
     .map((s) => s.key);
   return order;

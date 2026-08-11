@@ -1,58 +1,32 @@
-## Goal
-Two things: (1) stop sending live-app users into the "Demo Workspace" experience — when they click **Continue as Guest**, they should land in the **full app** (with empty/placeholder states for data-bearing modules), not the fake-data `GuestWorkspacePreview`; (2) remove the **"Opening demo workspace"** loading-screen copy. The "Continue as Guest" button stays. No backend changes — guests still have no real session, so data-bearing modules will show their normal empty states (confirmed with you).
+Picking up the 4 remaining items from the data-integrity plan, all verified against current code:
 
-All changes are in the frontend, almost entirely in `frontend/src/App.jsx`.
+## B1 — USDC as buying power (App.jsx)
+Two sites still gate on `nextCashBalances.USD != null` only: line 2822 (cash refresh) and line 3080 (bootstrap multi-fetch). HL syncs USDC, so the $317K never replaces the $10K default.
+**Fix:** sum USD-pegged stablecoins (USD, USDC, USDT) into the buying-power balance. Add a small `STABLE_USD_EQUIV` set and compute `setBalance` from the sum of those currencies when present. Apply at both call sites identically.
 
-## Root cause (why guests still see the demo workspace today)
-- The guest button (`AuthPage.jsx:114`, `AuthModal.jsx:124`) navigates to `/app?guest=1`.
-- On `/app`, `?guest=1` makes `isGuestQueryRequested()` true → `isExplicitGuestMode=true` → `shouldRenderGuestPreview=true` (`App.jsx:6962`) → the real modules (Home/Portfolio/Watchlist/Research/Analytics/Options/Tax Estimator) are **swapped out** for `<GuestWorkspacePreview>` (`App.jsx:7441`).
-- The "Opening demo workspace" text comes from `bootPhase === "opening_demo_mode"` (`App.jsx:4693, 4703`), set while `accessCheckLoading && isGuestQueryRequested()`.
-- `AuthPage.jsx` also sets `localStorage.zenin_guest_full_access=1`, but on production that flag is inert because `isDevFullAccessEnabled()` (`App.jsx:455`) requires `import.meta.env.DEV`. So prod guests still fall into the demo workspace. (We are *not* re-enabling full-access; we're disabling the demo gating.)
+## C3 — dead `sem.unrealizedPnl` reference (unifiedPortfolio.js:383)
+`sem` from `deriveReadModelSemantics` has no `unrealizedPnl` field, so this is always `undefined`. Harmless (the offset now uses `row.unrealized_pnl`), but it's dead code flagged in the plan.
+**Fix:** change `unrealizedPnl: sem.unrealizedPnl` → `unrealizedPnl: row.unrealized_pnl != null ? Number(row.unrealized_pnl) : null` so the field carries the real per-position PnL (useful for display and matches the value used in the offset calc).
 
-## Changes
+## G — Remove redundant Sources + Coverage cards (PortfolioDrillDown.jsx)
+The original plan said "remove the whole PortfolioDrillDown" — that's too blunt because DrillDown also renders the **Positions** card (where real synced BTC/ASTER holdings show) plus Rollout-check and Daily-snapshots. Surgical fix per the user's actual ask ("remove the two Sources cards and the Coverage card"):
+- Remove the Sources card block (`PortfolioDrillDown.jsx:142-175`).
+- Remove the Coverage card block (`:177-218`).
+- Keep Positions (`:222-321`), Rollout check (`:324-354`), Daily snapshots (`:356+`).
+- Remove now-unused props (`duplicateInstruments`, `unvaluedTotal`, `warnings`, `fxRates`) from the component signature and the call site in PortfolioModule.jsx:3528-3542 if they're no longer referenced.
 
-### 1. `frontend/src/App.jsx` — stop rendering the demo workspace gate
-Make guests render the **real modules** (which will show empty/placeholder states, since they have no backend session), instead of `<GuestWorkspacePreview>`:
-
-- **`App.jsx:6962`** — Neutralize `shouldRenderGuestPreview`. Change it to always `false` (simplest, leaves all the `!shouldRenderGuestPreview` render guards and `GuestWorkspacePreview` component in place untouched — minimal blast radius):
-  ```js
-  const shouldRenderGuestPreview = false; // Demo workspace disabled; guests now see the full app.
-  ```
-  *(Alternative considered: delete the variable + all references and the `GuestWorkspacePreview` component. Rejected for now — larger, riskier edit, and the component/preview modules can be removed in a follow-up cleanup.)*
-
-### 2. `frontend/src/App.jsx` — remove "Opening demo workspace" loading text
-- **`App.jsx:4693`** — stop selecting the `opening_demo_mode` phase. Guests should see the normal "Checking session" phase like everyone else:
-  ```js
-  setBootPhase(accessCheckLoading ? "checking_session" : ...);
-  ```
-  i.e. replace the `isGuestQueryRequested() ? "opening_demo_mode" : "checking_session"` ternary with just `"checking_session"`.
-- **`App.jsx:4703`** — remove the `case "opening_demo_mode": return "Opening demo workspace";` branch from `bootPhaseCopy` (the `default` "Checking session" covers it).
-
-### 3. `frontend/src/App.jsx` — relabel the guest plan chip
-Guests currently show **"Demo Workspace"** as their plan label. Since this is no longer a demo workspace, change the label guests see:
-- **`App.jsx:651-653`** (`getGuestWorkspaceLabel`) — return `"Guest"` instead of `"Demo Workspace"`. This label flows into `accountPlanLabel` at `App.jsx:4780` and `4829`.
-
-### 4. `frontend/src/AuthPage.jsx` — keep the button, drop the misleading comment
-- **`AuthPage.jsx:114-124`** — The `handleGuestEntry` handler is fine as-is (navigates to `/app?guest=1`). I'll update the stale comment at lines 116-117 that says *"treat the user like a dev/full-access user without backend auth"* — that's no longer accurate (we're not granting full access; guests see the full UI with empty states). New comment will say it enters the app as a guest with no backend session. No behavioral change here.
-
-## Not changing (intentionally)
-- The backend: `requireSignedIn` still blocks `/api/app/bootstrap`, `/api/workspaces/*`, `/api/account/*` for guests. Real modules will therefore show empty/placeholder states — which is exactly what you confirmed you want "for now". No backend edits.
-- The "Continue as Guest" **button** stays (per your answer), in both `AuthPage.jsx` and `AuthModal.jsx`.
-- The many `isGuestUser`/`isExplicitGuestMode` early-returns throughout `App.jsx` (watchlist alert emails, RevenueCat, 2FA, workspace settings sync, etc.) stay — they correctly skip backend calls that would 401 for a guest. Changing them is out of scope and not needed for "see the whole app".
-- `zenin_guest_full_access` localStorage flag: left in place (harmless on prod; useful in dev). Clearing it isn't required for this fix.
-- `GuestWorkspacePreview` and `GUEST_PREVIEW_*` constants: left in the file (now unused via the `false` short-circuit) to keep this change small and reversible. Can be deleted in a follow-up cleanup PR.
+## H — Move timeframe dropdown to top-right of hero card (HomeModule.jsx)
+Currently the timeframe strip (`home-exec-timeframe-strip` at line 2894) is a flex sibling inside `home-exec-command-head`, sitting below/left of the value block rather than at the card's top-right corner.
+**Fix:** restructure the `home-exec-command-head` (line 2850) so the left content (label/value/sources/brokerage) and the timeframe strip are in a row, with the timeframe pushed to the right edge via `margin-left: auto` (or a header-row flex layout). Pure layout/CSS change, no logic change.
 
 ## Verification
-After the edits:
-1. `cd frontend && npm run build` — confirm it builds clean (no dead-code errors; the unused `GuestWorkspacePreview` is still imported and referenced, just never rendered).
-2. `npm run dev`, open `/auth`, click **Continue as Guest**:
-   - No "Opening demo workspace" text — should show "Checking session" / normal loading.
-   - Lands on `/app?guest=1` showing the **real** Home module (empty states), not `GuestWorkspacePreview`.
-   - Sidebar navigates to Portfolio / Watchlist / Research / Analytics / Options / Tax Estimator — each shows the real module's empty state, not demo cards.
-   - Plan label in the UI reads **"Guest"**, not "Demo Workspace".
-3. Sign-in flow still works (signing in strips `?guest=` via `getSignedInWorkspacePath`, unaffected).
+- B1: after re-sync, the wallet's USDC ($317K) becomes buying power; "Buying power" stat shows the real balance not $10K.
+- C3: grep confirms no remaining `sem.unrealizedPnl`; positions carry real unrealized PnL.
+- G: Portfolio page shows Positions/Rollout/Snapshots but no Sources/Coverage cards; Home's UnifiedSourceStrip remains the single source indicator.
+- H: timeframe dropdown sits at top-right of the hero card.
+- `npm run build` clean in frontend.
 
-## Risk / scope
-- **Low risk, frontend-only, ~4 small edits in 2 files.** No API, DB, auth, or routing changes.
-- The main behavioral shift: guests now see real (empty) modules instead of polished demo content — expected per your instruction.
-- If a guest later signs in, everything works as before.
+## Not touched (out of scope)
+- The PnL double-count numeric re-check (C2) — you only asked for B1, C3, G, H. The offset wiring is in place; a live numeric check against the $317K wallet is a separate verification step if you want it.
+- `INITIAL_ACCOUNT_BALANCE` denominator / +34700% — separate item.
+- Harmonization plan (Journal/Tax) — separate track.

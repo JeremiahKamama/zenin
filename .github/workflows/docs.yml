@@ -1,0 +1,41 @@
+name: docs
+
+on:
+  push:
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs.yml"
+
+jobs:
+  build-and-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Validate frontmatter
+        run: npm run check:frontmatter
+      - name: Check internal links
+        run: npm run check:links
+      - name: Build public portal
+        run: npm run build
+        env:
+          NODE_ENV: production
+      - name: Confirm internal docs excluded from build
+        run: |
+          if [ -d .vitepress/dist ]; then
+            if grep -rl "Build and operate" .vitepress/dist >/dev/null 2>&1; then
+              echo "Internal content leaked into public build."
+              exit 1
+            fi
+          fi

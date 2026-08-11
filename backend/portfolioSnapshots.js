@@ -27,7 +27,8 @@
  * silent gap.
  */
 
-const EODHD_API_TOKEN = process.env.EODHD_API_TOKEN || process.env.EODHD_API_KEY || process.env.EODHD_TOKEN || null;
+// Benchmark + close-price feeds now use Yahoo Finance (token-free). See
+// loadYahooSeries / closeForDate below.
 
 // US market holidays (fixed + computed). Kept minimal; the carry-forward rule
 // makes exact holiday coverage non-critical for integrity (a holiday simply
@@ -87,53 +88,76 @@ function toNum(v, fallback = 0) {
 }
 
 // ---------------------------------------------------------------------------
-// Daily close-price lookup. Uses EODHD when configured; otherwise returns null
-// so the caller can mark the snapshot estimated=TRUE (never fabricate prices).
-// ---------------------------------------------------------------------------
-async function getClosePrice(symbol, dateStr) {
-  if (!EODHD_API_TOKEN || !DEPS.fetch) return null;
-  try {
-    const url = `https://eodhd.com/api/eod/${encodeURIComponent(symbol)}.US?api_token=${EODHD_API_TOKEN}&fmt=json&date=${dateStr}`;
-    const res = await DEPS.fetch(url);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const close = json && (json.close ?? json.adjusted_close);
-    return close != null ? Number(close) : null;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Benchmark daily close feed. Maps a benchmark symbol to a real market series:
-//   - Equity/ETF benchmarks (SPY, QQQ, VT, ACWI, VOO, VTI...) -> EODHD .US EOD.
-//   - Crypto benchmarks (BTC, ETH) -> EODHD crypto EOD when available.
-// Returns null (never a fabricated value) when no source is configured; the
-// caller then leaves benchmark fields NULL so the curve does not invent data.
+// Daily close-price lookup. Uses Yahoo Finance (token-free) when a fetch
+// implementation is available; otherwise returns null so the caller can mark
+// the snapshot estimated=TRUE (never fabricate prices).
 // ---------------------------------------------------------------------------
 const CRYPTO_BENCHMARKS = new Set(['BTC', 'ETH', 'BTC-USD', 'ETH-USD']);
 
-async function getBenchmarkClose(symbol, dateStr) {
-  if (!symbol) return null;
+// Cache full benchmark/close history per symbol for 1h so backfill of many
+// snapshot days reuses one Yahoo fetch instead of one request per day.
+const _priceSeriesCache = new Map(); // symbol -> { loadedAt, map: Map<dateStr, close> }
+
+async function loadYahooSeries(symbol) {
   const sym = String(symbol).toUpperCase();
-  if (!EODHD_API_TOKEN || !DEPS.fetch) return null;
+  const cached = _priceSeriesCache.get(sym);
+  const now = Date.now();
+  if (cached && now - cached.loadedAt < 1000 * 60 * 60) return cached.map;
+  const yfSymbol = CRYPTO_BENCHMARKS.has(sym) ? sym.replace('-USD', '') + '-USD' : sym;
+  const period1 = Math.floor(new Date(Date.UTC(new Date().getUTCFullYear() - 2, 0, 1)).getTime() / 1000);
+  const period2 = Math.floor(now / 1000);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfSymbol)}?period1=${period1}&period2=${period2}&interval=1d`;
   try {
-    let url;
-    if (CRYPTO_BENCHMARKS.has(sym)) {
-      const base = sym.replace('-USD', '');
-      url = `https://eodhd.com/api/eod/${encodeURIComponent(base)}-USD.CC?api_token=${EODHD_API_TOKEN}&fmt=json&from=${dateStr}&to=${dateStr}`;
-    } else {
-      url = `https://eodhd.com/api/eod/${encodeURIComponent(sym)}.US?api_token=${EODHD_API_TOKEN}&fmt=json&from=${dateStr}&to=${dateStr}`;
-    }
-    const res = await DEPS.fetch(url);
-    if (!res.ok) return null;
+    if (!DEPS.fetch) return cached ? cached.map : new Map();
+    const res = await DEPS.fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) return cached ? cached.map : new Map();
     const json = await res.json();
-    const row = Array.isArray(json) ? json[json.length - 1] : json;
-    const close = row && (row.adjusted_close ?? row.close);
-    return close != null ? Number(close) : null;
+    const r = json && json.chart && json.chart.result && json.chart.result[0];
+    const map = new Map();
+    if (r) {
+      const closes = r.indicators && r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close;
+      const ts = r.timestamp;
+      if (Array.isArray(closes) && Array.isArray(ts)) {
+        for (let i = 0; i < ts.length; i += 1) {
+          if (closes[i] != null) {
+            const d = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+            if (!map.has(d)) map.set(d, Number(closes[i]));
+          }
+        }
+      }
+    }
+    _priceSeriesCache.set(sym, { loadedAt: now, map });
+    return map;
   } catch {
-    return null;
+    return cached ? cached.map : new Map();
   }
+}
+
+// Resolve a close for dateStr, falling back to the nearest prior trading day
+// (up to 7 calendar days) so weekends/holidays still get a real price.
+async function closeForDate(symbol, dateStr) {
+  if (!symbol || !dateStr) return null;
+  const map = await loadYahooSeries(symbol);
+  if (!map || map.size === 0) return null;
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date(new Date(dateStr + 'T00:00:00Z').getTime() - i * 86400000).toISOString().slice(0, 10);
+    if (map.has(d)) return map.get(d);
+  }
+  return null;
+}
+
+async function getClosePrice(symbol, dateStr) {
+  return closeForDate(symbol, dateStr);
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark daily close feed via Yahoo Finance (token-free). Maps a benchmark
+// symbol to a real market series (SPY/QQQ/VT... equities+ETFs, BTC/ETH crypto).
+// Returns null (never a fabricated value) when the source is unavailable; the
+// caller then leaves benchmark fields NULL so the curve does not invent data.
+// ---------------------------------------------------------------------------
+async function getBenchmarkClose(symbol, dateStr) {
+  return closeForDate(symbol, dateStr);
 }
 
 // ---------------------------------------------------------------------------
@@ -142,9 +166,56 @@ async function getBenchmarkClose(symbol, dateStr) {
 // replays trades up to end-of-day and prices holdings at that day's close.
 // ---------------------------------------------------------------------------
 async function assembleSnapshotInputs(workspaceId, dateStr, { replay = false } = {}) {
-  // Holdings (current live prices). For replay we would price at dateStr close,
-  // but without a guaranteed price source we use current as a floor and flag
-  // estimated when replaying.
+  // Determine if this workspace uses the unified source layer (connected accounts).
+  const useUnified = DEPS.unifiedPortfolio && DEPS.unifiedPortfolio.isEnabled && DEPS.unifiedPortfolio.isEnabled();
+
+  // --- Unified source layer (connected accounts) ---
+  // Read positions and cash from the canonical source tables so connected-account
+  // holdings are valued historically, not just manually-entered ones.
+  let unifiedPositions = [];
+  let unifiedCash = 0;
+  if (useUnified) {
+    const posRes = await POOL.query(
+      `SELECT sp.symbol, sp.name, sp.asset_type AS "assetType", sp.market_type AS "marketType",
+              sp.quantity, sp.current_price AS "price", sp.market_value AS "marketValue",
+              sp.collateral_value AS "collateralValue", sp.unrealized_pnl AS "unrealizedPnl",
+              sp.instrument_type AS "instrumentType", sp.position_type AS "positionType",
+              sp.side, sp.native_currency AS "currency", sp.cost_basis AS "costBasis",
+              sp.base_currency AS "baseCurrency", sp.updated_at AS "asOf",
+              ps.provider AS "provider", psa.account_type AS "accountType"
+       FROM portfolio_source_positions sp
+       JOIN portfolio_sources ps ON ps.id = sp.source_id
+       LEFT JOIN portfolio_source_accounts psa ON psa.id = sp.account_id
+       WHERE ps.workspace_id = $1
+         AND sp.quantity > 0.00000001`,
+      [workspaceId]
+    );
+    unifiedPositions = posRes.rows;
+
+    const cashResUnified = await POOL.query(
+      `SELECT psc.currency, psc.amount, psc.base_currency AS "baseCurrency"
+       FROM portfolio_source_cash psc
+       JOIN portfolio_sources ps ON ps.id = psc.source_id
+       WHERE ps.workspace_id = $1`,
+      [workspaceId]
+    );
+    for (const r of cashResUnified.rows) {
+      const amount = toNum(r.amount);
+      const cur = String(r.currency || 'USD').toUpperCase();
+      const base = String(r.baseCurrency || 'USD').toUpperCase();
+      if (cur === base) unifiedCash += amount;
+      else {
+        // Best-effort FX: use portfolio_fx_rates if available
+        const fxRes = await POOL.query(
+          `SELECT rate FROM portfolio_fx_rates WHERE base=$1 AND quote=$2 ORDER BY fetched_at DESC LIMIT 1`,
+          [base, cur]
+        );
+        if (fxRes.rows.length) unifiedCash += amount * toNum(fxRes.rows[0].rate);
+      }
+    }
+  }
+
+  // --- Manual holdings (legacy/user-entered) ---
   const holdingsRes = await POOL.query(
     `SELECT symbol, name, price, quantity, entry_price AS "entryPrice", market_type AS "marketType", strategy_name AS "strategyName"
      FROM user_workspace_portfolio WHERE workspace_id = $1 AND quantity > 0.00000001`,
@@ -160,95 +231,119 @@ async function assembleSnapshotInputs(workspaceId, dateStr, { replay = false } =
     strategyName: h.strategyName
   }));
 
-  // Cash (sum across currencies, USD assumed for snapshot; FX left to caller).
+  // Cash (sum across currencies, USD assumed for snapshot).
   const cashRes = await POOL.query(
     `SELECT COALESCE(SUM(balance), 0) AS total FROM user_workspace_cash WHERE workspace_id = $1`,
     [workspaceId]
   );
-  const cash = toNum(cashRes.rows[0]?.total);
+  const manualCash = toNum(cashRes.rows[0]?.total);
 
-  // Connected-account holdings (brokerage/exchange). Aggregated into the same
-  // snapshot lineage so the Performance Curve reflects real broker balances, not
-  // just the manual portfolio. Joined through accounts -> connections (which
-  // carry workspace_id). market_value is the provider-reported current value.
-  // NOTE: this is live-marked at write time; historical replay cannot re-price
-  // broker positions (no per-day broker price history), so replayed days that
-  // include broker holdings are flagged estimated=TRUE by the caller.
-  let brokerageValue = 0;
-  const brokerageHoldings = [];
-  try {
-    const brokRes = await POOL.query(
-      `SELECT h.symbol, h.name, h.asset_type AS "assetType", h.quantity,
-              h.current_price AS "price", h.market_value AS "marketValue", h.currency,
-              c.provider AS "provider"
-       FROM brokerage_holdings h
-       JOIN brokerage_accounts a ON a.id = h.account_id
-       JOIN brokerage_connections c ON c.id = a.connection_id
-       WHERE c.workspace_id = $1 AND h.quantity > 0.00000001`,
-      [workspaceId]
-    );
-    for (const r of brokRes.rows) {
-      const mv = toNum(r.marketValue, toNum(r.price) * toNum(r.quantity));
-      brokerageValue += mv;
-      brokerageHoldings.push({
-        symbol: r.symbol,
-        name: r.name,
-        price: toNum(r.price),
-        quantity: toNum(r.quantity),
-        marketValue: mv,
-        marketType: r.assetType,
-        currency: r.currency,
-        source: r.provider || 'brokerage',
-        closePrice: toNum(r.price)
-      });
-    }
-  } catch {
-    // brokerage tables may not exist in every deployment; treat as no connected
-    // accounts rather than failing the whole snapshot.
-    brokerageValue = 0;
-  }
+  // If unified sources exist, cash comes from the unified layer; otherwise use manual.
+  const cash = useUnified && (unifiedCash !== 0 || unifiedPositions.length > 0) ? unifiedCash : manualCash;
 
-  // Value holdings at the requested day's close when possible (forward = live).
+  // Build the combined holdings list, including unified positions.
   let estimated = false;
+  const unifiedHoldings = unifiedPositions.map((r) => {
+    const price = toNum(r.price);
+    const qty = toNum(r.quantity);
+    const instrumentType = String(r.instrumentType || r.instrument_type || 'spot').toLowerCase();
+    let marketValue;
+    if (instrumentType === 'perpetual' || instrumentType === 'future') {
+      // Derivative: collateral + unrealized PNL (canonical semantics)
+      const collateral = toNum(r.collateralValue, toNum(r.costBasis));
+      const unrealized = toNum(r.unrealizedPnl, 0);
+      marketValue = collateral + unrealized;
+    } else {
+      // Spot/holding: quantity x price
+      marketValue = (price * qty) || toNum(r.marketValue, price * qty);
+    }
+    return {
+      symbol: r.symbol,
+      name: r.name,
+      price,
+      quantity: qty,
+      entryPrice: toNum(r.costBasis) / qty || price,
+      marketType: r.marketType || r.assetType || 'spot',
+      strategyName: r.provider || 'connected',
+      marketValue,
+      currency: r.currency,
+      source: r.provider,
+      closePrice: price,
+      instrumentType: r.instrumentType || r.instrument_type,
+      positionType: r.positionType || r.position_type,
+      side: r.side,
+      collateralValue: toNum(r.collateralValue),
+      unrealizedPnl: toNum(r.unrealizedPnl),
+      costBasis: toNum(r.costBasis)
+    };
+  });
+
+  // Value manual holdings at dateStr close when replaying (historical).
   let totalValue = 0;
+  if (unifiedPositions.length > 0) {
+    totalValue = unifiedHoldings.reduce((sum, h) => sum + (h.marketValue || 0), 0);
+  }
   for (const h of holdings) {
     let px = h.price;
     if (replay) {
       const close = await getClosePrice(h.symbol, dateStr);
       if (close != null) px = close;
-      else estimated = true; // no price source for this historical day
+      else estimated = true;
     }
     h.closePrice = px;
     h.marketValue = px * h.quantity;
     totalValue += h.marketValue;
   }
-  // Merge connected-account holdings into invested value + holdings list.
-  const allHoldings = holdings.concat(brokerageHoldings);
-  totalValue += brokerageValue;
-  if (brokerageHoldings.length > 0 && replay) estimated = true;
+
+  const allHoldings = holdings.concat(unifiedHoldings);
+  if (unifiedPositions.length > 0 && replay) estimated = true;
   const portfolioValue = cash + totalValue;
 
   // Realized P&L today: net trading cash flow from trades executed on this date.
-  // NOTE: user_workspace_trades stores no per-execution cost basis (no entry_price
-  // column), so realized P&L is derived as net cash movement from trades:
-  //   sells add (notional - fee); buys subtract (notional + fee).
-  // This is a documented approximation of realized P&L, not a cost-basis calc.
-  const realizedRes = await POOL.query(
-    `SELECT COALESCE(SUM(
-        CASE WHEN side = 'sell' THEN notional - fee
-             ELSE -(notional + fee) END
-      ), 0) AS realized
-     FROM user_workspace_trades WHERE workspace_id = $1 AND date = $2`,
-    [workspaceId, dateStr]
-  );
-  const realizedPnl = toNum(realizedRes.rows[0]?.realized);
+  // Uses portfolio_source_transactions (unified) when available, falls back to
+  // legacy user_workspace_trades.
+  let realizedPnl = 0;
+  if (useUnified) {
+    const txRes = await POOL.query(
+      `SELECT COALESCE(SUM(COALESCE(pst.realized_pnl, 0)), 0) AS realized
+       FROM portfolio_source_transactions pst
+       JOIN portfolio_sources ps ON ps.id = pst.source_id
+       WHERE ps.workspace_id = $1
+         AND DATE(pst.executed_at) = $2
+         AND pst.realized_pnl IS NOT NULL`,
+      [workspaceId, dateStr]
+    );
+    realizedPnl = toNum(txRes.rows[0]?.realized);
+  }
+  // Also check legacy trades (for non-unified workspaces or fallback)
+  if (realizedPnl === 0) {
+    const realizedRes = await POOL.query(
+      `SELECT COALESCE(SUM(
+          CASE WHEN side = 'sell' THEN notional - fee
+               ELSE -(notional + fee) END
+        ), 0) AS realized
+       FROM user_workspace_trades WHERE workspace_id = $1 AND date = $2`,
+      [workspaceId, dateStr]
+    );
+    realizedPnl = toNum(realizedRes.rows[0]?.realized);
+  }
 
-  // Deposits / withdrawals: there is no user_workspace_cashflows ledger in the
-  // current schema, so net external flow cannot be reconstructed per day.
-  // Default to 0 and document as a known limitation (flows affect only future
-  // snapshots via the live cash balance at write time).
-  const deposits = 0;
-  const withdrawals = 0;
+  // Deposits / withdrawals from the cash-flow ledger.
+  let deposits = 0;
+  let withdrawals = 0;
+  try {
+    const flowsRes = await POOL.query(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) AS deposits,
+              COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END), 0) AS withdrawals
+       FROM portfolio_cash_flows
+       WHERE workspace_id = $1 AND DATE(executed_at) = $2`,
+      [workspaceId, dateStr]
+    );
+    deposits = toNum(flowsRes.rows[0]?.deposits);
+    withdrawals = toNum(flowsRes.rows[0]?.withdrawals);
+  } catch (_) {
+    // table may not exist yet in older schemas
+  }
 
   // Counts for the day.
   const decisionRes = await POOL.query(
@@ -271,14 +366,35 @@ async function assembleSnapshotInputs(workspaceId, dateStr, { replay = false } =
   const bySector = {};
   const byCountry = {};
   const byAsset = {};
+  let costBasisTotal = 0;
   for (const h of allHoldings) {
-    allocation.push({ symbol: h.symbol, value: h.marketValue, weight: portfolioValue ? h.marketValue / portfolioValue : 0 });
+    const mv = h.marketValue || 0;
+    allocation.push({ symbol: h.symbol, value: mv, weight: portfolioValue ? mv / portfolioValue : 0 });
     const sector = h.strategyName || (h.source ? `Connected: ${h.source}` : 'Uncategorized');
     const country = (h.symbol || '').endsWith('.HK') ? 'HK' : (h.symbol || '').includes('-') ? 'INTL' : 'US';
-    bySector[sector] = (bySector[sector] || 0) + h.marketValue;
-    byCountry[country] = (byCountry[country] || 0) + h.marketValue;
+    bySector[sector] = (bySector[sector] || 0) + mv;
+    byCountry[country] = (byCountry[country] || 0) + mv;
     const atype = (h.marketType || 'spot').toUpperCase();
-    byAsset[atype] = (byAsset[atype] || 0) + h.marketValue;
+    byAsset[atype] = (byAsset[atype] || 0) + mv;
+    // Accumulate cost basis for unrealized PNL calculation
+    if (h.costBasis != null) costBasisTotal += toNum(h.costBasis);
+  }
+
+  // Unrealized PNL: for unified positions, sum from portfolio_source_positions
+  // (provider-reported unrealized PNL for derivatives). For manual/spot holdings,
+  // compute as: market_value - cost_basis.
+  let unrealizedPnl = 0;
+  for (const h of unifiedHoldings) {
+    if (h.unrealizedPnl != null) {
+      unrealizedPnl += toNum(h.unrealizedPnl);
+    } else if (h.costBasis != null && h.marketValue != null) {
+      unrealizedPnl += toNum(h.marketValue) - toNum(h.costBasis);
+    }
+  }
+  for (const h of holdings) {
+    if (h.entryPrice != null && h.price != null) {
+      unrealizedPnl += (toNum(h.price) - toNum(h.entryPrice)) * toNum(h.quantity);
+    }
   }
 
   return {
@@ -286,6 +402,7 @@ async function assembleSnapshotInputs(workspaceId, dateStr, { replay = false } =
     cash,
     investedCapital: totalValue,
     realizedPnl,
+    unrealizedPnl,
     holdings: allHoldings,
     allocation,
     sectorBreakdown: Object.entries(bySector).map(([k, v]) => ({ key: k, value: v })),
@@ -365,7 +482,23 @@ const DailySnapshotService = {
 
     const prev = await PortfolioHistoryRepository.getSnapshot(wid, addDays(dateStr, -1))
       || await PortfolioHistoryRepository.getLatestSnapshotBefore(wid, dateStr);
-    const prevValue = prev ? prev.portfolioValue : (opts.initialBalance != null ? opts.initialBalance : 10000);
+    // FIX: Do not default to $10,000 when there is no previous snapshot.
+    // Instead, derive the initial value from the first known portfolio state.
+    // If no prior snapshot and no explicit initialBalance provided, use the
+    // current day's portfolio value as the baseline (return = 0 for that day).
+    let prevValue;
+    if (prev) {
+      prevValue = prev.portfolioValue;
+    } else if (opts.initialBalance != null) {
+      prevValue = opts.initialBalance;
+    } else if (dateStr === new Date().toISOString().slice(0, 10)) {
+      // Today with no prior history: use today's own value (0% return)
+      prevValue = inputs.portfolioValue;
+    } else {
+      // Historical day with no prior snapshot: use today's portfolio as baseline
+      // (best available — this day's value is the first known observation)
+      prevValue = inputs.portfolioValue;
+    }
 
     const dailyPnl = inputs.portfolioValue - prevValue;
     const dailyReturn = prevValue ? dailyPnl / prevValue : 0;
@@ -396,7 +529,7 @@ const DailySnapshotService = {
       dailyPnl,
       dailyReturn,
       realizedPnl: inputs.realizedPnl,
-      unrealizedPnl: inputs.portfolioValue - inputs.investedCapital - inputs.cash,
+      unrealizedPnl: inputs.unrealizedPnl,
       benchmarkValue,
       benchmarkReturn,
       benchmarkRelativeReturn,
@@ -446,7 +579,7 @@ const DailySnapshotService = {
   /**
    * End-of-day job: ensure every calendar day up to (and including) `through`
    * has a snapshot. Market days get a real snapshot; non-market days carry the
-   * previous close forward (daily_pnl=0, estimated=TRUE) so the calendar never
+   * previous market close forward (daily_pnl=0, estimated=TRUE) so the calendar never
    * has gaps.
    */
   async runEod(workspaceId, through = new Date().toISOString().slice(0, 10), opts = {}) {
@@ -556,11 +689,176 @@ const PortfolioHistoryRepository = {
     return rows.map((r) => ({ date: r.date, allocation: r.allocation, sectorBreakdown: r.sectorBreakdown, countryBreakdown: r.countryBreakdown, assetBreakdown: r.assetBreakdown }));
   },
 
-  async getCashHistory(workspaceId, start, end) {
-    const rows = await this.getSnapshots(workspaceId, start, end);
-    return rows.map((r) => ({ date: r.date, cash: r.cash, portfolioValue: r.portfolioValue }));
-  }
+  async backfillHistorical(workspaceId, opts = {}) {
+    const resolved = await RESOLVE(null, workspaceId);
+    const wid = resolved.resolvedWorkspaceId;
+    const through = (opts.through || new Date().toISOString().slice(0, 10));
+    const batchSize = opts.batchSize || 50;
+    const from = opts.from || await this._getEarliestTransactionDate(wid);
+
+    let cur = from;
+    let written = 0;
+    let skipped = 0;
+    let estimated = 0;
+    let guard = 0;
+    const maxDays = opts.maxDays || 3650; // safety cap
+
+    while (cur <= through && guard < maxDays * 2) {
+      guard += 1;
+      if (isMarketDay(cur)) {
+        const r = await this.writeDay(wid, cur, { replay: true, source: 'backfill' });
+        if (r.written) {
+          written += 1;
+          if (r.snapshot.estimated) estimated += 1;
+        } else {
+          skipped += 1; // already exists (idempotent)
+        }
+      } else {
+        // Carry non-market days forward (weekends/holidays).
+        const r = await this.writeDay(wid, cur, { replay: true, source: 'backfill', carryForward: true });
+        if (r.written) written += 1;
+        else skipped += 1;
+      }
+      cur = addDays(cur, 1);
+    }
+    return { written, skipped, estimated, through, from };
+  },
+
+  /** Determine the earliest transaction date for a workspace, so backfill
+   * starts at the first real data point (not an arbitrary floor). */
+  async _getEarliestTransactionDate(workspaceId) {
+    const useUnified = DEPS.unifiedPortfolio && DEPS.unifiedPortfolio.isEnabled && DEPS.unifiedPortfolio.isEnabled();
+    if (useUnified) {
+      const r = await POOL.query(
+        `SELECT MIN(DATE(executed_at))::text AS d
+         FROM portfolio_source_transactions t
+         JOIN portfolio_sources s ON s.id = t.source_id
+         WHERE s.workspace_id = $1 AND DATE(executed_at) IS NOT NULL`,
+        [workspaceId]
+      );
+      if (r.rows[0]?.d) return r.rows[0].d;
+    }
+    // Fallback: legacy manual trades.
+    const r2 = await POOL.query(
+      `SELECT MIN(date)::text AS d FROM user_workspace_trades WHERE workspace_id = $1 AND date IS NOT NULL`,
+      [workspaceId]
+    );
+    if (r2.rows[0]?.d) return r2.rows[0].d;
+    return addDays(throughFallback(), -30);
+  },
 };
+
+/**
+ * Replay transactions up to end-of-day `dateStr` and value holdings at that
+ * day's historical close price (NOT today's price). This is the core of
+ * historical backfill (spec §2, §12).
+ *
+ * For unified (connected-account) positions: we must NOT use the current
+ * snapshot_position.market_value — instead, replay the transaction ledger to
+ * compute the quantity held on `dateStr`, then price at historical close.
+ */
+async function replayHistoricalSnapshot(workspaceId, dateStr) {
+  const useUnified = DEPS.unifiedPortfolio && DEPS.unifiedPortfolio.isEnabled && DEPS.unifiedPortfolio.isEnabled();
+  const holdingsMap = {}; // symbol → { quantity, costBasis, side, ... }
+  const cashFlows = { deposits: 0, withdrawals: 0, fees: 0 };
+
+  if (useUnified) {
+    // Replay unified transactions up to and including dateStr.
+    const txRes = await POOL.query(
+      `SELECT t.symbol, t.side, t.quantity, t.fee, t.currency, t.executed_at,
+              t.unit_price AS "unitPrice", t.realized_pnl AS "realizedPnl",
+              s.provider AS "provider"
+       FROM portfolio_source_transactions t
+       JOIN portfolio_sources s ON s.id = t.source_id
+       WHERE s.workspace_id = $1 AND DATE(t.executed_at) <= $2
+         AND t.quantity IS NOT NULL AND t.symbol IS NOT NULL
+       ORDER BY t.executed_at ASC`,
+      [workspaceId, dateStr]
+    );
+    for (const t of txRes.rows) {
+      const sym = t.symbol;
+      if (!holdingsMap[sym]) holdingsMap[sym] = { quantity: 0, costBasis: 0, side: null, provider: t.provider };
+      const side = String(t.side || '').toLowerCase();
+      const qty = Math.abs(toNum(t.quantity));
+      if (side === 'buy' || side === 'long') {
+        holdingsMap[sym].quantity += qty;
+        holdingsMap[sym].costBasis += toNum(t.fee || 0);
+      } else if (side === 'sell' || side === 'short') {
+        holdingsMap[sym].quantity -= qty;
+        holdingsMap[sym].costBasis += toNum(t.fee || 0);
+        if (String(t.realizedPnl || '').startsWith('-')) {
+          // realized loss on close
+        }
+        cashFlows.fees += toNum(t.fee || 0);
+      }
+      holdingsMap[sym].side = side === 'short' ? 'short' : (holdingsMap[sym].quantity > 0 ? 'long' : 'short');
+    }
+    // Cash from unified cash-flow table.
+    const cashRes = await POOL.query(
+      `SELECT c.type, COALESCE(SUM(c.amount),0) AS amt
+       FROM portfolio_cash_flows c
+       WHERE c.workspace_id = $1 AND DATE(c.executed_at) <= $2
+       GROUP BY c.type`,
+      [workspaceId, dateStr]
+    );
+    for (const r of cashRes.rows) {
+      if (String(r.type).toLowerCase().includes('deposit')) cashFlows.deposits += toNum(r.amt);
+      else if (String(r.type).toLowerCase().includes('withdrawal')) cashFlows.withdrawals += toNum(r.amt);
+    }
+  }
+
+  // Price holdings at historical close.
+  let totalValue = 0;
+  let estimated = false;
+  const holdings = [];
+  for (const [symbol, pos] of Object.entries(holdingsMap)) {
+    if (Math.abs(pos.quantity) < 0.00000001) continue;
+    let px = await closeForDate(symbol, dateStr);
+    if (px == null) {
+      // Try prior market day (closeForDate already does ±7 days fallback).
+      estimated = true;
+      px = 0;
+    }
+    const marketValue = pos.quantity * (px || 0);
+    totalValue += marketValue;
+    holdings.push({
+      symbol,
+      quantity: pos.quantity,
+      price: px || 0,
+      closePrice: px || 0,
+      marketValue,
+      costBasis: pos.costBasis,
+      strategyName: pos.provider || 'connected',
+      estimated: !Boolean(px),
+    });
+  }
+
+  // Cash: deposits - withdrawals + fees paid (fees reduce cash).
+  let cash = cashFlows.deposits - cashFlows.withdrawals - cashFlows.fees;
+
+  return {
+    portfolioValue: cash + totalValue,
+    cash,
+    investedCapital: totalValue,
+    deposits: cashFlows.deposits,
+    withdrawals: cashFlows.withdrawals,
+    fees: cashFlows.fees,
+    realizedPnl: 0, // computed per-day by writeDay from prev snapshot
+    unrealizedPnl: 0,
+    holdings,
+    allocation: [],
+    sectorBreakdown: [],
+    countryBreakdown: [],
+    assetBreakdown: [],
+    decisionCount: 0,
+    journalCount: 0,
+    estimated,
+  };
+}
+
+function throughFallback() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 module.exports = {
   init,
@@ -571,5 +869,7 @@ module.exports = {
   isHoliday,
   prevMarketDay,
   addDays,
+  loadYahooSeries,
+  replayHistoricalSnapshot,
   TABLE: 'portfolio_daily_snapshots'
 };

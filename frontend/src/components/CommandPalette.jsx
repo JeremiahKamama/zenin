@@ -130,7 +130,8 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent
-        className="max-w-xl gap-0 p-0"
+        id="zenin-command-palette"
+        className="command-palette max-w-xl gap-0 p-0"
         showCloseButton={false}
       >
         <DialogTitle className="sr-only">Command palette</DialogTitle>
@@ -139,7 +140,7 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
         </DialogDescription>
 
         {/* Search row */}
-        <div className="flex items-center gap-3 border-b border-[var(--color-border-default)] px-4 py-3">
+        <div className="command-palette__search-row">
           <Search className="h-4 w-4 shrink-0 opacity-60" aria-hidden="true" />
           <input
             ref={inputRef}
@@ -149,10 +150,10 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
             aria-label="Search commands and assets"
             autoComplete="off"
             spellCheck="false"
-            className="flex-1 bg-transparent text-[var(--fs-base)] text-[color:inherit] outline-none placeholder:text-[color:var(--color-text-muted)]"
+            className="command-palette__search-input"
           />
           <kbd
-            className="hidden h-5 items-center rounded-[var(--radius)] border border-[var(--color-border-default)] bg-[var(--color-surface-elevated)] px-1.5 text-[var(--fs-xs)] uppercase tracking-wide text-[color:var(--color-text-muted)] sm:inline-flex"
+            className="command-palette__escape"
             aria-hidden="true"
           >
             Esc
@@ -161,18 +162,18 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
 
         {/* List / empty state */}
         {query.trim() && flatItems.length === 0 && !assetLoading ? (
-          <div className="px-4 py-8 text-center text-[var(--fs-sm)] text-[color:var(--color-text-muted)]">
+          <div className="command-palette__empty">
             No matches for “{query}”.
           </div>
         ) : (
           <ul
             ref={listRef}
-            className="max-h-[360px] overflow-y-auto p-2"
+            className="command-palette__list"
             aria-label="Available commands and assets"
           >
             {groups.map(([group, items]) => (
-              <li key={group} className="mb-2">
-                <div className="mb-2-label px-2 py-1.5 text-[var(--fs-xs)] uppercase tracking-wide text-[color:var(--color-text-muted)]">
+              <li key={group} className="command-palette__group">
+                <div className="command-palette__group-label">
                   {group}
                 </div>
                 <ul>
@@ -188,21 +189,16 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
                           aria-selected={isActive}
                           onMouseEnter={() => setActiveIndex(idx)}
                           onClick={() => { onClose(); setTimeout(() => cmd.run(), 0); }}
-                          className={cn(
-                            "flex w-full items-center justify-between gap-3 rounded-[var(--radius)] px-2 py-2 text-left text-[var(--fs-sm)] transition-colors",
-                            isActive
-                              ? "bg-[var(--color-selected)] text-[color:var(--color-text-primary)]"
-                              : "text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]"
-                          )}
+                          className={cn("command-palette__item", isActive && "is-active")}
                         >
-                          <span className="flex flex-col">
+                          <span className="command-palette__item-copy">
                             <span>{cmd.label}</span>
                             {cmd.hint && (
-                              <small className="text-[var(--fs-xs)] text-[color:var(--color-text-muted)]">{cmd.hint}</small>
+                              <small>{cmd.hint}</small>
                             )}
                           </span>
                           {cmd.shortcut && (
-                            <kbd className="shrink-0 rounded-[var(--radius)] border border-[var(--color-border-default)] bg-[var(--color-surface-elevated)] px-1.5 py-0.5 text-[var(--fs-xs)] tracking-widest text-[color:var(--color-text-muted)]">
+                            <kbd className="command-palette__shortcut">
                               {cmd.shortcut}
                             </kbd>
                           )}
@@ -215,8 +211,8 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
             ))}
 
             {assetResults.length > 0 && (
-              <li className="mb-2">
-                <div className="mb-2-label px-2 py-1.5 text-[var(--fs-xs)] uppercase tracking-wide text-[color:var(--color-text-muted)]">
+              <li className="command-palette__group">
+                <div className="command-palette__group-label">
                   Assets
                 </div>
                 <ul>
@@ -232,24 +228,25 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
                           aria-selected={isActive}
                           onMouseEnter={() => setActiveIndex(idx)}
                           onClick={() => { onClose(); setTimeout(() => onSelectAsset?.(asset), 0); }}
-                          className={cn(
-                            "flex w-full items-center justify-between gap-3 rounded-[var(--radius)] px-2 py-2 text-left text-[var(--fs-sm)] transition-colors",
-                            isActive
-                              ? "bg-[var(--color-selected)] text-[color:var(--color-text-primary)]"
-                              : "text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]"
-                          )}
+                          className={cn("command-palette__item", "command-palette__asset", isActive && "is-active")}
                         >
-                          <span className="flex flex-col">
-                            <span className="font-medium">{asset.symbol}</span>
-                            <span className="text-[var(--fs-xs)] text-[color:var(--color-text-muted)]">
-                              {asset.assetClass} · {asset.exchange} · {asset.provider}
+                          <span className="command-palette__item-copy">
+                            <span className="command-palette__asset-identity">
+                              <span className="command-palette__asset-symbol">{asset.symbol}</span>
+                              {asset.name && String(asset.name).toUpperCase() !== String(asset.symbol).toUpperCase() ? (
+                                <span className="command-palette__asset-name">{asset.name}</span>
+                              ) : null}
                             </span>
+                            <small>
+                              {asset.assetClass} · {asset.exchange} · {asset.provider}
+                              {asset.fallback ? " · Reference fallback" : asset.live ? " · Live" : ""}
+                            </small>
                           </span>
-                          <span className="flex items-center gap-2">
-                            <span className="text-[var(--fs-xs)] text-[color:var(--color-text-muted)]">
+                          <span className="command-palette__asset-meta">
+                            <span>
                               {asset.category}
                             </span>
-                            <span className="text-[var(--fs-xs)] text-[color:var(--color-interactive)]">
+                            <span className="command-palette__asset-confidence">
                               {asset.confidence}%
                             </span>
                           </span>
@@ -262,7 +259,7 @@ export function CommandPalette({ open, onClose, commands = [], assetSearch, onSe
             )}
 
             {assetLoading && (
-              <li className="px-2 py-2 text-[var(--fs-xs)] text-[color:var(--color-text-muted)]">Searching…</li>
+              <li className="command-palette__loading">Searching…</li>
             )}
           </ul>
         )}

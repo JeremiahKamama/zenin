@@ -25,7 +25,7 @@ import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
  * }}
  */
 export function usePlanGate({ userPlan, workspacePlan, isAdmin = false }) {
-  const planRank = getAppRuntimeConfig()?.subscription?.planRank || { starter: 0, pro: 1, desk: 2 };
+  const planRank = getAppRuntimeConfig()?.subscription?.planRank || { starter: 0, plus: 1, premium: 2 };
   const sectionMinPlan = getAppRuntimeConfig()?.subscription?.sectionMinPlan || {};
 
   const effectivePlan = useMemo(() => {
@@ -51,6 +51,10 @@ export function usePlanGate({ userPlan, workspacePlan, isAdmin = false }) {
 
 function normalizePlan(plan) {
   const value = String(plan || "").trim().toLowerCase();
-  const valid = ["starter", "pro", "desk"];
-  return valid.includes(value) ? value : "starter";
+  // Accept new tier ids (plus/premium) and legacy ids (pro/desk) for backward
+  // compatibility during the rename rollout.
+  if (value === "plus" || value === "pro") return "plus";
+  if (value === "premium" || value === "desk") return "premium";
+  if (value === "starter") return "starter";
+  return "starter";
 }

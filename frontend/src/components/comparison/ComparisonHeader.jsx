@@ -1,9 +1,9 @@
 import { Button } from "../ui/button";
+import { AssetLogo } from "../AssetLogo";
 
-// Monochrome lettermark tile (no logo asset exists). First letter of symbol.
-function Lettermark({ symbol }) {
-  const ch = (symbol || "?").toString().charAt(0).toUpperCase();
-  return <span className="cmp-header-mark" aria-hidden="true">{ch}</span>;
+// Asset logo (real logo via logo.dev, lettermark fallback handled inside AssetLogo).
+function Lettermark({ symbol, type = "" }) {
+  return <AssetLogo symbol={symbol} type={type} className="cmp-header-mark" />;
 }
 
 // Header for the comparison workspace: Asset A · VS · Asset B, swap, change,

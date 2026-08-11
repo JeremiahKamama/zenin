@@ -154,14 +154,14 @@ function resolvePythonBinary() {
   return "python3";
 }
 const pythonBinary = resolvePythonBinary();
-const { syncBinance, syncHyperliquid, syncLighter, syncBybit, syncIbkr, verifyExchangeCredentialScope } = require("./exchangeSync");
+const { syncBinance, syncHyperliquid, syncLighter, syncPolymarket, syncBybit, syncIbkr, verifyExchangeCredentialScope } = require("./exchangeSync");
 const unifiedPortfolio = require("./unifiedPortfolio");
 const orchestrator = require("./portfolioSyncOrchestrator");
 const unifiedNotifications = require("./unifiedNotifications");
 const portfolioTransactions = require("./portfolioTransactions");
 const notificationPublisher = require("./notificationPublisher");
 
-const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid", "lighter", "interactive_brokers"]);
+const SYNC_ENABLED_EXCHANGES = new Set(["binance", "bybit", "hyperliquid", "lighter", "polymarket", "interactive_brokers"]);
 
 const rpName = "Zenin Capital";
 const DEFAULT_PUBLIC_APP_ORIGIN = "https://www.zenin.capital";
@@ -305,15 +305,8 @@ function cleanApiKey(key) {
   return cleaned;
 }
 
-// --- EODHD Macro Indicators Configuration ---
-const EODHD_API_TOKEN = cleanApiKey(
-  process.env.EODHD_API_TOKEN ||
-  process.env.EODHD_API_KEY ||
-  process.env.EODHD_TOKEN ||
-  ""
-).replace(/^,+|,+$/g, "");
-
-console.log(`[Startup] EODHD_API_TOKEN loaded: ${EODHD_API_TOKEN ? "YES" : "NO"}`);
+// --- Macro Indicators providers (FRED / EIA / BLS / Massive). EODHD removed;
+// benchmark + close-price feeds now use Yahoo Finance (token-free). ---
 
 const FRED_API_KEY = cleanApiKey(process.env.FRED_API_KEY || "");
 const EIA_API_KEY = cleanApiKey(process.env.EIA_API_KEY || "");
@@ -1861,7 +1854,12 @@ function getFrontendAppUrl(pathname = "/app") {
 
 function normalizePlanInput(plan) {
   const normalized = String(plan || "").trim().toLowerCase();
-  if (["starter", "pro", "desk"].includes(normalized)) return normalized;
+  // Accept the new tier ids (plus/premium). For backward compatibility during the
+  // rename rollout, also accept the legacy ids (pro/desk) and map them forward so
+  // older clients / un-migrated DB rows still resolve correctly.
+  if (normalized === "plus" || normalized === "pro") return "plus";
+  if (normalized === "premium" || normalized === "desk") return "premium";
+  if (normalized === "starter") return "starter";
   return null;
 }
 
@@ -2301,8 +2299,8 @@ function requireWorkspaceAdmin(req, res, next) {
 
 const PLAN_RANK = {
   starter: 0,
-  pro: 1,
-  desk: 2
+  plus: 1,
+  premium: 2
 };
 
 function getEffectivePlan(userPlan, workspacePlan) {
@@ -2356,7 +2354,7 @@ function hasDeskPlanForWorkspaceFeature(reqOrContext, userPlanOverride = null) {
   const workspace = reqOrContext?.workspace?.workspace || reqOrContext?.workspace || null;
   const userPlan = userPlanOverride || reqOrContext?.auth?.user?.currentPlan || "starter";
   const effectivePlan = getEffectivePlan(userPlan, workspace?.plan || "starter");
-  return (PLAN_RANK[effectivePlan] || 0) >= PLAN_RANK.desk;
+  return (PLAN_RANK[effectivePlan] || 0) >= PLAN_RANK.premium;
 }
 
 function buildSharedWatchlistAccess(context, userId, userPlan) {
@@ -4478,7 +4476,7 @@ app.get("/api/workspaces/current", requireSignedIn, attachActiveWorkspace, requi
   }
 });
 
-app.patch("/api/workspaces/current", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, validate(workspaceUpdateSchema), async (req, res) => {
+app.patch("/api/workspaces/current", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("premium"), writeLimiter, validate(workspaceUpdateSchema), async (req, res) => {
   try {
     const workspaceContext = getRequiredWorkspaceContext(req);
     const previousWorkspace = sanitizeWorkspace(workspaceContext.workspace, workspaceContext.membership);
@@ -4514,7 +4512,7 @@ app.get("/api/workspaces/current/members", requireSignedIn, attachActiveWorkspac
   }
 });
 
-app.get("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), async (req, res) => {
+app.get("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("premium"), async (req, res) => {
   try {
     const invites = await workspaces.listInvites(req.workspace.workspace.id);
     return res.json({ items: invites.map(sanitizeWorkspaceInvite) });
@@ -4523,7 +4521,7 @@ app.get("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspac
   }
 });
 
-app.post("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, validate(workspaceInviteSchema), async (req, res) => {
+app.post("/api/workspaces/current/invites", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("premium"), writeLimiter, validate(workspaceInviteSchema), async (req, res) => {
   try {
     const workspaceContext = getRequiredWorkspaceContext(req);
     const members = await workspaces.listMembers(workspaceContext.id);
@@ -4587,7 +4585,7 @@ app.post("/api/workspaces/invites/:token/accept", requireSignedIn, writeLimiter,
   }
 });
 
-app.patch("/api/workspaces/current/members/:userId/role", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, validate(workspaceMemberRoleSchema), async (req, res) => {
+app.patch("/api/workspaces/current/members/:userId/role", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("premium"), writeLimiter, validate(workspaceMemberRoleSchema), async (req, res) => {
   try {
     const workspaceContext = getRequiredWorkspaceContext(req);
     const targetUserId = Number(req.params.userId);
@@ -4634,7 +4632,7 @@ app.patch("/api/workspaces/current/members/:userId/role", requireSignedIn, attac
   }
 });
 
-app.delete("/api/workspaces/current/members/:userId", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("desk"), writeLimiter, async (req, res) => {
+app.delete("/api/workspaces/current/members/:userId", requireSignedIn, attachActiveWorkspace, requireWorkspaceAdmin, requirePlan("premium"), writeLimiter, async (req, res) => {
   try {
     const targetUserId = Number(req.params.userId);
     const member = await workspaces.removeMember({
@@ -5771,26 +5769,47 @@ app.post("/api/db/exchange-keys", requireSignedIn, attachActiveWorkspace, requir
 
 app.delete("/api/db/exchange-keys/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
   try {
-    const { id } = req.params;
+    const rawId = req.params.id;
+    const numericId = Number.parseInt(rawId, 10);
+    if (!Number.isFinite(numericId) || numericId <= 0 || String(numericId) !== String(rawId)) {
+      return res.status(400).json({ error: "Invalid exchange key id." });
+    }
     // Read the key first so we can scope the cascade to its exchange.
-    const key = await userWorkspace.exchangeKeys.getById(req.auth.userId, parseInt(id), req.workspace.workspace.id);
+    const key = await userWorkspace.exchangeKeys.getById(req.auth.userId, numericId, req.workspace.workspace.id);
     if (!key) {
       return res.status(404).json({ error: "Exchange key not found." });
     }
-    await userWorkspace.exchangeKeys.remove(req.auth.userId, parseInt(id), req.workspace.workspace.id, key.exchange);
+    // Cascade: also remove any derived unified portfolio_sources backed by this
+    // key (matched by key id or wallet address) so they don't linger as orphans.
+    const addr = key.extra_data && key.extra_data.address ? String(key.extra_data.address) : null;
+    await pool.query(
+      `DELETE FROM portfolio_source_positions WHERE source_id IN (SELECT id FROM portfolio_sources WHERE workspace_id=$1 AND (external_connection_id=$2 OR external_connection_id::text=$3))`,
+      [req.workspace.workspace.id, addr || "", String(numericId)]
+    );
+    await pool.query(
+      `DELETE FROM portfolio_source_transactions WHERE source_id IN (SELECT id FROM portfolio_sources WHERE workspace_id=$1 AND (external_connection_id=$2 OR external_connection_id::text=$3))`,
+      [req.workspace.workspace.id, addr || "", String(numericId)]
+    );
+    await pool.query(
+      `DELETE FROM portfolio_sources WHERE workspace_id=$1 AND (external_connection_id=$2 OR external_connection_id::text=$3)`,
+      [req.workspace.workspace.id, addr || "", String(numericId)]
+    );
+    await userWorkspace.exchangeKeys.remove(req.auth.userId, numericId, req.workspace.workspace.id, key.exchange);
+    // If no connected accounts remain, strip placeholder manual holdings too.
+    await userWorkspace.portfolio.stripManualHoldingsIfNoConnectedSources(req.workspace.workspace.id);
     await workspaces.recordActivity({
       workspaceId: req.workspace.workspace.id,
       actorUserId: req.auth.userId,
       eventType: "account_removed",
       entityType: "exchange_key",
-      entityId: id
+      entityId: numericId
     });
     await logSecurityEvent(req, {
       level: "warning",
       message: "Exchange credential removed.",
       eventType: "exchange_key_removed",
       workspaceId: req.workspace.workspace.id,
-      context: { keyId: Number(id) }
+      context: { keyId: numericId }
     });
     res.json({ success: true });
   } catch (err) {
@@ -5881,6 +5900,8 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       result = await syncBybit(apiKey, apiSecret, syncContext);
     } else if (keyRecord.exchange === "interactive_brokers") {
       result = await syncIbkr(apiKey, apiSecret, syncContext);
+    } else if (keyRecord.exchange === "polymarket") {
+      result = await syncPolymarket(apiKey, extraData, syncContext);
     } else {
       return res.status(400).json({ error: "Unsupported exchange" });
     }
@@ -5911,14 +5932,22 @@ app.post("/api/db/exchange-sync/:id", requireSignedIn, attachActiveWorkspace, re
       let canonicalSource = null;
       if (unifiedPortfolio.isEnabled()) {
         try {
-          canonicalSource = unifiedPortfolio.mapExchangeWalletToSource(result, {
-            workspaceId: req.workspace.workspace.id,
-            address: apiKey,
-            connectionId: apiKey,
-            provider: keyRecord.exchange,
-            accessMode: (keyRecord.exchange === "hyperliquid" || keyRecord.exchange === "lighter") ? "watch_only" : "read_only_key",
-            sourceType: (keyRecord.exchange === "hyperliquid" || keyRecord.exchange === "lighter") ? "wallet" : "exchange"
-          });
+          canonicalSource = keyRecord.exchange === "polymarket"
+            ? unifiedPortfolio.mapPredictionWalletToSource({
+                walletAddress: apiKey,
+                positions: result.holdings || [],
+                transactions: result.trades || [],
+                connectionId: apiKey,
+                provider: "polymarket"
+              })
+            : unifiedPortfolio.mapExchangeWalletToSource(result, {
+              workspaceId: req.workspace.workspace.id,
+              address: apiKey,
+              connectionId: apiKey,
+              provider: keyRecord.exchange,
+              accessMode: (keyRecord.exchange === "hyperliquid" || keyRecord.exchange === "lighter") ? "watch_only" : "read_only_key",
+              sourceType: (keyRecord.exchange === "hyperliquid" || keyRecord.exchange === "lighter") ? "wallet" : "exchange"
+            });
           await unifiedPortfolio.recordSourceSync(pool, req.workspace.workspace.id, canonicalSource);
           canonicalSyncStatus = "synced";
         } catch (err) {
@@ -7200,7 +7229,7 @@ app.post("/api/account/plan", requireSignedIn, validate(planUpdateSchema), async
     const billingCycle = normalizeBillingCycleInput(req.body?.billingCycle || "monthly");
     if (!plan) {
       return apiError(res, 400, {
-        error: "Plan must be one of: starter, pro, desk.",
+        error: "Plan must be one of: starter, plus, premium.",
         message: "Choose a valid subscription plan before retrying.",
         code: "INVALID_PLAN",
         retryable: false
@@ -7222,6 +7251,27 @@ app.post("/api/account/plan", requireSignedIn, validate(planUpdateSchema), async
         code: "USER_NOT_FOUND",
         retryable: false
       });
+    }
+    // ── Referral conversion attribution (Part 3) ──────────────────────────
+    // When a user who signed up via a referral code upgrades to a paid plan,
+    // record a 'convert' event on the referrer's referral record.
+    try {
+      const isPaid = ["plus", "premium"].includes(plan);
+      if (isPaid) {
+        const convRes = await db.query(
+          "SELECT r.id FROM referrals r JOIN referral_events re ON re.referral_id = r.id " +
+          "WHERE re.event_type = 'signup' AND re.metadata->>'userId' = $1 LIMIT 1",
+          [String(req.auth.userId)]
+        );
+        if (convRes.rows.length > 0) {
+          await db.query(
+            "INSERT INTO referral_events (referral_id, event_type, metadata) VALUES ($1, 'convert', $2::jsonb)",
+            [convRes.rows[0].id, JSON.stringify({ userId: req.auth.userId, plan })]
+          );
+        }
+      }
+    } catch (convErr) {
+      console.warn("[PlanUpgrade] referral conversion attribution skipped:", convErr?.message || convErr);
     }
     return res.json({ success: true, user: sanitizeAuthUser(updatedUser) });
   } catch (error) {
@@ -7295,6 +7345,21 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     const session = await issueSessionForUser(created.id, req, { persistent: true });
     setSessionCookie(res, req, session.token, session.expiresAt, { persistent: session.persistent });
 
+    // ── Referral attribution (Part 3) ─────────────────────────────────────
+    if (req.body?.referralCode) {
+      try {
+        const rc = String(req.body.referralCode).trim().toLowerCase();
+        await db.query(
+          "INSERT INTO referral_events (referral_id, event_type, visitor_ref, user_agent, metadata) " +
+          "SELECT r.id, 'signup', r.user_id::text, $1, '{\"userId\":\"' || $2 || '\"}'::jsonb " +
+          "FROM referrals r WHERE r.referral_code = $3",
+          [req.get("user-agent") || "", created.id, rc]
+        );
+      } catch (refErr) {
+        console.warn("[Signup] referral attribution skipped:", refErr?.message || refErr);
+      }
+    }
+
     // Strip guest/demo seed holdings so a new account opens on clean data.
     try {
       const cleared = await userWorkspace.portfolio.clearDemoPlaceholders(created.id);
@@ -7313,6 +7378,145 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     });
   } catch (error) {
     return handleServerError(res, "Signup failed", error);
+  }
+});
+
+// ─── Referrals API (Part 3) ─────────────────────────────────────────────────
+
+app.get("/api/referrals/code", requireSignedIn, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    // Check if user already has a referral code
+    const existing = await db.query(
+      "SELECT referral_code FROM referrals WHERE user_id = $1",
+      [userId]
+    );
+    if (existing.rows.length > 0) {
+      const code = existing.rows[0].referral_code;
+      const baseUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get("host")}`;
+      return res.json({
+        code,
+        referralLink: `${baseUrl}/?ref=${code}`,
+        created: existing.rows[0].created_at
+      });
+    }
+
+    // Generate a new code: user initials + random suffix
+    const userRec = await db.query(
+      "SELECT email, display_name FROM app_users WHERE id = $1",
+      [userId]
+    );
+    const email = userRec.rows[0]?.email || "";
+    const displayName = userRec.rows[0]?.display_name || "";
+    const namePart = (displayName || email).trim();
+    const initials = namePart
+      .split(/[\s@]/)
+      .filter(Boolean)
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 3) || "ZD";
+
+    let code = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+      const candidate = `${initials}${suffix}`;
+      const taken = await db.query(
+        "SELECT 1 FROM referrals WHERE referral_code = $1",
+        [candidate]
+      );
+      if (taken.rows.length === 0) {
+        code = candidate;
+        break;
+      }
+    }
+    if (!code) {
+      return apiError(res, 500, {
+        error: "Could not generate a unique referral code.",
+        message: "Try again in a moment.",
+        code: "REFERRAL_CODE_COLLISION"
+      });
+    }
+
+    const inserted = await db.query(
+      "INSERT INTO referrals (user_id, referral_code) VALUES ($1, $2) RETURNING referral_code, created_at",
+      [userId, code]
+    );
+
+    const baseUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get("host")}`;
+    return res.status(201).json({
+      code: inserted.rows[0].referral_code,
+      referralLink: `${baseUrl}/?ref=${inserted.rows[0].referral_code}`,
+      created: inserted.rows[0].created_at
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to get referral code", error);
+  }
+});
+
+// Public tracking endpoint — records a 'click' when a visitor lands with ?ref=<code>
+app.post("/api/referrals/track", async (req, res) => {
+  try {
+    const refCode = String(req.body?.ref || req.query?.ref || "").trim();
+    const referralCode = refCode.toLowerCase();
+    if (referralCode.length < 2 || referralCode.length > 20) {
+      return res.status(400).json({ tracked: false, reason: "invalid_code" });
+    }
+    const ref = await db.query(
+      "SELECT id FROM referrals WHERE LOWER(referral_code) = $1",
+      [referralCode]
+    );
+    if (ref.rows.length === 0) {
+      return res.status(200).json({ tracked: false, reason: "not_found" });
+    }
+    const referralId = ref.rows[0].id;
+    await db.query(
+      "INSERT INTO referral_events (referral_id, event_type, visitor_ref, visitor_ip, user_agent) VALUES ($1, $2, $3, $4, $5)",
+      [referralId, "click", req.body?.visitorRef || null, req.ip, req.get("user-agent") || ""]
+    );
+    return res.json({ tracked: true, reason: "ok" });
+  } catch (error) {
+    return handleServerError(res, "Failed to track referral", error);
+  }
+});
+
+// Authenticated stats endpoint for the referrer
+app.get("/api/referrals/stats", requireSignedIn, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const referral = await db.query(
+      "SELECT id, referral_code, created_at FROM referrals WHERE user_id = $1",
+      [userId]
+    );
+    if (referral.rows.length === 0) {
+      return res.json({ hasCode: false, clicks: 0, signups: 0, conversions: 0, recentEvents: [] });
+    }
+    const referralId = referral.rows[0].id;
+    const events = await db.query(
+      "SELECT event_type, created_at, metadata FROM referral_events WHERE referral_id = $1 ORDER BY created_at DESC LIMIT 50",
+      [referralId]
+    );
+    let clicks = 0, signups = 0, conversions = 0;
+    for (const row of events.rows) {
+      if (row.event_type === "click") clicks++;
+      else if (row.event_type === "signup") signups++;
+      else if (row.event_type === "convert") conversions++;
+    }
+    return res.json({
+      hasCode: true,
+      code: referral.rows[0].referral_code,
+      created: referral.rows[0].created_at,
+      clicks,
+      signups,
+      conversions,
+      recentEvents: events.rows.map((r) => ({
+        type: r.event_type,
+        createdAt: r.created_at,
+        metadata: r.metadata
+      }))
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to load referral stats", error);
   }
 });
 
@@ -10362,7 +10566,7 @@ function buildMacroMetric(payload, config) {
 
 async function fetchWorldBankIndicatorSeries(countryCode, indicatorCode) {
   const fetch = await resolveFetch();
-  const url = `https://api.worldbank.org/v2/country/${encodeURIComponent(countryCode)}/indicator/${encodeURIComponent(indicatorCode)}?format=json&per_page=80`;
+  const url = `https://api.worldbank.org/v2/country/${encodeURIComponent(countryCode)}/indicator/${encodeURIComponent(indicatorCode)}?format=json&per_page=80&sort=desc`;
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`world_bank_http_${response.status}`);
@@ -13304,6 +13508,56 @@ app.get("/api/portfolio/unified/sources", requireSignedIn, attachActiveWorkspace
   }
 });
 
+// Delete a canonical unified source (portfolio_source) + its synced positions
+// and transactions. Used by Settings -> Connected Accounts "Remove" for sources
+// that have no backing user_exchange_key (e.g. public wallet imports). When a
+// backing key exists, callers should use /api/db/exchange-keys/:id instead.
+app.delete("/api/portfolio/unified/sources/:id", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, writeLimiter, async (req, res) => {
+  try {
+    const rawId = req.params.id;
+    const numericId = Number.parseInt(rawId, 10);
+    if (!Number.isFinite(numericId) || numericId <= 0 || String(numericId) !== String(rawId)) {
+      return res.status(400).json({ error: "Invalid unified source id." });
+    }
+    const workspaceId = req.workspace.workspace.id;
+    const existing = await pool.query(
+      "SELECT id, source_type, external_connection_id FROM portfolio_sources WHERE id=$1 AND workspace_id=$2",
+      [numericId, workspaceId]
+    );
+    if (!existing.rows.length) {
+      return res.status(404).json({ error: "Unified source not found." });
+    }
+    const src = existing.rows[0];
+    // Cascade to the underlying connection so a later sync cannot recreate the
+    // source. For wallet/exchange sources the real connection is the
+    // user_exchange_keys row (matched by id or wallet address); for manual
+    // sources it is the user_workspace_portfolio rows.
+    if (src.source_type === "manual") {
+      await pool.query("DELETE FROM user_workspace_portfolio WHERE workspace_id=$1", [workspaceId]);
+      await pool.query("DELETE FROM user_workspace_cash WHERE workspace_id=$1", [workspaceId]).catch(() => {});
+    } else if (src.external_connection_id) {
+      await pool.query(
+        `DELETE FROM user_exchange_keys
+         WHERE workspace_id=$1 AND (id::text=$2 OR extra_data->>'address'=$2)`,
+        [workspaceId, String(src.external_connection_id)]
+      ).catch(() => {});
+    }
+    await pool.query("DELETE FROM portfolio_source_positions WHERE source_id=$1", [numericId]);
+    await pool.query("DELETE FROM portfolio_source_transactions WHERE source_id=$1", [numericId]);
+    await pool.query("DELETE FROM portfolio_sources WHERE id=$1 AND workspace_id=$2", [numericId, workspaceId]);
+    await workspaces.recordActivity({
+      workspaceId,
+      actorUserId: req.auth.userId,
+      eventType: "account_removed",
+      entityType: "unified_source",
+      entityId: String(numericId)
+    });
+    res.json({ success: true });
+  } catch (err) {
+    handleServerError(res, "Failed to remove unified source", err);
+  }
+});
+
 // Per-source sync status + health (freshness, errors, last run).
 app.get("/api/portfolio/unified/sync-status", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
@@ -13327,16 +13581,45 @@ app.post("/api/portfolio/prediction-wallet/sync", requireSignedIn, attachActiveW
     const provider = String(req.body?.provider || "polymarket").trim().toLowerCase();
     const walletAddress = String(req.body?.walletAddress || req.body?.address || req.body?.connectionId || "").trim();
     if (!walletAddress) return res.status(400).json({ error: "walletAddress is required." });
-    const source = unifiedPortfolio.mapPredictionWalletToSource({
-      provider,
-      walletAddress,
-      connectionId: req.body?.connectionId || walletAddress,
-      label: req.body?.label || null,
-      nativeCurrency: req.body?.nativeCurrency || "USD",
-      positions: Array.isArray(req.body?.positions) ? req.body.positions : [],
-      transactions: Array.isArray(req.body?.transactions) ? req.body.transactions : []
-    });
+    let result;
+    let source;
+    if ((Array.isArray(req.body?.positions) && req.body.positions.length) || (Array.isArray(req.body?.transactions) && req.body.transactions.length)) {
+      source = unifiedPortfolio.mapPredictionWalletToSource({
+        provider,
+        walletAddress,
+        connectionId: req.body?.connectionId || walletAddress,
+        label: req.body?.label || null,
+        nativeCurrency: req.body?.nativeCurrency || "USD",
+        positions: Array.isArray(req.body?.positions) ? req.body.positions : [],
+        transactions: Array.isArray(req.body?.transactions) ? req.body.transactions : [],
+        cashBalance: req.body?.cashBalance != null ? req.body.cashBalance : undefined
+      });
+      // No legacy tradeFills to mirror when the caller supplied the payload.
+      result = { tradeFills: [] };
+    } else {
+      // Δ-2(a): server-side auto-fetch by wallet address when no payload supplied.
+      result = await syncPolymarket(walletAddress, { address: walletAddress }, {});
+      source = unifiedPortfolio.mapPredictionWalletToSource({
+        provider,
+        walletAddress,
+        connectionId: req.body?.connectionId || walletAddress,
+        label: req.body?.label || null,
+        nativeCurrency: req.body?.nativeCurrency || "USD",
+        positions: result.holdings || [],
+        transactions: result.trades || [],
+        cashBalance: result.cashBalance
+      });
+    }
     await unifiedPortfolio.recordSourceSync(pool, workspaceId, source);
+    // Mirror the exchange-sync path: also write fills into the legacy
+    // user_workspace_trades table so Performance/Trades tabs pick them up.
+    if (Array.isArray(result.tradeFills) && result.tradeFills.length) {
+      try {
+        await userWorkspace.tradeFills.sync(req.auth.userId, result.tradeFills, workspaceId);
+      } catch (err) {
+        console.warn(`[prediction-wallet] tradeFills.sync skipped:`, err.message);
+      }
+    }
     const summary = await unifiedPortfolio.getUnifiedSummary(pool, workspaceId);
     res.json({
       success: true,
@@ -13373,6 +13656,8 @@ app.delete("/api/portfolio/prediction-wallet/:connectionId", requireSignedIn, at
        WHERE workspace_id=$1 AND source_type='prediction' AND external_connection_id=$2`,
       [workspaceId, connectionId]
     );
+    // If no connected accounts remain, strip placeholder manual holdings too.
+    await userWorkspace.portfolio.stripManualHoldingsIfNoConnectedSources(workspaceId);
     res.json({ success: true, connectionId });
   } catch (error) {
     handleServerError(res, "Prediction wallet disconnect failed", error);
@@ -13442,15 +13727,77 @@ app.get("/api/portfolio/unified/snapshots", requireSignedIn, attachActiveWorkspa
   }
 });
 
-// Equity curve reconstructed from synced trade fills (Hyperliquid perps store
-// realised P&L + fees). Backfills history for fresh wallets lacking EOD snapshots.
-// Approximate by design — labelled as such on the client.
+// Historical backfill: replay transactions up to each historical date and
+// write immutable daily snapshots. Idempotent (ON CONFLICT DO NOTHING).
+// Triggered on account connect or manually via the Performance UI.
+const PORTFOLIO_SNAPSHOTS = require('./portfolioSnapshots.js');
+app.post("/api/portfolio/unified/backfill", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, isWorkspacePrivileged, writeLimiter, async (req, res) => {
+  try {
+    const workspaceId = req.workspace.workspace.id;
+    const opts = {
+      from: req.body?.from || undefined,
+      through: req.body?.through || new Date().toISOString().slice(0, 10),
+      maxDays: req.body?.maxDays,
+      batchSize: req.body?.batchSize,
+    };
+    // Run in background — backfill can take minutes for long histories.
+    setImmediate(async () => {
+      try {
+        await PORTFOLIO_SNAPSHOTS.DailySnapshotService.backfillHistorical(workspaceId, opts);
+      } catch (err) {
+        console.error("[backfill] workspace", workspaceId, "error:", err?.message || err);
+      }
+    });
+    res.json({ status: "started", message: "Historical backfill initiated. Refresh snapshots once complete." });
+  } catch (error) {
+    handleServerError(res, "Backfill failed", error);
+  }
+});
+
+// Equity curve: PRIMARY source is immutable daily snapshots (TWR/cash-flow-aware
+// dailyReturn from the snapshot engine). The fill-reconstructed curve is
+// included only as a supplementary "approximate" overlay for gaps.
 app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const limit = Math.min(Number(req.query.limit) || 180, 365);
-    const curve = await unifiedPortfolio.getUnifiedEquityCurveFromFills(pool, workspaceId, limit);
-    res.json({ curve, approximate: true });
+    const from = req.query.from || req.query.start || null;
+    const to = req.query.to || req.query.end || null;
+    const benchmark = req.query.benchmark || null;
+
+    // Tier 1: immutable daily snapshots (the canonical historical source).
+    const snapshots = await unifiedPortfolio.getUnifiedSnapshots(pool, workspaceId, limit);
+    let curve = snapshots.map((s) => ({
+      t: new Date(`${s.snapshotDate}T00:00:00Z`).getTime(),
+      equity: s.portfolioValue,
+      cash: s.cash,
+      investedCapital: s.investedCapital,
+      dailyPnl: s.dailyPnl,
+      dailyReturn: s.dailyReturn, // FIX: backend-computed, cash-flow-aware — no client override
+      realizedPnl: s.realizedPnl,
+      unrealizedPnl: s.unrealizedPnl,
+      benchmark: s.benchmarkValue != null ? Number(s.benchmarkValue) : null,
+      deposits: s.deposits,
+      withdrawals: s.withdrawals,
+      estimated: s.estimated,
+      source: "snapshot"
+    }));
+
+    // Filter by [from, to] window if provided.
+    if (from || to) {
+      const lo = from ? new Date(`${from}T00:00:00Z`).getTime() : -Infinity;
+      const hi = to ? new Date(`${to}T00:00:00Z`).getTime() : Infinity;
+      curve = curve.filter((p) => p.t >= lo && p.t <= hi);
+    }
+
+    // If no snapshots exist (fresh wallet), fall back to fill curve.
+    let approximate = false;
+    if (curve.length === 0) {
+      curve = await unifiedPortfolio.getUnifiedEquityCurveFromFills(pool, workspaceId, limit, { from, to, benchmark });
+      approximate = true;
+    }
+
+    res.json({ curve, approximate });
   } catch (error) {
     handleServerError(res, "Unified equity curve failed", error);
   }
@@ -13458,32 +13805,37 @@ app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWork
 
 // Daily portfolio history (unified EOD snapshots) for the calendar heatmap.
 // Serves portfolio_daily_snapshots (written by recordUnifiedSnapshot on each
-// workspace sync). dailyPnl is computed as the day-over-day delta of
-// portfolio_value since the unified snapshots don't store it directly.
+// workspace sync). dailyPnl and dailyReturn are the backend-computed immutable
+// values stored in the snapshot — never recomputed client-side.
 app.get("/api/history/daily", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const year = String(req.query.year || new Date().getFullYear());
     const month = req.query.month ? String(req.query.month) : null;
     const rows = await pool.query(
-      `SELECT snapshot_date, portfolio_value, cash, invested_capital, base_currency
+      `SELECT snapshot_date, portfolio_value, cash, invested_capital,
+       daily_pnl, daily_return, realized_pnl, unrealized_pnl,
+       deposits, withdrawals, base_currency
        FROM portfolio_daily_snapshots
-       WHERE workspace_id=$1 AND is_unified=TRUE
+       WHERE workspace_id=$1
          AND snapshot_date >= $2
        ORDER BY snapshot_date ASC`,
       [workspaceId, month ? `${year}-${String(month).padStart(2, "0")}-01` : `${year}-01-01`]
     );
     const list = rows.rows.map((r, i) => {
-      const prev = i > 0 ? Number(rows.rows[i - 1].portfolio_value) : null;
       const value = Number(r.portfolio_value);
-      const dailyPnl = prev != null ? value - prev : 0;
       return {
         date: r.snapshot_date,
         ts: new Date(`${r.snapshot_date}T00:00:00Z`).getTime(),
         portfolioValue: value,
-        dailyPnl,
+        dailyPnl: Number(r.daily_pnl || 0), // FIX: use backend-computed daily_pnl
+        dailyReturn: r.daily_return != null ? Number(r.daily_return) : null, // FIX: backend-computed
+        realizedPnl: Number(r.realized_pnl || 0),
+        unrealizedPnl: Number(r.unrealized_pnl || 0),
         cash: Number(r.cash || 0),
         investedCapital: Number(r.invested_capital || 0),
+        deposits: Number(r.deposits || 0),
+        withdrawals: Number(r.withdrawals || 0),
         currency: r.base_currency || "USD"
       };
     });
@@ -13547,9 +13899,9 @@ async function orchestrateWorkspaceUnifiedSync(workspaceId, userId) {
   }
   for (const keyRecord of keys || []) {
     const exchange = String(keyRecord.exchange || "").toLowerCase();
-    if (!["hyperliquid", "binance", "bybit", "lighter", "interactive_brokers"].includes(exchange)) continue;
-    const sourceType = exchange === "hyperliquid" || exchange === "lighter" ? "wallet" : exchange === "interactive_brokers" ? "brokerage" : "exchange";
-    const accessMode = (exchange === "hyperliquid" || exchange === "lighter") ? "watch_only" : exchange === "interactive_brokers" ? "read_only_key" : "read_only_key";
+    if (!["hyperliquid", "binance", "bybit", "lighter", "polymarket", "interactive_brokers"].includes(exchange)) continue;
+    const sourceType = exchange === "hyperliquid" || exchange === "lighter" || exchange === "polymarket" ? "wallet" : exchange === "interactive_brokers" ? "brokerage" : "exchange";
+    const accessMode = (exchange === "hyperliquid" || exchange === "lighter" || exchange === "polymarket") ? "watch_only" : exchange === "interactive_brokers" ? "read_only_key" : "read_only_key";
     const apiKey = workspaceSecretProvider.decryptSecret(keyRecord.api_key);
     const apiSecret = keyRecord.api_secret ? workspaceSecretProvider.decryptSecret(keyRecord.api_secret) : null;
     const extraData = parseExchangeExtraData(keyRecord.extra_data);
@@ -13569,13 +13921,20 @@ async function orchestrateWorkspaceUnifiedSync(workspaceId, userId) {
         else if (exchange === "lighter") result = await syncLighter(apiKey, extraData, syncContext);
         else if (exchange === "binance") result = await syncBinance(apiKey, apiSecret, syncContext);
         else if (exchange === "bybit") result = await syncBybit(apiKey, apiSecret, syncContext);
+        else if (exchange === "polymarket") result = await syncPolymarket(apiKey, extraData, syncContext);
         else if (exchange === "interactive_brokers") result = await syncIbkr(apiKey, apiSecret, syncContext);
         if (result && unifiedPortfolio.isEnabled()) {
-          await unifiedPortfolio.recordSourceSync(
-            pool,
-            workspaceId,
-            unifiedPortfolio.mapExchangeWalletToSource(result, { workspaceId, address: apiKey, connectionId: apiKey, provider: exchange, accessMode, sourceType })
-          ).catch((err) => console.warn(`[unified-portfolio] ${exchange} dual-write skipped:`, err.message));
+          const canonicalSource = exchange === "polymarket"
+            ? unifiedPortfolio.mapPredictionWalletToSource({
+                walletAddress: apiKey,
+                positions: result.holdings || [],
+                transactions: result.trades || [],
+                connectionId: apiKey,
+                provider: "polymarket"
+              })
+            : unifiedPortfolio.mapExchangeWalletToSource(result, { workspaceId, address: apiKey, connectionId: apiKey, provider: exchange, accessMode, sourceType });
+          await unifiedPortfolio.recordSourceSync(pool, workspaceId, canonicalSource)
+            .catch((err) => console.warn(`[unified-portfolio] ${exchange} dual-write skipped:`, err.message));
         }
         // Sync trade fills + create execution notifications (same pattern as the
         // per-exchange manual sync route). Fires for all 4 exchange types.
@@ -13703,6 +14062,18 @@ app.post("/api/portfolio/sync", requireSignedIn, attachActiveWorkspace, requireW
       workspaceId,
       () => orchestrateWorkspaceUnifiedSync(workspaceId, userId)
     );
+    // After sync completes, trigger historical backfill for any missing
+    // daily snapshots (idempotent: ON CONFLICT DO NOTHING skips existing).
+    // Runs in background so it doesn't block the sync response.
+    setImmediate(async () => {
+      try {
+        await PORTFOLIO_SNAPSHOTS.DailySnapshotService.backfillHistorical(workspaceId, {
+          through: new Date().toISOString().slice(0, 10),
+        });
+      } catch (err) {
+        console.error("[sync+backfill] workspace", workspaceId, "error:", err?.message || err);
+      }
+    });
     res.json(result);
   } catch (error) {
     handleServerError(res, "Workspace portfolio sync failed", error);

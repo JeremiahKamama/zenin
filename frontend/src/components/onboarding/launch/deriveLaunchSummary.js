@@ -44,7 +44,7 @@ export function deriveLaunchSummary(answers = {}, plan) {
   // Modules are derived from selections so returning users see what they chose.
   const modules = ["research", "portfolio", "watchlists", "journal"];
   if (markets.includes("Options") || asArray(answers.markets).includes("options")) modules.push("options");
-  if (plan === "desk") modules.push("collaboration");
+  if (plan === "premium" || plan === "desk") modules.push("collaboration");
 
   const styles = asArray(answers.researchStyle).map((s) => STYLE_LABELS[s] || s).filter(Boolean);
 

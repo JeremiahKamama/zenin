@@ -19,6 +19,7 @@ import IntelligenceCenter from "./intelligence/IntelligenceCenter.jsx";
 import MarketSignals2 from "./market/MarketSignals2.jsx";
 import UpcomingEvents2 from "./market/UpcomingEvents2.jsx";
 import { IntelligenceBus } from "../utils/intelligenceBus.js";
+import { ContextRail, WorkspacePageHeader } from "./CompactWorkspaceUI";
 
 const VALID_CONTEXTS = ["portfolio", "watchlist", "macro", "commodity", "company", "briefing", "transmission", "decision", "research"];
 
@@ -169,17 +170,19 @@ export default function IntelligenceWorkspace({ context: contextProp, symbol: sy
 
   return (
     <div className="intelligence-workspace">
-      <header className="intelligence-workspace__header">
-        <div>
-          <h1>Intelligence</h1>
-          <p className="intelligence-workspace__sub">
+      <WorkspacePageHeader
+        className="intelligence-workspace__header"
+        eyebrow="Decision support"
+        title="Intelligence"
+        description={
+          <>
             Unified market intelligence — signals, transmission, timeline, and diagnostics.
             {query.theme ? ` Theme: ${query.theme}.` : ""}
             {query.horizon ? ` Horizon: ${query.horizon}.` : ""}
             {indicatorContext ? ` Focus: ${indicatorContext}.` : ""}
-          </p>
-        </div>
-        <div className="intelligence-workspace__status" aria-live="polite">
+          </>
+        }
+        status={<div className="intelligence-workspace__status" aria-live="polite">
           <span className={`intel-state-badge intel-state-badge--${dataState}`} data-state={dataState}>
             <span className="intel-state-badge__dot" aria-hidden="true" />
             <span className="intel-state-badge__label">{DATA_STATE_LABEL[dataState]}</span>
@@ -192,12 +195,12 @@ export default function IntelligenceWorkspace({ context: contextProp, symbol: sy
               <><span className="intel-status-sep" aria-hidden="true">·</span><span>Updated {freshnessLabel}</span></>
             ) : null}
           </span>
-          <div className="intelligence-workspace__actions">
-            <button type="button" className="intel-btn intel-btn--primary" onClick={primaryAction.onClick}>{primaryAction.label}</button>
+        </div>}
+        primaryAction={<button type="button" className="intel-btn intel-btn--primary" onClick={primaryAction.onClick}>{primaryAction.label}</button>}
+        secondaryActions={<div className="intelligence-workspace__actions">
             <button type="button" className="intel-btn intel-btn--ghost" onClick={secondaryAction.onClick}>{secondaryAction.label}</button>
-          </div>
-        </div>
-      </header>
+          </div>}
+      />
 
       {/* Core consolidated intelligence platform (single IntelligenceCenter mount).
           variant="full" is the primary Intelligence page. Real portfolio holdings are
@@ -222,7 +225,7 @@ export default function IntelligenceWorkspace({ context: contextProp, symbol: sy
           </SectionShell>
         </div>
 
-        <aside className="intel-workspace-grid__rail">
+        <ContextRail title="Market context" className="intel-workspace-grid__rail">
           <SectionShell title="Upcoming Events" subtitle="Events that may affect tracked assets." variant="calendar">
             <UpcomingEvents2 onOpenWorkspace={(e) => nav({ target: "transmission", symbol: e?.symbol || e?.assets?.[0] })} />
           </SectionShell>
@@ -259,7 +262,7 @@ export default function IntelligenceWorkspace({ context: contextProp, symbol: sy
               />
             )}
           </SectionShell>
-        </aside>
+        </ContextRail>
       </div>
     </div>
   );

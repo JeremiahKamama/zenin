@@ -153,6 +153,7 @@ export function AssetResearchWorkspace({
   onOpenMacro,
   onOpenCountry,
   onOpenSector,
+  onOpenCommodity,
 }) {
   const isCommodity = kind === "commodity";
   const isEtf = kind === "etf";
