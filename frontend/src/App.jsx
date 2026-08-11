@@ -6021,7 +6021,7 @@ const handleOptionTradeClosed = async (tradeId) => {
   const apiKeyPlaceholder = selectedProviderIsHyperliquid
     ? "Enter public wallet address"
     : selectedProviderId === "interactive_brokers"
-    ? "https://localhost:5000 (gateway URL) or IBKR account"
+    ? "Interactive Brokers gateway URL or account"
     : "Enter read-only API key or account ID";
   const showApiSecretField = (accountForm.venueType === "cex" && selectedProviderCanSync)
     || (accountForm.venueType === "broker" && selectedProviderId === "interactive_brokers");
