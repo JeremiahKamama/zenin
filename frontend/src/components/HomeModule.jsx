@@ -33,6 +33,7 @@ import { zeninFetch } from "../utils/zeninFetch";
 import { formatCurrency, getCurrencySymbol, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
 import { UnifiedSourceStrip } from "./UnifiedSourceStrip";
 import { formatLastSync } from "../utils/brokerageStatus.js";
+import AssetLogo from "./AssetLogo.jsx";
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 
@@ -3715,9 +3716,11 @@ function MarketRegimeGauge({ value = 70 }) {
 }
 
 function MarketAssetLogo({ symbol = "", type = "" }) {
-  const label = String(symbol || type || "?").trim().slice(0, 2).toUpperCase();
-  const tone = String(type || "").toLowerCase();
-  return <span className={`market-asset-logo ${tone}`}>{label}</span>;
+  // Delegate to the canonical AssetLogo component (spec §131).
+  // MarketAssetLogo is preserved for backward compatibility with HomeModule.
+  // The canonical resolver (backend: VectorUp primary, Logo.dev fallback)
+  // handles all URL construction.
+  return <AssetLogo symbol={symbol} type={type} size="sm" />;
 }
 
 function MarketTypeBadge({ type = "Equity" }) {

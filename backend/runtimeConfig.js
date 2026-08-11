@@ -18,6 +18,18 @@ const PUBLIC_RUNTIME_CONFIG = {
       plus: 29,
       premium: 99
     }
+  },
+  // Asset Logo Provider — Logo.dev publishable key (pk_ prefix).
+  // Safe for client-side use per Logo.dev docs: these keys are "protected
+  // automatically" and only work with img.logo.dev. The VectorUp API key
+  // remains server-side only (never exposed through public config).
+  assetLogo: {
+    logoDevPublishableKey: process.env.LOGO_DEV_PUBLISHABLE_KEY || null,
+    // Image rendering parameters for client-side logo.dev fallback (offline mode).
+    logoDevImageSize: process.env.LOGO_DEV_IMAGE_SIZE || '128',
+    logoDevImageFormat: process.env.LOGO_DEV_IMAGE_FORMAT || 'webp',
+    logoDevImageTheme: process.env.LOGO_DEV_IMAGE_THEME || 'dark',
+    logoDevGreyscale: process.env.LOGO_DEV_GREYSCALE !== 'false'
   }
 };
 

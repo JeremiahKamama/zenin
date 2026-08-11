@@ -255,6 +255,7 @@ const { initializeMarketIntelTables } = require("./market-intel/infrastructure/d
 const { registerMarketIntelRoutes } = require("./market-intel/http/routes");
 const { registerDocumentIntelligenceRoutes } = require("./services/providers/DocumentIntelligenceProvider/routes");
 const { registerETFIntelligenceRoutes } = require("./services/providers/ETFIntelligenceProvider/routes");
+const { registerAssetLogoRoutes } = require("./services/providers/AssetLogoProvider/routes");
 const {
   CompanyProfileService,
   registerCompanyProfileRoutes: registerNewCompanyProfileRoutes
@@ -4399,6 +4400,9 @@ registerMarketIntelRoutes(app, {
 // Provider-agnostic routes; ARW never touches providers directly.
 registerDocumentIntelligenceRoutes(app);
 registerETFIntelligenceRoutes(app);
+// Asset Logo Provider — VectorUp (primary) + Logo.dev (fallback) icon resolution.
+// Spec: Centralized provider hierarchy with server-side token management.
+registerAssetLogoRoutes(app);
 
 if (ENABLE_NEW_COMPANY_PROFILE) {
   registerNewCompanyProfileRoutes(app, getCompanyProfileService(), {

@@ -2,15 +2,22 @@
 // Central Asset Icon Resolver — the SINGLE canonical path for resolving
 // asset icon information. No UI component should construct provider URLs.
 //
-// Architecture:
+// Architecture (spec §81, §147):
 //   CanonicalAssetIdentity → resolveAssetIcon() → { type, url?, fallbackType, initials }
 //
-// AssetLogo.jsx is the shared rendering component.
-// This module is responsible for:
-//   1. Normalizing asset types to the canonical vocabulary
-//   2. Choosing the correct logo provider path
-//   3. Generating deterministic fallback initials
-//   4. Determining fallback type-class for CSS lettermark coloring
+// The backend resolver (/api/asset-logo/resolve) implements the full
+// provider hierarchy: Cache → VectorUp (primary) → Logo.dev (fallback) → local.
+// The frontend calls this API via zeninFetch.
+//
+// If the backend cannot be reached (offline/dev mode), a client-side
+// logo.dev fallback is used with the PUBLISHABLE key from env config.
+// The VectorUp token is NEVER exposed to the frontend.
+//
+// Docs: https://www.logo.dev/docs/logo-images/introduction
+//       https://vectorup.dev/docs/api-reference/logo
+
+import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
+import { zeninFetchJson } from "./zeninFetch";
 
 // ---------------------------------------------------------------------------
 // Canonical asset type vocabulary
@@ -31,112 +38,80 @@ export const ASSET_TYPES = {
   UNKNOWN: "unknown",
 };
 
-// ---------------------------------------------------------------------------
-// Type normalization — maps the many raw type representations in the codebase
-// to the canonical vocabulary. This is the single place that logic lives.
-// ---------------------------------------------------------------------------
-const TYPE_ALIASES = {
-  // Equities
-  stock: ASSET_TYPES.EQUITY,
-  equity: ASSET_TYPES.EQUITY,
-  shares: ASSET_TYPES.EQUITY,
-  "us stock": ASSET_TYPES.EQUITY,
-  "us equity": ASSET_TYPES.EQUITY,
-  // ETFs
-  etf: ASSET_TYPES.ETF,
-  etfs: ASSET_TYPES.ETF,
-  "exchange traded fund": ASSET_TYPES.ETF,
-  "exchange-traded fund": ASSET_TYPES.ETF,
-  // Crypto
-  crypto: ASSET_TYPES.CRYPTO,
-  cryptocurrency: ASSET_TYPES.CRYPTO,
-  coin: ASSET_TYPES.CRYPTO,
-  token: ASSET_TYPES.CRYPTO,
-  "exchange token": ASSET_TYPES.CRYPTO,
-  spot: ASSET_TYPES.CRYPTO,
-  perp: ASSET_TYPES.CRYPTO,
-  perpetual: ASSET_TYPES.CRYPTO,
-  // Commodities
-  commodity: ASSET_TYPES.COMMODITY,
-  commodities: ASSET_TYPES.COMMODITY,
-  future: ASSET_TYPES.COMMODITY,
-  futures: ASSET_TYPES.COMMODITY,
-  // Options
-  option: ASSET_TYPES.OPTION,
-  options: ASSET_TYPES.OPTION,
-  // Forex / FX
-  forex: ASSET_TYPES.FOREX,
-  fx: ASSET_TYPES.FOREX,
-  "fx-pair": ASSET_TYPES.FOREX,
-  "currency pair": ASSET_TYPES.FOREX,
-  // Currency codes (macro research entity)
-  currency: ASSET_TYPES.CURRENCY,
-  "currency-code": ASSET_TYPES.CURRENCY,
-  // Macro / indicators
-  macro: ASSET_TYPES.MACRO,
-  indicator: ASSET_TYPES.INDICATOR,
-  // Bonds / funds / indices
-  bond: ASSET_TYPES.BOND,
-  bonds: ASSET_TYPES.BOND,
-  fund: ASSET_TYPES.FUND,
-  funds: ASSET_TYPES.FUND,
-  index: ASSET_TYPES.INDEX,
-  indexes: ASSET_TYPES.INDEX,
-  indices: ASSET_TYPES.INDEX,
-};
-
 export function normalizeAssetType(rawType) {
+  const TYPE_ALIASES = {
+    stock: ASSET_TYPES.EQUITY,
+    equity: ASSET_TYPES.EQUITY,
+    shares: ASSET_TYPES.EQUITY,
+    "us stock": ASSET_TYPES.EQUITY,
+    "us equity": ASSET_TYPES.EQUITY,
+    etf: ASSET_TYPES.ETF,
+    etfs: ASSET_TYPES.ETF,
+    "exchange traded fund": ASSET_TYPES.ETF,
+    "exchange-traded fund": ASSET_TYPES.ETF,
+    crypto: ASSET_TYPES.CRYPTO,
+    cryptocurrency: ASSET_TYPES.CRYPTO,
+    coin: ASSET_TYPES.CRYPTO,
+    token: ASSET_TYPES.CRYPTO,
+    "exchange token": ASSET_TYPES.CRYPTO,
+    spot: ASSET_TYPES.CRYPTO,
+    perp: ASSET_TYPES.CRYPTO,
+    perpetual: ASSET_TYPES.CRYPTO,
+    commodity: ASSET_TYPES.COMMODITY,
+    commodities: ASSET_TYPES.COMMODITY,
+    future: ASSET_TYPES.COMMODITY,
+    futures: ASSET_TYPES.COMMODITY,
+    option: ASSET_TYPES.OPTION,
+    options: ASSET_TYPES.OPTION,
+    forex: ASSET_TYPES.FOREX,
+    fx: ASSET_TYPES.FOREX,
+    "fx-pair": ASSET_TYPES.FOREX,
+    "currency pair": ASSET_TYPES.FOREX,
+    currency: ASSET_TYPES.CURRENCY,
+    "currency-code": ASSET_TYPES.CURRENCY,
+    macro: ASSET_TYPES.MACRO,
+    indicator: ASSET_TYPES.INDICATOR,
+    bond: ASSET_TYPES.BOND,
+    bonds: ASSET_TYPES.BOND,
+    fund: ASSET_TYPES.FUND,
+    funds: ASSET_TYPES.FUND,
+    index: ASSET_TYPES.INDEX,
+    indexes: ASSET_TYPES.INDEX,
+    indices: ASSET_TYPES.INDEX,
+  };
+
   if (!rawType || typeof rawType !== "string") return ASSET_TYPES.UNKNOWN;
   const key = rawType.trim().toLowerCase();
   return TYPE_ALIASES[key] || ASSET_TYPES.UNKNOWN;
 }
 
-// ---------------------------------------------------------------------------
-// Crypto detection — used because crypto symbols often lack dots/slashes
-// but are explicitly marked as crypto via type.
-// ---------------------------------------------------------------------------
 export function isCryptoType(asset) {
   const t = normalizeAssetType(asset?.type || asset?.assetType || asset?.instrumentType);
   if (t === ASSET_TYPES.CRYPTO) return true;
-  // Also check raw type strings that map to crypto
   const raw = String(asset?.type || asset?.assetType || asset?.instrumentType || "").toLowerCase();
   return ["crypto", "cryptocurrency", "coin", "token", "spot", "perp", "perpetual", "exchange token"].includes(raw);
 }
 
-// ---------------------------------------------------------------------------
-// Canonical asset identity normalization
-//
-// Accepts many object shapes (portfolio position, watchlist entry,
-// transaction, order, raw reference data) and produces a canonical identity.
-// ---------------------------------------------------------------------------
 export function toCanonicalAssetIdentity(asset) {
   if (!asset || typeof asset !== "object") return null;
 
-  const rawType = asset.type || asset.assetType || asset.instrumentType || asset.marketType || "";
+  const rawType = asset.type || asset.assetType || asset.instrumentType || "";
   const normalizedType = normalizeAssetType(rawType) || ASSET_TYPES.UNKNOWN;
-
-  // Crypto detection may override when the raw type is ambiguous
   const isCrypto = isCryptoType(asset);
   const kind = isCrypto ? ASSET_TYPES.CRYPTO : normalizedType;
 
-  // Derive symbol: prefer symbol > ticker > name > instrumentKey
   const symbol = String(
     asset.symbol || asset.ticker || asset.instrumentKey || asset.contractSymbol || ""
   ).trim();
 
-  // For derivatives, extract the underlying symbol from options-like symbols
-  // e.g. "NVDA250117C00120000" → underlying "NVDA"
   let underlyingSymbol = symbol;
   if (kind === ASSET_TYPES.OPTION && symbol) {
-    // Options symbols like NVDA250117C00120000 or AAPL 2024-01-19 150.00 C
     const match = symbol.match(/^([A-Z]{1,5})\d{6}[CP]/i) || symbol.match(/^([A-Z]{1,5})\s\d{4}/i);
     if (match) underlyingSymbol = match[1].toUpperCase();
   }
 
-  // Name / company name
   const name = String(asset.name || asset.companyName || asset.label || "");
 
-  // Crypto-specific fields
   const chain = asset.chain || null;
   const contractAddress = asset.contractAddress || asset.address || asset.contract_address || null;
   const coinId = asset.coinId || asset.coin_id || asset.id || null;
@@ -150,82 +125,35 @@ export function toCanonicalAssetIdentity(asset) {
     instrumentType: rawType ? String(rawType).toLowerCase() : undefined,
     exchange: asset.exchange || asset.market || null,
     currency: asset.currency || null,
-    // Security identifiers
     isin: asset.isin || null,
     cusip: asset.cusip || null,
     figi: asset.figi || asset.figiId || null,
-    // Provider identifiers
     provider: asset.provider || null,
     providerAssetId: asset.providerAssetId || asset.externalId || null,
-    // Crypto
+    domain: asset.domain || null,
     chain,
     contractAddress,
     coinId,
-    // Derivatives
-    underlyingSymbol: kind === ASSET_TYPES.OPTION && underlyingSymbol !== symbol ? underlyingSymbol : (asset.underlyingSymbol || asset.underlying || null),
+    underlyingSymbol:
+      kind === ASSET_TYPES.OPTION && underlyingSymbol !== symbol
+        ? underlyingSymbol
+        : (asset.underlyingSymbol || asset.underlying || null),
     underlyingAssetId: asset.underlyingAssetId || null,
   };
 }
 
 // ---------------------------------------------------------------------------
-// logo.dev configuration
-// ---------------------------------------------------------------------------
-const LOGO_DEV_TOKEN = "pk_DUGROay4TPGqK6AMX8PPFQ";
-const LOGO_DEV_BASE = "https://img.logo.dev";
-const LOGO_DEV_PARAMS = {
-  token: LOGO_DEV_TOKEN,
-  size: "128",
-  theme: "dark",
-  greyscale: "true",
-  fallback: "404",
-};
-
-// Symbols that are known to NOT resolve via logo.dev ticker mode
-// and should skip the provider entirely (go straight to fallback).
-const NO_LOGO_SYMBOLS = new Set([
-  "SPY", "VOO", "IVV", "VTI", "QQQ", "IWM", "VEA", "VWO", "AGG", "TLT",
-  "GLD", "SLV", "ARKK", "EEM", "KWEB",
-  // These resolve but are commonly tested
-]);
-
-// ---------------------------------------------------------------------------
-// Logo URL generation — the ONLY place provider URLs are constructed.
-// ---------------------------------------------------------------------------
-export function getLogoUrl(assetOrSymbol, type) {
-  const identity = typeof assetOrSymbol === "string"
-    ? toCanonicalAssetIdentity({ symbol: assetOrSymbol, type })
-    : toCanonicalAssetIdentity(assetOrSymbol);
-
-  if (!identity?.symbol) return null;
-
-  // Crypto uses the crypto path; everything else uses ticker path.
-  const mode = identity.kind === ASSET_TYPES.CRYPTO ? "crypto" : "ticker";
-
-  // For options, resolve the underlying asset symbol, not the option contract.
-  const symbol = identity.kind === ASSET_TYPES.OPTION
-    ? (identity.underlyingSymbol || identity.symbol)
-    : identity.symbol;
-
-  const params = new URLSearchParams(LOGO_DEV_PARAMS);
-  return `${LOGO_DEV_BASE}/${mode}/${encodeURIComponent(symbol)}?${params.toString()}`;
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic fallback initials generation
+// Fallback initials and type class (deterministic, used when no logo resolves)
 // ---------------------------------------------------------------------------
 export function getFallbackInitials(assetOrSymbol, type) {
   if (typeof assetOrSymbol === "string") {
     return String(assetOrSymbol || "").trim().slice(0, 2).toUpperCase() || "?";
   }
   const identity = toCanonicalAssetIdentity(assetOrSymbol);
-  // Prefer name's initials, then symbol's, then type's
   const source = identity?.name || identity?.symbol || type || "asset";
   return String(source || "").trim().slice(0, 2).toUpperCase() || "?";
 }
 
-// ---------------------------------------------------------------------------
-// Fallback type for CSS class
-// ---------------------------------------------------------------------------
 export function getFallbackTypeClass(assetOrType) {
   let rawType = assetOrType;
   if (typeof assetOrType === "object" && assetOrType !== null) {
@@ -233,7 +161,6 @@ export function getFallbackTypeClass(assetOrType) {
   }
   const normalized = normalizeAssetType(rawType);
 
-  // Map to CSS class names used in styles.css
   const CSS_CLASS_MAP = {
     [ASSET_TYPES.EQUITY]: "equity",
     [ASSET_TYPES.ETF]: "etf",
@@ -253,10 +180,240 @@ export function getFallbackTypeClass(assetOrType) {
 }
 
 // ---------------------------------------------------------------------------
-// Main resolution function — the canonical entry point.
-// Returns a normalized object describing what to render.
+// Client-side logo.dev fallback URL (only used when backend is unreachable).
+// The publishable key (pk_) is loaded from the backend public runtime config
+// via /api/public/config — NOT hardcoded in source. VectorUp's token is NEVER
+// exposed to the frontend.
+//
+// In production, the backend resolver (/api/asset-logo/resolve) always wins.
+// This client-side logo.dev path is a dev/offline-only fallback.
 // ---------------------------------------------------------------------------
-export function resolveAssetIcon(asset) {
+let _logoDevConfig = null;
+let _configPromise = null;
+
+function loadLogoDevConfig() {
+  if (_logoDevConfig !== null) return _logoDevConfig;
+  // Synchronously available from import.meta.env (for dev builds where
+  // VITE_LOGO_DEV_PUBLISHABLE_KEY is set), or null if not configured.
+  const token = String(
+    (typeof import.meta !== "undefined" &&
+      import.meta.env &&
+      import.meta.env.VITE_LOGO_DEV_PUBLISHABLE_KEY) ||
+      ""
+  ).trim();
+  _logoDevConfig = {
+    token,
+    size: String(
+      (typeof import.meta !== "undefined" &&
+        import.meta.env &&
+        import.meta.env.VITE_LOGO_DEV_IMAGE_SIZE) ||
+        "128"
+    ),
+    format: String(
+      (typeof import.meta !== "undefined" &&
+        import.meta.env &&
+        import.meta.env.VITE_LOGO_DEV_IMAGE_FORMAT) ||
+        "webp"
+    ),
+    theme: String(
+      (typeof import.meta !== "undefined" &&
+        import.meta.env &&
+        import.meta.env.VITE_LOGO_DEV_IMAGE_THEME) ||
+        "dark"
+    ),
+    greyscale: String(
+      (typeof import.meta !== "undefined" &&
+        import.meta.env &&
+        import.meta.env.VITE_LOGO_DEV_GREYSCALE) ||
+        "true"
+    ),
+  };
+  return _logoDevConfig;
+}
+
+// Fetch logo.dev config from backend public config (preferred source).
+async function fetchLogoDevConfigFromBackend() {
+  if (_logoDevConfig !== null && _logoDevConfig.token) return _logoDevConfig;
+  if (_configPromise !== null) return _configPromise;
+
+  _configPromise = zeninFetchJson("/api/public/config", { timeoutMs: 5000 })
+    .then((response) => {
+      const assetLogo = response?.publicConfig?.assetLogo;
+      if (assetLogo?.logoDevPublishableKey) {
+        _logoDevConfig = {
+          token: assetLogo.logoDevPublishableKey,
+          size: assetLogo.logoDevImageSize || "128",
+          format: assetLogo.logoDevImageFormat || "webp",
+          theme: assetLogo.logoDevImageTheme || "dark",
+          greyscale: String(assetLogo.logoDevGreyscale !== false),
+        };
+      }
+      return _logoDevConfig;
+    })
+    .catch(() => {
+      // Backend unreachable — fall back to env-var config (if any)
+      return _logoDevConfig || loadLogoDevConfig();
+    });
+
+  const config = await _configPromise;
+  return config;
+}
+
+export function getLogoUrl(assetOrSymbol, type) {
+  const config = loadLogoDevConfig();
+  if (!config.token) return null;
+
+  const identity =
+    typeof assetOrSymbol === "string"
+      ? toCanonicalAssetIdentity({ symbol: assetOrSymbol, type })
+      : toCanonicalAssetIdentity(assetOrSymbol);
+
+  if (!identity?.symbol) return null;
+
+  const mode = identity.kind === ASSET_TYPES.CRYPTO ? "crypto" : "ticker";
+  const symbol =
+    identity.kind === ASSET_TYPES.OPTION
+      ? identity.underlyingSymbol || identity.symbol
+      : identity.symbol;
+
+  const params = new URLSearchParams({
+    token: config.token,
+    size: config.size,
+    theme: config.theme,
+    greyscale: config.greyscale,
+    fallback: "404",
+  });
+  return `https://img.logo.dev/${mode}/${encodeURIComponent(symbol)}?${params.toString()}`;
+}
+
+// Async version of getLogoUrl that fetches config from backend first.
+export async function getLogoUrlAsync(assetOrSymbol, type) {
+  const config = await fetchLogoDevConfigFromBackend();
+  if (!config?.token) return null;
+
+  const identity =
+    typeof assetOrSymbol === "string"
+      ? toCanonicalAssetIdentity({ symbol: assetOrSymbol, type })
+      : toCanonicalAssetIdentity(assetOrSymbol);
+
+  if (!identity?.symbol) return null;
+
+  const mode = identity.kind === ASSET_TYPES.CRYPTO ? "crypto" : "ticker";
+  const symbol =
+    identity.kind === ASSET_TYPES.OPTION
+      ? identity.underlyingSymbol || identity.symbol
+      : identity.symbol;
+
+  const params = new URLSearchParams({
+    token: config.token,
+    size: config.size,
+    theme: config.theme,
+    greyscale: config.greyscale,
+    fallback: "404",
+  });
+  return `https://img.logo.dev/${mode}/${encodeURIComponent(symbol)}?${params.toString()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Async resolution via backend resolver API.
+// The backend implements the full pipeline: Cache → VectorUp → Logo.dev → fallback.
+// This function is async and must be awaited in UI components.
+// ---------------------------------------------------------------------------
+const _resolveCache = typeof Map !== "undefined" ? new Map() : null;
+
+export async function resolveAssetIcon(asset, options = {}) {
+  const { skipBackend = false } = options;
+  const identity = toCanonicalAssetIdentity(asset);
+
+  if (!identity) {
+    return {
+      type: "fallback",
+      fallbackType: "unknown",
+      initials: "?",
+      url: null,
+      provider: "fallback",
+      cached: false,
+    };
+  }
+
+  // Try backend resolver first (unless explicitly skipped)
+  if (!skipBackend) {
+    try {
+      const endpoint = buildResolveEndpoint(identity);
+      const result = await zeninFetchJson(endpoint, { timeoutMs: 8000 });
+
+      if (result?.ok && result?.result) {
+        const resolved = result.result;
+        if (resolved.type === "remote" && resolved.url) {
+          return {
+            type: "remote",
+            url: resolved.url,
+            fallbackType: getFallbackTypeClass(identity.kind),
+            initials: getFallbackInitials(identity),
+            provider: resolved.provider || "vectorup",
+            cached: resolved.cached || false,
+          };
+        }
+        // Backend returned fallback — use it
+        return {
+          type: "fallback",
+          fallbackType: resolved.fallbackType || getFallbackTypeClass(identity.kind),
+          initials: resolved.initials || getFallbackInitials(identity),
+          provider: "fallback",
+          cached: resolved.cached || false,
+        };
+      }
+    } catch (error) {
+      // Backend unreachable or error — fall through to client-side logo.dev
+      if (typeof console !== "undefined" && process.env.NODE_ENV !== "production") {
+        console.warn("[AssetLogo] Backend resolver unavailable, using client-side fallback:", error?.message || error);
+      }
+    }
+  }
+
+  // Client-side logo.dev fallback (only if token is available)
+  const url = await getLogoUrlAsync(identity);
+  if (url) {
+    return {
+      type: "remote",
+      url,
+      fallbackType: getFallbackTypeClass(identity.kind),
+      initials: getFallbackInitials(identity),
+      provider: "logo-dev",
+      cached: false,
+    };
+  }
+
+  // Local deterministic fallback
+  return {
+    type: "fallback",
+    fallbackType: getFallbackTypeClass(identity.kind),
+    initials: getFallbackInitials(identity),
+    provider: "fallback",
+    cached: false,
+  };
+}
+
+function buildResolveEndpoint(identity) {
+  const params = new URLSearchParams();
+  if (identity.symbol) params.set("symbol", identity.symbol);
+  if (identity.type) params.set("type", identity.type);
+  if (identity.exchange) params.set("exchange", identity.exchange);
+  if (identity.isin) params.set("isin", identity.isin);
+  if (identity.cusip) params.set("cusip", identity.cusip);
+  if (identity.domain) params.set("domain", identity.domain);
+  if (identity.coinId) params.set("coinId", identity.coinId);
+  if (identity.chain) params.set("chain", identity.chain);
+  if (identity.contractAddress) params.set("contractAddress", identity.contractAddress);
+
+  return `${ZENIN_API_BASE_URL}/api/asset-logo/resolve?${params.toString()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous resolution — used by Lettermark component for immediate render.
+// Returns a fallback result without provider URL (no network call).
+// ---------------------------------------------------------------------------
+export function resolveAssetIconSync(asset) {
   const identity = toCanonicalAssetIdentity(asset);
   if (!identity) {
     return {
@@ -264,26 +421,27 @@ export function resolveAssetIcon(asset) {
       fallbackType: "unknown",
       initials: "?",
       url: null,
+      provider: "fallback",
     };
   }
 
+  // Client-side logo.dev URL if token available
   const url = getLogoUrl(identity);
-  const fallbackType = getFallbackTypeClass(identity.kind);
-  const initials = getFallbackInitials(identity, identity.kind);
-
   if (url) {
     return {
       type: "remote",
       url,
-      fallbackType,
-      initials,
+      fallbackType: getFallbackTypeClass(identity.kind),
+      initials: getFallbackInitials(identity),
+      provider: "logo-dev",
     };
   }
 
   return {
     type: "fallback",
-    fallbackType,
-    initials,
+    fallbackType: getFallbackTypeClass(identity.kind),
+    initials: getFallbackInitials(identity),
+    provider: "fallback",
   };
 }
 
