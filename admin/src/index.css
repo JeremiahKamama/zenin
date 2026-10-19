@@ -13,6 +13,9 @@
   --accent: #FFFFFF;
   --accent-soft: rgba(255, 255, 255, 0.08);
   --accent-hover: #E5E5E5;
+  /* Foreground for text sitting ON the accent surface. The dark accent is
+     white, so accent text must be near-black. */
+  --accent-contrast: #0A0A0A;
 
   --text-primary: #FFFFFF;
   --text-secondary: #A3A3A3;
@@ -54,6 +57,8 @@ html.light-theme-active {
   --accent: #0A0A0A;
   --accent-soft: rgba(0, 0, 0, 0.06);
   --accent-hover: #262626;
+  /* The light accent is near-black, so text on it must be white. */
+  --accent-contrast: #FFFFFF;
 
   --text-primary: #0A0A0A;
   --text-secondary: #595959;
@@ -860,11 +865,22 @@ body {
 
 .btn-primary {
   background: var(--accent);
-  color: white;
+  /* Must be the INVERSE of the accent, not a hardcoded white.
+     In the dark theme --accent is #FFFFFF, so `color: white` rendered white on
+     white — the label was invisible (this is what hid "Authenticate with Zenin"
+     and every other primary button). --accent-contrast is defined per theme as
+     the readable foreground for the accent surface. */
+  color: var(--accent-contrast);
   border: none;
 }
 
-.btn-primary:hover {
+.btn-primary:disabled {
+  /* Disabled primary buttons keep the label legible rather than fading the whole
+     control toward the background. */
+  opacity: 0.75;
+}
+
+.btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
@@ -914,7 +930,7 @@ body {
 .pagination-btn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
 }
 
 .pagination-btn:disabled {
@@ -1071,7 +1087,7 @@ body {
   height: 24px;
   border-radius: 50%;
   background: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
   display: flex;
   align-items: center;
   justify-content: center;

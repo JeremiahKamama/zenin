@@ -100,6 +100,13 @@ const AuditIcon = ShieldCheck;
 const IntegrationsIcon = LayoutGrid;
 const TerminalIcon = Terminal;
 
+// Where an admin goes to enroll 2FA / a passkey. Enrollment lives in the main
+// app's Settings section, not the console, so the ADMIN_MFA_REQUIRED state links
+// straight there instead of telling the admin to go find it. The section name
+// must match the app's `sections` list (capitalised); `?section=` deep links are
+// now honoured after fixing a non-standard `location.searchParams` lookup.
+const ADMIN_APP_SECURITY_URL = 'https://www.zenin.capital/app?section=Settings';
+
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -2554,7 +2561,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 1. Organization Profile */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>1</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>1</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Organization Profile</h3>
         </div>
         <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
@@ -2605,7 +2612,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 2. Admin Preferences */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>2</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>2</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Admin Preferences</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -2647,7 +2654,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 3. Security & Access */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>3</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>3</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Security & Access</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -2708,7 +2715,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 4. Notifications */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>4</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>4</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Notifications</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -2737,7 +2744,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 5. API & Webhooks */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>5</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>5</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>API & Webhooks</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -2786,7 +2793,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       {/* 6. Data & Retention */}
       <div className="card" style={{ padding: '24px' }}>
         <div className="settings-card-header" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>6</div>
+          <div className="settings-step-number" style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--accent)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700 }}>6</div>
           <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Data & Retention</h3>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -3029,6 +3036,9 @@ export default function App() {
   const [logsData, setLogsData] = useState({ rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
   const [auditData, setAuditData] = useState({ rows: [], total: 0 });
   const [error, setError] = useState(null);
+  // Machine-readable error code from the API (e.g. ADMIN_MFA_REQUIRED), so the
+  // UI can show the right guidance instead of a blanket "Connection Error".
+  const [errorCode, setErrorCode] = useState(null);
   const [toasts, setToasts] = useState([]);
 
   const dismissToast = (id) => {
@@ -3202,9 +3212,15 @@ export default function App() {
         setAuditData(auditLogs || { rows: [], total: 0 });
       }
       setError(null);
+      setErrorCode(null);
     } catch (err) {
       console.error(`Error fetching ${tab} data:`, err);
+      // Keep the machine-readable code, not just the message. Without it the UI
+      // cannot tell "you must enroll 2FA" (a deliberate, actionable instruction)
+      // apart from "the server is unreachable", and rendered the former as a
+      // generic "Connection Error" with a pointless Retry button.
       setError(err.message);
+      setErrorCode(err?.code || null);
     } finally {
       setLoading(false);
     }
@@ -3718,6 +3734,60 @@ export default function App() {
     }
 
     if (error) {
+      // ADMIN_MFA_REQUIRED is not a connectivity problem — the request reached
+      // the server and was correctly refused because this admin account has no
+      // 2FA or passkey enrolled yet. Showing "Connection Error" + "Retry Sync"
+      // sent admins into a loop that could never succeed. This branches to an
+      // actionable explanation instead.
+      const needsMfaEnrollment = errorCode === 'ADMIN_MFA_REQUIRED';
+      const needsAdminIp = errorCode === 'ADMIN_IP_RESTRICTED';
+
+      if (needsMfaEnrollment || needsAdminIp) {
+        return (
+          <div style={{ padding: '40px', margin: '40px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <Shield size={28} color="var(--accent)" />
+              <h3 style={{ margin: 0 }}>
+                {needsMfaEnrollment ? 'Two-factor authentication required' : 'IP address not allowed'}
+              </h3>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '8px' }}>
+              {needsMfaEnrollment
+                ? 'Your admin account is signed in, but admin data is locked until you enroll a second factor (an authenticator app or a passkey). This is a security requirement, not an outage.'
+                : 'Your account is authorized, but this network is not on the admin allow-list.'}
+            </p>
+            {needsMfaEnrollment ? (
+              <>
+                <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '20px' }}>
+                  Open the Zenin app, go to <strong>Settings → Security</strong>, and enable two-factor
+                  authentication or register a passkey. Then return here — no redeploy is needed.
+                </p>
+                <a
+                  className="btn btn-primary"
+                  href={ADMIN_APP_SECURITY_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open Security Settings
+                </a>
+              </>
+            ) : (
+              <p style={{ color: 'var(--text-muted)', marginBottom: '20px' }}>
+                Connect from an approved network, or ask an owner to add your IP to
+                <code style={{ marginLeft: '6px' }}>ADMIN_ALLOWED_IPS</code>.
+              </p>
+            )}
+            <button
+              className="btn btn-secondary"
+              style={{ marginTop: '16px', marginLeft: needsMfaEnrollment ? '8px' : 0 }}
+              onClick={() => fetchData()}
+            >
+              I've enrolled — reload admin data
+            </button>
+          </div>
+        );
+      }
+
       return (
         <div style={{ padding: '40px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', color: 'var(--danger)', margin: '40px' }}>
           <h3 style={{ marginBottom: '8px' }}>Connection Error</h3>
@@ -3841,7 +3911,7 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             <button type="button" style={{ position: 'relative', background: 'none', border: 'none', color: 'var(--text-secondary)' }} onClick={() => showPlaceholder('Notifications center opened.', 'This is ready for a richer notification tray when alert data is available.')}>
               <Bell size={20} />
-              <div style={{ position: 'absolute', top: '-4px', right: '-4px', background: 'var(--accent)', width: '14px', height: '14px', borderRadius: '50%', fontSize: '10px', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-header)' }}>7</div>
+              <div style={{ position: 'absolute', top: '-4px', right: '-4px', background: 'var(--accent)', width: '14px', height: '14px', borderRadius: '50%', fontSize: '10px', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-header)' }}>7</div>
             </button>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: '99px', border: '1px solid var(--border)' }}>
@@ -3850,7 +3920,7 @@ export default function App() {
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '16px', borderLeft: '1px solid var(--border)' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'white' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'var(--accent-contrast)' }}>
                 {user?.displayName ? user.displayName.substring(0, 2).toUpperCase() : 'AD'}
               </div>
               <div style={{ textAlign: 'left' }}>

@@ -4295,10 +4295,21 @@ const handleOptionTradeClosed = async (tradeId) => {
       const requestedSection = getSectionFromGuestSlug(new URLSearchParams(window.location.search).get("section"), sections);
       if (requestedSection) return requestedSection;
     }
-    // Deep-link: ?section=settings
+    // Deep-link: ?section=Settings
+    //
+    // NOTE: this previously read `window.location.searchParams`, which is not a
+    // standard property — it is always undefined, so the lookup fell through and
+    // every `?section=` deep link was silently ignored (landing on Home or the
+    // last saved section instead). Parse the real query string, and accept a
+    // case-insensitive section name so `?section=settings` also works.
     if (typeof window !== "undefined") {
-      const urlSection = String(window.location.searchParams?.get("section") || "").trim();
-      if (sections.includes(urlSection)) return urlSection;
+      const urlSection = String(new URLSearchParams(window.location.search).get("section") || "").trim();
+      if (urlSection) {
+        const exact = sections.find((section) => section === urlSection);
+        const caseInsensitive = exact
+          || sections.find((section) => section.toLowerCase() === urlSection.toLowerCase());
+        if (caseInsensitive) return caseInsensitive;
+      }
     }
     // New users land on Home; returning users keep their saved section.
     return sections.includes(savedSection) ? savedSection : "Home";
