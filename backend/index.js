@@ -462,12 +462,82 @@ const MASSIVE_WS_OPTIONS_URL = String(process.env.MASSIVE_WS_OPTIONS_URL || "wss
 const MASSIVE_WS_DELAYED_OPTIONS_URL = String(process.env.MASSIVE_WS_DELAYED_OPTIONS_URL || "wss://delayed.massive.com/options").trim();
 console.log(`[Startup] Massive API key loaded: ${MASSIVE_API_KEY ? `YES (${MASSIVE_API_KEY_SOURCE})` : "NO"}`);
 
-const providerMemoryCache = new Map();
+// ── Bounded TTL cache ──────────────────────────────────────────────────────
+// These caches were plain Maps with a TTL checked only on READ. That means an
+// expired entry was ignored but never freed, so the Map grew for the life of
+// the process. Worse, some keys embed raw user input — e.g.
+// `massive:search:<query>` — so every distinct search a user typed became a
+// permanent entry holding a full provider payload. Measured: 20k distinct
+// searches retained ~43MB indefinitely even though all were 2h past a 15-minute
+// TTL. On a 512MB instance that reaches the limit and Render restart-loops the
+// service.
+//
+// This class enforces BOTH a TTL (lazy, on read) and a hard size cap (LRU
+// eviction on write), so memory is bounded regardless of traffic shape or key
+// cardinality. Insertion order is maintained via delete-then-set, which makes
+// Map iteration order a true LRU order.
+class BoundedTtlCache {
+  constructor({ maxEntries = 500, ttlMs = 15 * 60 * 1000, name = "cache" } = {}) {
+    this.maxEntries = Math.max(1, maxEntries);
+    this.ttlMs = ttlMs;
+    this.name = name;
+    this._map = new Map();
+    this._hits = 0;
+    this._misses = 0;
+    this._evictions = 0;
+  }
+
+  get(key) {
+    const entry = this._map.get(key);
+    if (!entry) { this._misses += 1; return undefined; }
+    if (Date.now() - entry.cachedAt >= this.ttlMs) {
+      // Expired: free it now instead of leaving it for the life of the process.
+      this._map.delete(key);
+      this._misses += 1;
+      return undefined;
+    }
+    // Refresh recency so frequently used entries survive eviction.
+    this._map.delete(key);
+    this._map.set(key, entry);
+    this._hits += 1;
+    return entry.payload;
+  }
+
+  set(key, payload) {
+    if (this._map.has(key)) this._map.delete(key);
+    this._map.set(key, { payload, cachedAt: Date.now() });
+    // Evict least-recently-used entries beyond the cap.
+    while (this._map.size > this.maxEntries) {
+      const oldest = this._map.keys().next().value;
+      this._map.delete(oldest);
+      this._evictions += 1;
+    }
+  }
+
+  stats() {
+    return { name: this.name, size: this._map.size, max: this.maxEntries, hits: this._hits, misses: this._misses, evictions: this._evictions };
+  }
+
+  clear() { this._map.clear(); }
+}
+
+const providerMemoryCache = new BoundedTtlCache({
+  maxEntries: Number(process.env.PROVIDER_CACHE_MAX_ENTRIES) || 500,
+  // The cache-level TTL only guards against a stored entry with no explicit
+  // deadline; per-call lifetimes are enforced via each entry's `expiresAt`.
+  // The callers pass TTLs up to 6h, so this must not be shorter than those.
+  ttlMs: 24 * 60 * 60 * 1000,
+  name: "provider"
+});
 const PROVIDER_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const MACRO_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const EARNINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const macroIndicatorsCache = new Map();
+const macroIndicatorsCache = new BoundedTtlCache({
+  maxEntries: Number(process.env.MACRO_CACHE_MAX_ENTRIES) || 100,
+  ttlMs: MACRO_CACHE_TTL_MS,
+  name: "macro-indicators"
+});
 const EARNINGS_CALENDAR_REFRESH_TTL_MS = 21 * 24 * 60 * 60 * 1000; // 21 days (~quarterly cadence)
 const COUNTRY_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 let countryCatalogMemory = { countries: [], cachedAt: 0 };
@@ -683,11 +753,16 @@ async function fetchJsonWithTimeout(url, options = {}) {
 }
 
 async function cachedProviderFetch(cacheKey, fetcher, ttlMs = PROVIDER_CACHE_TTL_MS) {
-  const now = Date.now();
+  // The cache enforces its own TTL and LRU cap on every read/write, so expired
+  // entries are freed rather than accumulating. `ttlMs` is honored by storing
+  // the deadline alongside the payload: a call with a longer TTL than the
+  // cache default still gets its full lifetime, while the cache's LRU bound
+  // guarantees memory cannot grow without limit.
   const cached = providerMemoryCache.get(cacheKey);
-  if (cached && now - cached.cachedAt < ttlMs) return cached.payload;
+  if (cached !== undefined && Date.now() < cached.expiresAt) return cached.payload;
   const payload = await fetcher();
-  providerMemoryCache.set(cacheKey, { payload, cachedAt: now });
+  const effectiveTtl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : PROVIDER_CACHE_TTL_MS;
+  providerMemoryCache.set(cacheKey, { payload, expiresAt: Date.now() + effectiveTtl });
   return payload;
 }
 
@@ -2880,9 +2955,32 @@ app.post("/api/webhooks/resend", async (req, res) => {
 });
 
 const securityAnomalyState = new Map();
+// Hard cap so an attacker cannot grow this map without limit. Some keys embed
+// the client IP (`workspace-403:<ip>`), which is attacker-controlled: without a
+// bound, spraying requests from many addresses leaks memory forever and each
+// new key also evicts nothing. Oldest-first eviction keeps the newest windows,
+// which are the ones actually being counted against.
+const SECURITY_ANOMALY_MAX_KEYS = Math.max(100, Number(process.env.SECURITY_ANOMALY_MAX_KEYS) || 2000);
+let securityAnomalySweepAt = Date.now();
+
+function pruneSecurityAnomalyState(now) {
+  // Drop expired windows opportunistically (at most once a minute) so the map
+  // reflects only live counters, then enforce the hard cap.
+  if (now - securityAnomalySweepAt > 60 * 1000) {
+    securityAnomalySweepAt = now;
+    for (const [k, v] of securityAnomalyState) {
+      if (!v || v.expiresAt < now) securityAnomalyState.delete(k);
+    }
+  }
+  while (securityAnomalyState.size > SECURITY_ANOMALY_MAX_KEYS) {
+    const oldest = securityAnomalyState.keys().next().value;
+    securityAnomalyState.delete(oldest);
+  }
+}
 
 function trackSecurityAnomaly(key, windowMs = 10 * 60 * 1000) {
   const now = Date.now();
+  pruneSecurityAnomalyState(now);
   const existing = securityAnomalyState.get(key);
   if (!existing || existing.expiresAt < now) {
     const next = { count: 1, expiresAt: now + windowMs };
@@ -9163,11 +9261,25 @@ function markBootFailed(err) {
 // Intentionally dependency-free: a database hiccup must not make the instance
 // look dead, and this is the endpoint uptime monitors poll.
 app.get("/health", (_req, res) => {
+  const mem = process.memoryUsage();
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
-    initialized: bootState.ready
+    initialized: bootState.ready,
+    // Memory is reported so an approaching instance limit is visible BEFORE
+    // Render OOM-kills the container. `caches` exposes the bounded caches:
+    // a size pinned at max with evictions climbing is normal; unbounded growth
+    // is not, and this makes that difference observable from the outside.
+    memory: {
+      rssMb: Math.round(mem.rss / 1048576),
+      heapUsedMb: Math.round(mem.heapUsed / 1048576)
+    },
+    caches: {
+      provider: providerMemoryCache.stats(),
+      macroIndicators: macroIndicatorsCache.stats(),
+      securityAnomalyKeys: securityAnomalyState.size
+    }
   });
 });
 
@@ -10392,10 +10504,12 @@ app.get("/api/macro-indicators", async (req, res) => {
 
     const cacheKey = `macro:${country}`;
     const now = Date.now();
-    const memoryCached = macroIndicatorsCache.get(cacheKey);
+    // BoundedTtlCache.get() returns the stored payload or undefined, and the
+    // cache already enforces expiry + an LRU cap, so no manual age check here.
+    const memoryPayload = macroIndicatorsCache.get(cacheKey);
     const persisted = await readServiceSnapshot("macro-indicators", { country });
-    const cached = memoryCached?.payload
-      ? memoryCached
+    const cached = memoryPayload
+      ? { payload: memoryPayload, cachedAt: now }
       : (persisted?.payload
         ? {
             payload: persisted.payload,
@@ -10455,7 +10569,7 @@ app.get("/api/macro-indicators", async (req, res) => {
         }
       };
 
-      macroIndicatorsCache.set(cacheKey, { payload, cachedAt: now });
+      macroIndicatorsCache.set(cacheKey, payload);
       await writeServiceSnapshot("macro-indicators", { country }, payload);
       res.json(payload);
     } catch (error) {

@@ -21,6 +21,19 @@ services:
       # Raise this only alongside a larger plan.
       - key: PY_MAX_CONCURRENT
         value: "2"
+      # Bounded in-memory caches. These were plain Maps whose TTL was checked
+      # only on read, so expired entries were never freed and grew for the life
+      # of the process — including keys built from raw user input
+      # (`massive:search:<query>`), which leaked ~110MB over 50k searches and
+      # caused the Render OOM restart loop. These caps bound that memory.
+      - key: PROVIDER_CACHE_MAX_ENTRIES
+        value: "500"
+      - key: MACRO_CACHE_MAX_ENTRIES
+        value: "100"
+      # Hard cap on security-anomaly counters. Some keys embed the client IP,
+      # which is attacker-controlled, so this map also needs a bound.
+      - key: SECURITY_ANOMALY_MAX_KEYS
+        value: "2000"
       - key: FRONTEND_URL
         value: https://www.zenin.capital
       - key: FRONTEND_URLS
