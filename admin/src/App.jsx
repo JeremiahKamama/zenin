@@ -2993,6 +2993,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
+  // ── Email-code sign-in state ────────────────────────────────────────────
+  // step: 'idle' -> button shown; 'code' -> awaiting the 6-digit code.
+  const [loginStep, setLoginStep] = useState('idle');
+  const [loginCode, setLoginCode] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState(null);
+  const [loginNotice, setLoginNotice] = useState(null);
+  const [resendIn, setResendIn] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [commandQuery, setCommandQuery] = useState('');
   const [commandResults, setCommandResults] = useState({ users: [], audit: [], logs: [], tables: [] });
@@ -3088,6 +3096,68 @@ export default function App() {
       }
     }
   };
+
+  // ── Email-code sign-in ──────────────────────────────────────────────────
+  // The recipient is fixed SERVER-SIDE (kamama@zenin.capital); nothing here
+  // can redirect the code, which is why no email input is shown.
+
+  const requestLoginCode = async () => {
+    setLoginLoading(true);
+    setLoginError(null);
+    setLoginNotice(null);
+    try {
+      const data = await adminFetch('/login/request', { method: 'POST' });
+      setLoginStep('code');
+      setLoginCode('');
+      setLoginNotice(data?.message || 'A sign-in code has been sent to the administrator mailbox.');
+      // Server tells us the code lifetime; use it to pace the resend button.
+      const waitSeconds = Number(data?.expiresInSeconds) > 0
+        ? Math.min(60, Math.floor(Number(data.expiresInSeconds) / 10))
+        : 60;
+      setResendIn(waitSeconds);
+      if (data?.devCode) {
+        // Local/dev only (never returned in production): surface the code so
+        // the flow is testable without a configured mail provider.
+        setLoginNotice(`Dev mode — code: ${data.devCode}`);
+      }
+    } catch (err) {
+      setLoginError(err?.message || 'Could not send the sign-in code. Please try again.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const verifyLoginCode = async (event) => {
+    if (event) event.preventDefault();
+    if (!/^\d{6}$/.test(loginCode.trim())) {
+      setLoginError('Enter the 6-digit code from the email.');
+      return;
+    }
+    setLoginLoading(true);
+    setLoginError(null);
+    try {
+      await adminFetch('/login/verify', {
+        method: 'POST',
+        body: JSON.stringify({ code: loginCode.trim() }),
+      });
+      // Session cookie is now set; re-run the normal auth check so the console
+      // loads through exactly the same path as any other sign-in.
+      await checkAuth();
+    } catch (err) {
+      setLoginError(err?.message || 'That code was not accepted. Please try again.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // Countdown for the resend button.
+  useEffect(() => {
+    if (resendIn <= 0) return undefined;
+    const timer = window.setInterval(() => {
+      setResendIn((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendIn]);
 
   const fetchSelectedUserDetails = async (userId) => {
     const details = await adminFetch(`/users/${userId}`);
@@ -3522,20 +3592,110 @@ export default function App() {
           </div>
           <h2 style={{ marginBottom: '12px', fontSize: '24px', fontWeight: 700 }}>Admin Access Required</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', fontSize: '14px', lineHeight: '1.6' }}>
-            This console is restricted to platform administrators. Please log in with an authorized account to continue.
+            {loginStep === 'idle'
+              ? 'This console is restricted to platform administrators. We will email a one-time sign-in code to the administrator mailbox.'
+              : 'Enter the 6-digit code we emailed to the administrator mailbox.'}
           </p>
-          <button 
-            className="btn btn-primary" 
-            style={{ width: '100%', height: '44px', fontSize: '15px', fontWeight: 600 }}
-            onClick={() => {
-              const mainAppUrl = getMainAppUrl();
-              window.location.href = `${mainAppUrl}/auth?mode=signin&next=${encodeURIComponent(window.location.href)}`;
-            }}
-          >
-            Authenticate with Zenin
-          </button>
-          
+
+          {loginStep === 'idle' ? (
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={loginLoading}
+              style={{ width: '100%', height: '44px', fontSize: '15px', fontWeight: 600, opacity: loginLoading ? 0.7 : 1 }}
+              onClick={requestLoginCode}
+            >
+              {loginLoading ? 'Sending code…' : 'Authenticate with Zenin'}
+            </button>
+          ) : (
+            <form onSubmit={verifyLoginCode}>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                aria-label="6-digit sign-in code"
+                placeholder="000000"
+                maxLength={6}
+                value={loginCode}
+                onChange={(e) => {
+                  // Digits only, so paste-with-spaces still works.
+                  setLoginCode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                  setLoginError(null);
+                }}
+                style={{
+                  width: '100%',
+                  height: '52px',
+                  textAlign: 'center',
+                  fontSize: '26px',
+                  letterSpacing: '0.35em',
+                  fontWeight: 700,
+                  fontFamily: 'monospace',
+                  borderRadius: '10px',
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-elevated, rgba(255,255,255,0.04))',
+                  color: 'var(--text-primary)',
+                  marginBottom: '14px',
+                }}
+              />
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={loginLoading || loginCode.length !== 6}
+                style={{ width: '100%', height: '44px', fontSize: '15px', fontWeight: 600, opacity: loginLoading || loginCode.length !== 6 ? 0.6 : 1 }}
+              >
+                {loginLoading ? 'Verifying…' : 'Verify and continue'}
+              </button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px' }}>
+                <button
+                  type="button"
+                  className="inline-link-btn"
+                  disabled={loginLoading || resendIn > 0}
+                  style={{ opacity: loginLoading || resendIn > 0 ? 0.5 : 1, cursor: loginLoading || resendIn > 0 ? 'not-allowed' : 'pointer' }}
+                  onClick={requestLoginCode}
+                >
+                  {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
+                </button>
+                <button
+                  type="button"
+                  className="inline-link-btn"
+                  disabled={loginLoading}
+                  onClick={() => {
+                    setLoginStep('idle');
+                    setLoginCode('');
+                    setLoginError(null);
+                    setLoginNotice(null);
+                  }}
+                >
+                  Use a different method
+                </button>
+              </div>
+            </form>
+          )}
+
+          {loginError ? (
+            <p role="alert" style={{ marginTop: '18px', fontSize: '13px', color: 'var(--danger)' }}>{loginError}</p>
+          ) : null}
+          {!loginError && loginNotice ? (
+            <p style={{ marginTop: '18px', fontSize: '13px', color: 'var(--text-secondary)' }}>{loginNotice}</p>
+          ) : null}
+
           <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
+            {loginStep === 'idle' ? (
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                Have an email and password?{' '}
+                <button
+                  type="button"
+                  className="inline-link-btn"
+                  onClick={() => {
+                    const mainAppUrl = getMainAppUrl();
+                    window.location.href = `${mainAppUrl}/auth?mode=signin&next=${encodeURIComponent(window.location.href)}`;
+                  }}
+                >
+                  Sign in with password
+                </button>
+              </p>
+            ) : null}
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
               Having trouble?{' '}
               <button type="button" className="inline-link-btn" onClick={() => window.location.reload()}>

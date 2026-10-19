@@ -159,8 +159,13 @@ function parseJsonPayload(value, fallback = null) {
 
 function mapAuthUserRow(row) {
   if (!row) return null;
+  // is_admin / admin_role default to false/'user' when the query did not select
+  // them, so callers that never asked for admin flags are unaffected.
+  const isAdmin = row.isAdmin ?? row.is_admin ?? false;
   return {
     ...row,
+    isAdmin: Boolean(isAdmin),
+    adminRole: row.adminRole || row.admin_role || (isAdmin ? "super_admin" : "user"),
     supabaseUserId: row.supabaseUserId || row.supabase_user_id || null,
     passkeys: parseJsonPayload(row.passkeys, []),
     backupCodes: parseJsonPayload(row.backupCodes, []),
@@ -1398,6 +1403,33 @@ async function initializeDatabase() {
       WHERE email = $1;
     `, [adminEmail]);
 
+    // Ensure the admin-console sign-in mailbox exists as an admin.
+    // admin_login_challenges issues a session for a real admin account, so the
+    // recipient of the emailed code must actually exist. Created here (rather
+    // than left to a manual INSERT) so a fresh environment provisions it
+    // automatically and the two stay in sync.
+    // password_hash is set to '' (the column is NOT NULL DEFAULT ''): an empty
+    // hash cannot authenticate because verifyPassword() requires the
+    // "scrypt:" prefix. This account is code-only by design.
+    // Race-safe via ON CONFLICT on the app_users_email_key unique constraint.
+    const adminLoginEmail = String(
+      process.env.ADMIN_LOGIN_EMAIL || "kamama@zenin.capital"
+    ).trim().toLowerCase();
+    if (adminLoginEmail) {
+      await client.query(`
+        INSERT INTO app_users (email, password_hash, display_name, auth_provider, email_verified, is_admin, admin_role, current_plan)
+        VALUES ($1, '', $2, 'email', TRUE, TRUE, 'super_admin', 'starter')
+        ON CONFLICT (email) DO UPDATE
+        SET is_admin = TRUE,
+            admin_role = CASE
+              WHEN COALESCE(NULLIF(app_users.admin_role, ''), 'user') = 'user' THEN 'super_admin'
+              ELSE app_users.admin_role
+            END,
+            email_verified = TRUE,
+            updated_at = NOW();
+      `, [adminLoginEmail, "Zenin Admin"]);
+    }
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
         id SERIAL PRIMARY KEY,
@@ -2633,6 +2665,32 @@ async function initializeDatabase() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_referrals_user_id
       ON referrals(user_id);
+    `);
+
+    // Admin email-code login challenges. Deliberately a separate table rather
+    // than reusing app_users.email_verification_code_hash: that column means
+    // "prove you own this address", whereas a row here authorises a privileged
+    // admin SIGN-IN. Keeping them apart means an account-verification code can
+    // never be replayed to obtain an admin session, and vice versa.
+    // The code is stored only as an HMAC hash, so a database read alone cannot
+    // mint a session. Single-use via consumed_at.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_login_challenges (
+        id SERIAL PRIMARY KEY,
+        email_hash TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        email TEXT NOT NULL,
+        ip_address TEXT,
+        user_agent TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        consumed_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_login_challenges_email_hash
+      ON admin_login_challenges(email_hash, created_at DESC);
     `);
 
     // Tier rename migration (pro -> plus, desk -> premium). Idempotent: only
@@ -4598,6 +4656,8 @@ const userAuth = {
         locked_until AS "lockedUntil",
         email_verification_code_hash AS "emailVerificationCodeHash",
         email_verification_requested_at AS "emailVerificationRequestedAt",
+        is_admin AS "isAdmin",
+        admin_role AS "adminRole",
         created_at AS "createdAt"
       FROM app_users
       WHERE id = $1
@@ -5216,6 +5276,102 @@ const userAuth = {
           updated_at = NOW()
       WHERE id = $1;
     `, [toUserId(userId), lockedUntil]);
+  },
+
+  // ── Admin email-code sign-in challenges ──────────────────────────────────
+  // See the admin_login_challenges table for why this is separate from
+  // email verification.
+
+  /**
+   * Resolve just enough of an account to decide whether it may be signed in via
+   * an emailed admin code. Deliberately separate from findUserByEmail: that
+   * query is the hot path for password sign-in and does NOT select is_admin, so
+   * reading admin status from it silently yields undefined. This returns the
+   * admin flags explicitly and nothing else.
+   */
+  findAdminLoginAccount: async (email) => {
+    const normalized = String(email || "").trim().toLowerCase();
+    if (!normalized) return null;
+    const result = await pool.query(`
+      SELECT
+        id,
+        email,
+        is_admin AS "isAdmin",
+        COALESCE(admin_role, CASE WHEN is_admin THEN 'super_admin' ELSE 'user' END) AS "adminRole",
+        two_factor_enabled AS "twoFactorEnabled"
+      FROM app_users
+      WHERE lower(email) = $1
+      LIMIT 1;
+    `, [normalized]);
+    return result.rows[0] || null;
+  },
+
+  /**
+   * Invalidate any outstanding challenge for this address and create a new one.
+   * Returning the new row's id lets the caller log/audit without re-querying.
+   * Runs as one statement so two concurrent requests cannot both leave an
+   * active challenge behind.
+   */
+  createAdminLoginChallenge: async ({ emailHash, codeHash, email, expiresAt, ipAddress = null, userAgent = null }) => {
+    await pool.query(`
+      UPDATE admin_login_challenges
+      SET consumed_at = NOW()
+      WHERE email_hash = $1 AND consumed_at IS NULL;
+    `, [emailHash]);
+
+    const result = await pool.query(`
+      INSERT INTO admin_login_challenges
+        (email_hash, code_hash, email, expires_at, ip_address, user_agent)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id;
+    `, [emailHash, codeHash, email, expiresAt, ipAddress, userAgent]);
+    return result.rows[0] || null;
+  },
+
+  /**
+   * Fetch the most recent unconsumed challenge for an address. Expiry and code
+   * comparison are the caller's job so the failure reasons can stay distinct
+   * (expired vs wrong vs too many attempts).
+   */
+  findActiveAdminLoginChallenge: async (emailHash) => {
+    const result = await pool.query(`
+      SELECT id,
+             email,
+             code_hash AS "codeHash",
+             attempts,
+             expires_at AS "expiresAt",
+             created_at AS "createdAt"
+      FROM admin_login_challenges
+      WHERE email_hash = $1 AND consumed_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 1;
+    `, [emailHash]);
+    return result.rows[0] || null;
+  },
+
+  incrementAdminLoginChallengeAttempts: async (challengeId) => {
+    const result = await pool.query(`
+      UPDATE admin_login_challenges
+      SET attempts = attempts + 1
+      WHERE id = $1
+      RETURNING attempts;
+    `, [challengeId]);
+    return result.rows[0]?.attempts ?? null;
+  },
+
+  /**
+   * Atomically consume a challenge. The `consumed_at IS NULL` guard makes this
+   * a compare-and-swap: two concurrent verifies can never both succeed on the
+   * same code. Returns the row only for the winner.
+   */
+  consumeAdminLoginChallenge: async (challengeId) => {
+    const result = await pool.query(`
+      UPDATE admin_login_challenges
+      SET consumed_at = NOW()
+      WHERE id = $1 AND consumed_at IS NULL
+      RETURNING id, email;
+    `, [challengeId]);
+    return result.rows[0] || null;
   },
 
 };

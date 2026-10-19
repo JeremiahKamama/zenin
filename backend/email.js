@@ -372,12 +372,114 @@ async function sendVerificationEmail(email, code, options = {}) {
   }
 }
 
+/**
+ * Admin sign-in code. Distinct from sendVerificationEmail on purpose:
+ * verifying an address and authorising a privileged admin session are
+ * different security events, and the copy must make that obvious to the
+ * recipient so an unexpected code reads as a warning, not a routine email.
+ */
+async function sendAdminLoginCodeEmail(email, code, options = {}) {
+  const client = getResendClient();
+  const escapedCode = escapeHtml(code);
+  const expiresInMinutes = Number(options.expiresInMinutes) || 10;
+  const subject = `Your Zenin admin sign-in code - ${code}`;
+
+  // --- Dev fallback: no Resend key ---
+  if (!client) {
+    console.warn("[Email] RESEND_API_KEY missing or placeholder — falling back to console log.");
+    console.log("\n" + "=".repeat(70));
+    console.log("[DEV] Admin login code email NOT sent (Resend not configured).");
+    console.log(`[DEV] Recipient: ${email}`);
+    console.log(`[DEV] Code     : ${code}`);
+    console.log("=".repeat(70) + "\n");
+    return buildDeliveryResult({
+      sent: false,
+      error: { message: "RESEND_API_KEY missing or placeholder" }
+    });
+  }
+
+  if (!SMTP_FROM_CONFIGURED) {
+    console.error("[Email] SMTP_FROM or EMAIL_FROM is required. Configure a verified sender domain in Resend.");
+    return buildDeliveryResult({ sent: false, error: { message: "SMTP_FROM or EMAIL_FROM is missing" } });
+  }
+
+  if (SMTP_FROM_USES_RESEND_TEST_DOMAIN) {
+    console.error("[Email] SMTP_FROM uses a resend.dev test sender. Configure a verified sender domain in Resend.");
+    return buildDeliveryResult({ sent: false, error: { message: "SMTP_FROM uses resend.dev test sender" } });
+  }
+
+  const htmlContent = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 8px; background-color: #ffffff; color: #333333;">
+      <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #000000; margin: 0;">ZENIN</h1>
+        <p style="color: #666666; font-size: 14px; margin-top: 5px;">Capital Management</p>
+      </div>
+
+      <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 20px;">Admin console sign-in code</h2>
+
+      <p style="font-size: 16px; line-height: 1.5; margin-bottom: 25px;">
+        Enter this code to finish signing in to the Zenin admin console:
+      </p>
+
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="display: inline-block; padding: 16px 32px; background-color: #f3f4f6; color: #000000; border-radius: 8px; font-weight: 700; font-size: 32px; letter-spacing: 0.1em;">
+          ${escapedCode}
+        </div>
+      </div>
+
+      <p style="font-size: 14px; line-height: 1.5; color: #666666; margin-bottom: 10px;">
+        This code expires in ${expiresInMinutes} minutes and can only be used once.
+      </p>
+      <p style="font-size: 14px; line-height: 1.5; color: #b91c1c; margin-bottom: 30px;">
+        If you did not request admin access, do not enter this code. Someone may have found the admin sign-in page — no action is needed on your part, and your account has not been accessed.
+      </p>
+
+      <p style="font-size: 12px; color: #999999; text-align: center; margin-top: 30px; border-top: 1px solid #e1e1e1; padding-top: 20px;">
+        &copy; ${new Date().getFullYear()} Zenin Capital. All rights reserved.
+      </p>
+    </div>
+  `;
+
+  try {
+    return await sendWithTemplateFallback(client, {
+      email,
+      subject,
+      html: htmlContent,
+      // Reuses the verification template when configured, since it renders a
+      // single CODE variable; override with RESEND_ADMIN_LOGIN_TEMPLATE_ID.
+      templateId: String(
+        options.templateId ||
+          process.env.RESEND_ADMIN_LOGIN_TEMPLATE_ID ||
+          RESEND_EMAIL_VERIFICATION_TEMPLATE_ID ||
+          ""
+      ).trim(),
+      templateVariables: {
+        CODE: code,
+        code,
+        APP_NAME: "Zenin Capital",
+        app_name: "Zenin Capital",
+        company_name: "Zenin Capital",
+        PURPOSE: "admin_login",
+        purpose: "admin_login",
+        EXPIRES_IN_MINUTES: String(expiresInMinutes),
+        expires_in_minutes: String(expiresInMinutes),
+        RECIPIENT_EMAIL: email,
+        recipient_email: email
+      },
+      tags: [{ name: "zenin_type", value: "admin_login_code" }],
+      logLabel: "admin login code"
+    });
+  } catch (err) {
+    console.error(`[Email] Unexpected error sending admin login code to ${email}:`, err);
+    return buildDeliveryResult({ sent: false, error: err });
+  }
+}
+
 function logDevAlertEmail(email, alert = {}) {
   if (process.env.NODE_ENV === "production") {
     console.warn("[Email] Alert email was not sent because Resend is not configured.");
     return;
-  }
-  console.log("\n" + "=".repeat(70));
+  }  console.log("\n" + "=".repeat(70));
   console.log("[DEV] Alert email NOT sent (Resend not configured).");
   console.log(`[DEV] Recipient: ${email}`);
   console.log(`[DEV] Type     : ${alert.type || "market_alert"}`);
@@ -559,6 +661,7 @@ async function sendJournalReportEmail(email, payload = {}) {
 module.exports = {
   getEmailDeliveryConfig,
   isEmailDeliveryProductionReady,
+  sendAdminLoginCodeEmail,
   sendAlertEmail,
   sendJournalReminderEmail,
   sendJournalReportEmail,

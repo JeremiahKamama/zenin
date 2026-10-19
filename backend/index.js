@@ -17,6 +17,7 @@ const { Webhook } = require("svix");
 const {
   getEmailDeliveryConfig,
   isEmailDeliveryProductionReady,
+  sendAdminLoginCodeEmail,
   sendPasswordResetEmail,
   sendVerificationEmail
 } = require("./email");
@@ -1328,6 +1329,28 @@ const resendVerificationLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many verification emails requested. Please try again later." }
+});
+
+// Admin email-code sign-in. These endpoints are intentionally reachable WITHOUT
+// a session (that is the point — they are how an admin gets one), so they are
+// the most exposed auth surface in the app. Throttle hard:
+//  - request: drives an outbound email to a fixed address, so cap at 5/hour/IP.
+//  - verify: a 6-digit code is brute-forceable, so cap attempts at 10/15min/IP.
+// Keyed by IP only: there is no user-supplied email to key on (the recipient is
+// fixed server-side), and keying on the body would let an attacker rotate it.
+const adminLoginRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many admin sign-in codes requested. Please try again later." }
+});
+const adminLoginVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many admin sign-in attempts. Please try again later." }
 });
 
 const expensiveReadLimiter = rateLimit({
@@ -6447,6 +6470,235 @@ const adminRateLimit = rateLimit({
 });
 
 app.use("/api/admin/*", adminRateLimit);
+
+// ── Admin email-code sign-in (passwordless) ─────────────────────────────────
+// MUST be registered BEFORE the `app.use("/api/admin", requireSignedIn)` guard
+// below: obtaining a session is the entire purpose of these two routes, so they
+// are the one pair of /api/admin endpoints that must be reachable while
+// signed out.
+//
+// Security properties:
+//  - The recipient is FIXED server-side. No request field can redirect the code
+//    to another address, so the endpoint cannot be used to email arbitrary
+//    people or to enumerate which addresses exist.
+//  - Only an account that is already an admin in the DB can be signed in. The
+//    code authorises a session; it can never escalate a non-admin.
+//  - The code is stored as an HMAC hash and consumed atomically (single use).
+const ADMIN_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
+const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
+
+function resolveAdminLoginRecipient() {
+  // Hardcoded on purpose. This is the ONE mailbox that can receive an admin
+  // sign-in code, and the requirement is that it is always this address.
+  //
+  // Deliberately does NOT fall back to ADMIN_EMAIL: that variable names the
+  // root/bootstrapping admin (used for seeding) and is set to a different
+  // mailbox in production. Falling back to it silently delivered admin codes
+  // to the wrong inbox. ADMIN_LOGIN_EMAIL exists only as an explicit override
+  // for tests/staging.
+  return String(process.env.ADMIN_LOGIN_EMAIL || "kamama@zenin.capital").trim().toLowerCase();
+}
+
+function adminLoginAudienceKey(email) {
+  return hashToken(`admin-login:${String(email || "").trim().toLowerCase()}`);
+}
+
+app.post("/api/admin/login/request", adminLoginRequestLimiter, async (req, res) => {
+  try {
+    const recipient = resolveAdminLoginRecipient();
+    if (!recipient) {
+      return apiError(res, 500, {
+        error: "Admin login is not configured",
+        message: "No admin sign-in address is configured.",
+        code: "ADMIN_LOGIN_NOT_CONFIGURED",
+        retryable: false
+      });
+    }
+
+    // Resolve the account FIRST, so we only spend an email when there is a real
+    // admin to sign in. The response is deliberately identical either way, to
+    // avoid disclosing whether the address exists.
+    // findAdminLoginAccount (not findUserByEmail) because only the former
+    // selects is_admin — see its comment in database.js.
+    const user = await userAuth.findAdminLoginAccount(recipient);
+    const canSignIn = Boolean(user && user.isAdmin);
+
+    if (canSignIn) {
+      const code = createVerificationCode();
+      const expiresAt = new Date(Date.now() + ADMIN_LOGIN_CODE_TTL_MS).toISOString();
+
+      await userAuth.createAdminLoginChallenge({
+        emailHash: adminLoginAudienceKey(recipient),
+        // scrypt via derivePasswordHash — the same scheme verify-email uses and
+        // the only format verifyPassword() accepts. hashToken() would be an
+        // HMAC and would never match.
+        codeHash: derivePasswordHash(code).hash,
+        email: recipient,
+        expiresAt,
+        ipAddress: resolveClientIp(req),
+        userAgent: String(req.headers["user-agent"] || "").slice(0, 512)
+      });
+
+      const delivery = await sendAdminLoginCodeEmail(recipient, code, {
+        expiresInMinutes: Math.round(ADMIN_LOGIN_CODE_TTL_MS / 60000)
+      });
+      const sent = getEmailDeliverySent(delivery);
+
+      await logSecurityEvent(req, {
+        level: sent ? "info" : "warning",
+        message: sent
+          ? "Admin sign-in code emailed."
+          : "Admin sign-in code created but email delivery failed.",
+        eventType: "admin_login_code_requested",
+        targetUserId: user.id,
+        context: {
+          recipientHash: adminLoginAudienceKey(recipient),
+          emailDeliveryResult: getEmailDeliveryLogContext(delivery)
+        }
+      }).catch(() => null);
+
+      if (!sent && IS_PRODUCTION) {
+        return apiError(res, 502, {
+          error: "Email delivery failed",
+          message: "Zenin could not send the admin sign-in code. Please try again in a moment.",
+          code: "EMAIL_DELIVERY_FAILED",
+          retryable: true
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "A sign-in code has been sent to the administrator mailbox.",
+        expiresInSeconds: Math.round(ADMIN_LOGIN_CODE_TTL_MS / 1000),
+        // Only surfaced outside production so local/dev testing is possible
+        // without a configured mail provider.
+        ...(IS_PRODUCTION ? {} : { devCode: sent ? undefined : code })
+      });
+    }
+
+    await logSecurityEvent(req, {
+      level: "warning",
+      message: "Admin sign-in code requested but no admin account is configured for that address.",
+      eventType: "admin_login_code_requested_unauthorized",
+      context: { recipientHash: adminLoginAudienceKey(recipient) }
+    }).catch(() => null);
+
+    // Same shape as success — do not disclose whether an admin exists.
+    return res.json({
+      success: true,
+      message: "A sign-in code has been sent to the administrator mailbox.",
+      expiresInSeconds: Math.round(ADMIN_LOGIN_CODE_TTL_MS / 1000)
+    });
+  } catch (error) {
+    return handleServerError(res, "Admin sign-in code request failed", error);
+  }
+});
+
+app.post("/api/admin/login/verify", adminLoginVerifyLimiter, async (req, res) => {
+  try {
+    const code = String(req.body?.code || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      return apiError(res, 400, {
+        error: "Invalid code format",
+        message: "Enter the 6-digit code that was emailed to you.",
+        code: "INVALID_CODE_FORMAT",
+        retryable: false
+      });
+    }
+
+    const recipient = resolveAdminLoginRecipient();
+    const emailHash = adminLoginAudienceKey(recipient);
+    const challenge = await userAuth.findActiveAdminLoginChallenge(emailHash);
+
+    if (!challenge) {
+      return apiError(res, 400, {
+        error: "No sign-in code requested",
+        message: "Request a new admin sign-in code before continuing.",
+        code: "ADMIN_LOGIN_NOT_REQUESTED",
+        retryable: false
+      });
+    }
+
+    // Expiry check before comparison, so an expired code can't be ground down.
+    const expiresAtMs = new Date(challenge.expiresAt).getTime();
+    if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) {
+      return apiError(res, 400, {
+        error: "Code expired",
+        message: "That code has expired. Request a new one.",
+        code: "ADMIN_LOGIN_CODE_EXPIRED",
+        retryable: false
+      });
+    }
+
+    if (Number(challenge.attempts) >= ADMIN_LOGIN_MAX_ATTEMPTS) {
+      return apiError(res, 429, {
+        error: "Too many attempts",
+        message: "Too many incorrect codes. Request a new one.",
+        code: "ADMIN_LOGIN_TOO_MANY_ATTEMPTS",
+        retryable: false
+      });
+    }
+
+    if (!verifyPassword(code, challenge.codeHash)) {
+      const attempts = await userAuth.incrementAdminLoginChallengeAttempts(challenge.id);
+      await logSecurityEvent(req, {
+        level: "warning",
+        message: "Incorrect admin sign-in code submitted.",
+        eventType: "admin_login_code_invalid",
+        context: { attempts }
+      }).catch(() => null);
+      return apiError(res, 400, {
+        error: "Invalid code",
+        message: "That code is not correct. Check the email and try again.",
+        code: "INVALID_ADMIN_LOGIN_CODE",
+        retryable: false
+      });
+    }
+
+    // Re-check the account at verify time: admin rights may have been revoked
+    // between request and verify.
+    const user = await userAuth.findAdminLoginAccount(recipient);
+    if (!user || !user.isAdmin) {
+      return apiError(res, 403, {
+        error: "Admin privileges required",
+        message: "This account is not authorised for the admin console.",
+        code: "ADMIN_PRIVILEGES_REQUIRED",
+        retryable: false
+      });
+    }
+
+    // Single-use: atomically consume. A concurrent duplicate loses the race.
+    const consumed = await userAuth.consumeAdminLoginChallenge(challenge.id);
+    if (!consumed) {
+      return apiError(res, 400, {
+        error: "Code already used",
+        message: "That code has already been used. Request a new one.",
+        code: "ADMIN_LOGIN_CODE_ALREADY_USED",
+        retryable: false
+      });
+    }
+
+    // Issue a normal session so every downstream admin guard (requireSignedIn,
+    // requireAdmin, requireRecentAdminReauth) behaves exactly as it does after
+    // a password sign-in. Step-up is still required for destructive actions.
+    const session = await issueSessionForUser(user.id, req, { persistent: false });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: false });
+
+    await logSecurityEvent(req, {
+      message: "Admin signed in via emailed code.",
+      eventType: "admin_login_code_verified",
+      targetUserId: user.id
+    }).catch(() => null);
+
+    return res.json({
+      success: true,
+      message: "Signed in.",
+      user: sanitizeAuthUser(user)
+    });
+  } catch (error) {
+    return handleServerError(res, "Admin sign-in verification failed", error);
+  }
+});
 
 // Defense-in-depth: every /api/admin route must be authenticated. This global
 // guard ensures no admin route can ever be reached without a valid session,
