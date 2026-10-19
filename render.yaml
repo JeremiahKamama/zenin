@@ -83,6 +83,12 @@ services:
         value: "0.1"
       - key: SENTRY_PROFILES_SAMPLE_RATE
         value: "0.1"
+      # Continuous CPU profiling is opt-in. It loads a native sampler that costs
+      # ~275ms of boot and measurable steady-state CPU on a single-CPU instance,
+      # so it is off unless explicitly enabled. Error reporting and tracing are
+      # unaffected. Set to "true" temporarily when investigating a hot path.
+      - key: SENTRY_PROFILING_ENABLED
+        value: "false"
 
   # ── Frontend (React / Vite static site) ───────────────────────────────────
   - type: web

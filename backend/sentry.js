@@ -19,7 +19,9 @@
 "use strict";
 
 const Sentry = require("@sentry/node");
-const { nodeProfilingIntegration } = require("@sentry/profiling-node");
+// NOTE: @sentry/profiling-node is required LAZILY inside initSentry(), and only
+// when SENTRY_PROFILING_ENABLED is truthy. Requiring it at module scope forced
+// the native CPU profiler to load on every boot even when unused.
 const { execSync } = require("child_process");
 
 // ---------------------------------------------------------------------------
@@ -203,20 +205,39 @@ function initSentry() {
   const tracesSampleRate = clampRate(process.env.SENTRY_TRACES_SAMPLE_RATE, 0.1);
   const profilesSampleRate = clampRate(process.env.SENTRY_PROFILES_SAMPLE_RATE, 0.1);
 
+  // Profiling is a CONTINUOUS native CPU sampler, not a per-error hook. It was
+  // loaded unconditionally, which cost ~275ms of boot (the native
+  // @sentry/profiling-node addon plus @sentry/node-core) and measurably raised
+  // steady-state CPU. On a single-CPU instance that is budget taken from
+  // request handling, so it is now opt-in:
+  //   SENTRY_PROFILING_ENABLED=true  → attach the profiler
+  // Anything else (including unset) leaves profiling off while error reporting
+  // and distributed tracing continue to work normally.
+  const profilingEnabled = /^(1|true|yes|on)$/i.test(
+    String(process.env.SENTRY_PROFILING_ENABLED || "").trim()
+  );
+
+  const integrations = [];
+  if (profilingEnabled) {
+    try {
+      // Required lazily so the native addon is never loaded when disabled.
+      const { nodeProfilingIntegration } = require("@sentry/profiling-node");
+      integrations.push(nodeProfilingIntegration());
+    } catch (err) {
+      console.warn("[sentry] profiling requested but unavailable:", err && err.message);
+    }
+  }
+
   Sentry.init({
     dsn: SENTRY_DSN,
     environment,
     release,
     tracesSampleRate,
-    profilesSampleRate,
+    profilesSampleRate: profilingEnabled ? profilesSampleRate : 0,
     sendDefaultPii: false, // never auto-attach IP/cookies
     attachStacktrace: true,
     maxBreadcrumbs: 50,
-    integrations: [
-      // Pulls in the profiling integration without enabling auto-instrumentation
-      // beyond what tracing already captures.
-      nodeProfilingIntegration()
-    ],
+    integrations,
     beforeSend,
     ignoreErrors: IGNORE_ERROR_PATTERNS.map((re) => re.source)
   });

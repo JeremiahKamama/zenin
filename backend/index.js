@@ -1744,6 +1744,25 @@ function derivePasswordHash(password, salt = null) {
   return { salt: safeSalt, hash: `scrypt:${safeSalt}:${hash}` };
 }
 
+// Async scrypt. scrypt is deliberately CPU- and memory-hard (~20ms per call
+// with the default N=16384,r=8,p=1), and the sync form runs ON the event loop —
+// so concurrent sign-ins serialize and every other request stalls behind them.
+// These async variants use the libuv threadpool instead: identical algorithm,
+// identical cost per call and identical hash format, but they no longer block
+// the event loop or inflate the instance's CPU-time attribution.
+//
+// A 6-digit verification/admin-login code is rate-limited and short-lived, so
+// verifying it with scrypt still costs an attacker far more than it costs us.
+function derivePasswordHashAsync(password, salt = null) {
+  const safeSalt = salt || crypto.randomBytes(16).toString("hex");
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(password || ""), safeSalt, 64, (err, derived) => {
+      if (err) return reject(err);
+      resolve({ salt: safeSalt, hash: `scrypt:${safeSalt}:${derived.toString("hex")}` });
+    });
+  });
+}
+
 function verifyPassword(password, storedHash) {
   const raw = String(storedHash || "");
   if (!raw.startsWith("scrypt:")) return false;
@@ -1751,6 +1770,28 @@ function verifyPassword(password, storedHash) {
   if (!salt || !expectedHash) return false;
   const computed = crypto.scryptSync(String(password || ""), salt, 64).toString("hex");
   return crypto.timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(computed, "hex"));
+}
+
+// Async counterpart of verifyPassword — same format, same constant-time
+// comparison, but the key derivation happens off the event loop.
+function verifyPasswordAsync(password, storedHash) {
+  const raw = String(storedHash || "");
+  if (!raw.startsWith("scrypt:")) return Promise.resolve(false);
+  const [, salt, expectedHash] = raw.split(":");
+  if (!salt || !expectedHash) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(password || ""), salt, 64, (err, derived) => {
+      if (err) return reject(err);
+      try {
+        const expected = Buffer.from(expectedHash, "hex");
+        const computed = Buffer.from(derived.toString("hex"), "hex");
+        // timingSafeEqual throws on length mismatch; treat that as a miss.
+        resolve(expected.length === computed.length && crypto.timingSafeEqual(expected, computed));
+      } catch (cmpErr) {
+        reject(cmpErr);
+      }
+    });
+  });
 }
 
 function isStrongPassword(password) {
@@ -6261,7 +6302,7 @@ app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {
       return res.status(400).json({ error: "Current password is required." });
     }
     const currentUser = await userAuth.findUserById(req.auth.userId);
-    if (!currentUser || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+    if (!currentUser || !(await verifyPasswordAsync(currentPassword, currentUser.passwordHash))) {
       return res.status(401).json({ error: "Current password is incorrect." });
     }
     const updatedSession = await userAuth.markSessionReauthenticated({
@@ -6294,7 +6335,7 @@ app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(em
     if (nextEmail === String(currentUser.email || "").trim().toLowerCase()) {
       return res.status(400).json({ error: "New email must be different from current email." });
     }
-    if (!currentPassword || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+    if (!currentPassword || !(await verifyPasswordAsync(currentPassword, currentUser.passwordHash))) {
       return res.status(401).json({ error: "Current password is incorrect." });
     }
     const existing = await userAuth.findUserByEmail(nextEmail);
@@ -6375,13 +6416,13 @@ app.post("/api/account/password", authLimiter, requireSignedIn, validate(passwor
       return res.status(400).json({ error: "Password must be 10+ chars with letters, numbers, and symbols." });
     }
     const currentUser = await userAuth.findUserByEmail(req.auth.user?.email || "");
-    if (!currentUser || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+    if (!currentUser || !(await verifyPasswordAsync(currentPassword, currentUser.passwordHash))) {
       return res.status(401).json({ error: "Current password is incorrect." });
     }
-    if (verifyPassword(newPassword, currentUser.passwordHash)) {
+    if (await verifyPasswordAsync(newPassword, currentUser.passwordHash)) {
       return res.status(400).json({ error: "Choose a password different from your current password." });
     }
-    const { hash } = derivePasswordHash(newPassword);
+    const { hash } = await derivePasswordHashAsync(newPassword);
     await userAuth.updatePassword(req.auth.userId, hash);
     const user = await userAuth.findUserById(req.auth.userId);
     return res.json({ success: true, user: sanitizeAuthUser(user) });
@@ -6406,7 +6447,7 @@ app.delete("/api/account", authLimiter, requireSignedIn, validate(accountDeleteS
     const storedPasswordHash = String(currentUser.passwordHash || "").trim();
     if (storedPasswordHash) {
       const currentPassword = String(req.body?.currentPassword || "");
-      if (!currentPassword || !verifyPassword(currentPassword, storedPasswordHash)) {
+      if (!currentPassword || !(await verifyPasswordAsync(currentPassword, storedPasswordHash))) {
         return res.status(401).json({ error: "Current password is incorrect." });
       }
     }
@@ -6532,7 +6573,7 @@ app.post("/api/admin/login/request", adminLoginRequestLimiter, async (req, res) 
         // scrypt via derivePasswordHash — the same scheme verify-email uses and
         // the only format verifyPassword() accepts. hashToken() would be an
         // HMAC and would never match.
-        codeHash: derivePasswordHash(code).hash,
+        codeHash: (await derivePasswordHashAsync(code)).hash,
         email: recipient,
         expiresAt,
         ipAddress: resolveClientIp(req),
@@ -6639,7 +6680,7 @@ app.post("/api/admin/login/verify", adminLoginVerifyLimiter, async (req, res) =>
       });
     }
 
-    if (!verifyPassword(code, challenge.codeHash)) {
+    if (!(await verifyPasswordAsync(code, challenge.codeHash))) {
       const attempts = await userAuth.incrementAdminLoginChallengeAttempts(challenge.id);
       await logSecurityEvent(req, {
         level: "warning",
@@ -6714,7 +6755,7 @@ app.post("/api/admin/reauth/verify", requireSignedIn, requireAdmin, authLimiter,
       return res.status(400).json({ error: "Current password is required." });
     }
     const currentUser = await userAuth.findUserById(req.auth.userId);
-    if (!currentUser || !verifyPassword(currentPassword, currentUser.passwordHash)) {
+    if (!currentUser || !(await verifyPasswordAsync(currentPassword, currentUser.passwordHash))) {
       return res.status(401).json({ error: "Current password is incorrect." });
     }
     const updatedSession = await userAuth.markSessionReauthenticated({
@@ -6859,7 +6900,7 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, requireRecentAdminRe
     }
 
     const temporaryPassword = `Zn!${crypto.randomBytes(18).toString("hex")}`;
-    const { hash } = derivePasswordHash(temporaryPassword);
+    const { hash } = await derivePasswordHashAsync(temporaryPassword);
 
     const createdUser = await admin.createUser({
       email,
@@ -7566,7 +7607,7 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
       });
     }
 
-    const { hash } = derivePasswordHash(password);
+    const { hash } = await derivePasswordHashAsync(password);
     const created = await userAuth.createUser({
       email,
       passwordHash: hash,
@@ -7576,7 +7617,7 @@ app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, re
     });
 
     const verificationCode = crypto.randomInt(100000, 1000000).toString();
-    const { hash: codeHash } = derivePasswordHash(verificationCode);
+    const { hash: codeHash } = await derivePasswordHashAsync(verificationCode);
     
     await userAuth.updateUserVerificationCode(created.id, codeHash);
     const verificationEmailDelivery = await sendVerificationEmail(email, verificationCode);
@@ -7809,7 +7850,7 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
       });
     }
 
-    if (!verifyPassword(password, user.passwordHash)) {
+    if (!(await verifyPasswordAsync(password, user.passwordHash))) {
       await userAuth.incrementFailedLogin(user.id);
       // user.failedLoginCount is from BEFORE this increment in the found user object
       if ((user.failedLoginCount || 0) >= 4) { 
@@ -8043,7 +8084,7 @@ app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(for
       });
     }
 
-    const { hash } = derivePasswordHash(newPassword);
+    const { hash } = await derivePasswordHashAsync(newPassword);
     await userAuth.updatePassword(consumed.userId, hash);
     await userAuth.revokeSessionsByUserId(consumed.userId);
     const session = await issueSessionForUser(consumed.userId, req, { persistent: true });
@@ -8108,7 +8149,7 @@ app.post("/api/auth/verify-email", verifyEmailLimiter, validate(verifyEmailSchem
       });
     }
 
-    if (!verifyPassword(code, user.emailVerificationCodeHash)) {
+    if (!(await verifyPasswordAsync(code, user.emailVerificationCodeHash))) {
       return apiError(res, 400, {
         error: "Invalid verification code",
         message: "Check the code and try again.",
@@ -8184,7 +8225,7 @@ app.post("/api/auth/resend-verification", resendVerificationLimiter, validate(re
     }
 
     const verificationCode = crypto.randomInt(100000, 1000000).toString();
-    const { hash: codeHash } = derivePasswordHash(verificationCode);
+    const { hash: codeHash } = await derivePasswordHashAsync(verificationCode);
 
     try {
       await userAuth.updateUserVerificationCode(user.id, codeHash);
@@ -8961,10 +9002,39 @@ app.get("/", (req, res) => {
   });
 });
 
+// Boot state. The HTTP port is bound before initialization finishes (see
+// startServer), so liveness and readiness are deliberately distinct:
+//   - /health        → liveness. 200 as soon as the process serves HTTP, so an
+//                      uptime cron sees a healthy instance during a slow boot
+//                      instead of Render's headerless 502 page.
+//   - /health/ready  → readiness. 503 until dependencies are confirmed, so a
+//                      monitor never routes real traffic at a half-booted app.
+const bootState = {
+  startedAt: new Date().toISOString(),
+  ready: false,
+  failed: null,
+  stages: { listening: false, postgres: false }
+};
+
+function markBootReady(stage) {
+  if (stage in bootState.stages) bootState.stages[stage] = true;
+  if (stage === "postgres") bootState.ready = true;
+}
+
+function markBootFailed(err) {
+  bootState.failed = (err && err.message) || "unknown";
+}
+
 // Lightweight liveness probe — confirms the process is up and serving HTTP.
-// Does NOT probe dependencies (cheap, never fails unless the process is wedged).
+// Intentionally dependency-free: a database hiccup must not make the instance
+// look dead, and this is the endpoint uptime monitors poll.
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+    initialized: bootState.ready
+  });
 });
 
 // Readiness probe — verifies dependencies (Postgres) so load balancers stop
@@ -8973,6 +9043,17 @@ app.get("/health", (_req, res) => {
 app.get("/health/ready", async (_req, res) => {
   const checks = {};
   let allOk = true;
+
+  // If boot already failed, report that rather than re-probing indefinitely.
+  if (bootState.failed) {
+    checks.boot = `error: ${bootState.failed}`;
+    allOk = false;
+  } else if (!bootState.ready) {
+    checks.boot = "initializing";
+    allOk = false;
+  } else {
+    checks.boot = "ok";
+  }
 
   try {
     await pool.query("SELECT 1");
@@ -17916,18 +17997,43 @@ function startUnifiedSyncScheduler() {
 }
 
 async function startServer() {
-  await initializeDatabase();
+  // Bind the port FIRST, then initialize.
+  //
+  // Previously initializeDatabase() completed before server.listen(), so the
+  // port stayed closed for the whole boot. Render returns its 502 error page
+  // (x-render-routing: dynamic-paid-error) for every request until the health
+  // check passes, so a 5-minute uptime cron would intermittently — and
+  // sometimes for a full minute — receive 502s and record them as failures.
+  // Listening early means /health answers immediately, the instance is marked
+  // healthy, and a slow dependency no longer takes the service off the air.
+  //
+  // /health is intentionally dependency-free. /health/ready still verifies
+  // Postgres and returns 503 until initialization has actually succeeded.
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "0.0.0.0", () => {
+      server.removeListener("error", reject);
+      console.log(`Portfolio manager backend (with WS) listening on port ${port}`);
+      markBootReady("listening");
+      resolve();
+    });
+  });
+
+  try {
+    await initializeDatabase();
+    markBootReady("postgres");
+  } catch (err) {
+    markBootFailed(err);
+    throw err;
+  }
   try {
     await initializeMarketIntelTables(db);
     console.log("[market-intel] Database tables ready.");
   } catch (err) {
     console.warn("[market-intel] Failed to initialize tables:", err.message);
   }
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "0.0.0.0", () => {
-      server.removeListener("error", reject);
-      console.log(`Portfolio manager backend (with WS) listening on port ${port}`);
+  {
+    {
 
       // Farside sync scheduler disabled — removed per request.
       console.log('[Scheduler] Farside sync scheduler disabled.');
@@ -17975,10 +18081,8 @@ async function startServer() {
       if (process.env.JOURNAL_REPORT_SCHEDULER !== "false") {
         startJournalReportScheduler();
       }
-
-      resolve();
-    });
-  });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -18070,7 +18174,26 @@ if (require.main === module) {
         "Database hostname could not be resolved. Verify that DATABASE_URL points at the live Railway Postgres endpoint and that the host is reachable from this deployment."
       );
     }
-    process.exit(1);
+    // Record the failure so /health/ready reports it, then KEEP SERVING.
+    //
+    // This previously called process.exit(1). Render would restart the
+    // container, it would crash again, and every request during the cycle hit
+    // the headerless 502 error page — which browsers surface as a CORS
+    // failure and uptime crons record as a failed job. Exiting also made a
+    // transient database blip look like a total outage.
+    //
+    // Now the process stays alive: /health returns 200 (the process is up),
+    // /health/ready returns 503 with the real reason, and an operator can read
+    // the diagnosis in the response instead of guessing from a 502. The
+    // process is still unhealthy from Render's point of view if readiness is
+    // used as the health check, so this does not mask a genuine failure.
+    markBootFailed(error);
+    console.error(
+      "[startup] Database initialization failed — serving /health (200) and /health/ready (503) so the failure is diagnosable. Set EXPANDED_DB_FAILURE_EXIT=true to restore exit-on-failure."
+    );
+    if (process.env.EXPANDED_DB_FAILURE_EXIT === "true") {
+      process.exit(1);
+    }
   });
 
   // --- Lifecycle hardening -------------------------------------------------
