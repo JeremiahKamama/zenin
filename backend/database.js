@@ -215,7 +215,7 @@ function mapWorkspaceRow(row) {
     id: Number(row.id),
     slug: String(row.slug || "").trim(),
     name: String(row.name || "").trim(),
-    plan: normalizePlanValue(row.plan),
+    plan: coercePlanValue(row.plan),
     billingCycle: normalizeBillingCycleValue(row.billingCycle || row.billing_cycle),
     seatLimit: Number(row.seatLimit || row.seat_limit || 1),
     seatCount: Number(row.seatCount || row.seat_count || 1),
@@ -680,10 +680,60 @@ function toUserId(userId) {
   return parsed;
 }
 
+/**
+ * Canonical plan ids and their legacy aliases.
+ *
+ * The tier rename (pro -> plus, desk -> premium) is applied to existing rows by
+ * a migration, and validation.js already accepts both the new and legacy ids.
+ * This normalizer was never updated, so it recognised only starter/pro/desk:
+ * writing `plus` or `premium` — the app's actual current tiers — fell through to
+ * the `starter` fallback and SILENTLY DOWNGRADED the account. The API returned
+ * 200 with the plan it had just failed to store, so an admin saw "success" while
+ * nothing changed.
+ *
+ * Legacy ids are mapped forward rather than preserved, so `pro` and `desk` stay
+ * writable without re-introducing retired values into the database.
+ */
+const PLAN_ALIASES = {
+  starter: "starter",
+  plus: "plus",
+  premium: "premium",
+  // Legacy ids from before the rename.
+  pro: "plus",
+  desk: "premium"
+};
+
+const CANONICAL_PLAN_VALUES = ["starter", "plus", "premium"];
+
+/**
+ * Normalize a plan id to its canonical form.
+ *
+ * Returns null for unrecognised input so callers can REJECT it. Previously an
+ * unknown value silently became "starter", which is indistinguishable from a
+ * deliberate downgrade — the caller could not tell a typo from intent.
+ */
 function normalizePlanValue(plan) {
   const value = String(plan || "").trim().toLowerCase();
-  if (["starter", "pro", "desk"].includes(value)) return value;
-  return "starter";
+  if (!value) return null;
+  return PLAN_ALIASES[value] || null;
+}
+
+/** True when the value is a plan this service will accept and store. */
+function isValidPlanValue(plan) {
+  return normalizePlanValue(plan) !== null;
+}
+
+/**
+ * Read-path variant: unknown or absent values fall back to "starter".
+ *
+ * Use this when READING a stored plan or displaying one. A row written before
+ * the tier rename, or hand-edited in SQL, should render as a usable tier rather
+ * than null. Writes must use normalizePlanValue() and reject null instead — a
+ * silent fallback on the write path is what let a failed plan change report
+ * success.
+ */
+function coercePlanValue(plan) {
+  return normalizePlanValue(plan) || "starter";
 }
 
 function normalizeBillingCycleValue(billingCycle) {
@@ -3751,7 +3801,8 @@ const analytics = {
 };
 
 function seatLimitForPlan(plan) {
-  return normalizePlanValue(plan) === "desk" ? 5 : 1;
+  // "premium" is the renamed "desk" tier; both carry 5 seats.
+  return normalizePlanValue(plan) === "premium" ? 5 : 1;
 }
 
 async function backfillWorkspaceScopedRecords(client, userId, workspaceId) {
@@ -4205,7 +4256,7 @@ const workspaces = {
           `${slugBase}-${resolvedUserId}`,
           fallbackName,
           resolvedUserId,
-          normalizePlanValue(user.currentPlan),
+          coercePlanValue(user.currentPlan),
           normalizeBillingCycleValue(user.currentBillingCycle),
           seatLimitForPlan(user.currentPlan)
         ]);
@@ -4276,7 +4327,7 @@ const workspaces = {
           WHERE id = $1;
         `, [
           workspaceRow.id,
-          normalizePlanValue(user.currentPlan),
+          coercePlanValue(user.currentPlan),
           normalizeBillingCycleValue(user.currentBillingCycle),
           seatLimitForPlan(user.currentPlan)
         ]);
@@ -5348,6 +5399,13 @@ const userAuth = {
 
   updateCurrentPlan: async (userId, plan, billingCycle = "monthly") => {
     const normalizedPlan = normalizePlanValue(plan);
+    // Reject rather than silently downgrade. Writing the fallback while
+    // reporting success is what made a failed plan change look like it worked.
+    if (!normalizedPlan) {
+      const error = new Error(`Unrecognized plan: ${String(plan || "").trim() || "(empty)"}`);
+      error.code = "INVALID_PLAN";
+      throw error;
+    }
     const normalizedBillingCycle = normalizeBillingCycleValue(billingCycle);
     const result = await pool.query(`
       UPDATE app_users
@@ -8874,7 +8932,10 @@ const admin = {
     }
 
     if (filters.plan) {
-      values.push(normalizePlanValue(filters.plan));
+      const filteredPlan = normalizePlanValue(filters.plan);
+      // An unrecognised plan must match NOTHING, not everything. Falling back to
+      // "starter" here would make a typo'd filter return the wrong cohort.
+      values.push(filteredPlan || "__no_such_plan__");
       conditions.push(`u.current_plan = $${values.length}`);
     }
 
@@ -9009,6 +9070,14 @@ const admin = {
 
   updateUserPlan: async (userId, plan) => {
     const validPlan = normalizePlanValue(plan);
+    // Fail loudly on an unrecognised plan. Previously this wrote the "starter"
+    // fallback, so PATCH /api/admin/users/:id/plan returned 200 and the operator
+    // saw "Plan updated" while the account kept its old tier.
+    if (!validPlan) {
+      const error = new Error(`Unrecognized plan: ${String(plan || "").trim() || "(empty)"}`);
+      error.code = "INVALID_PLAN";
+      throw error;
+    }
     await pool.query(`
       UPDATE app_users
       SET current_plan = $2, plan_updated_at = NOW(), updated_at = NOW()
@@ -9217,7 +9286,12 @@ const admin = {
   },
 
   getSystemStats: async () => {
-    const planPriceMap = { starter: 0, pro: 29, desk: 99 };
+    // Canonical tiers first. The legacy pro/desk keys are retained because
+    // the rename migration may not have run against every environment, and
+    // dropping them would under-report revenue there. Missing the new keys
+    // was the actual defect: `plus`/`premium` resolved to undefined, so every
+    // subscriber on a renamed tier contributed 0 to MRR.
+    const planPriceMap = { starter: 0, plus: 29, premium: 99, pro: 29, desk: 99 };
     const [userCount, sessionCount, tradeCount, planBreakdown, recentActivity, errorMetrics, alertSummary, incidentSummary, recentDeployments] = await Promise.all([
       pool.query("SELECT COUNT(*)::int AS count FROM app_users"),
       pool.query("SELECT COUNT(*)::int AS count FROM auth_sessions WHERE expires_at > NOW() AND revoked_at IS NULL"),
@@ -9556,7 +9630,12 @@ const admin = {
   },
 
   getBillingStats: async () => {
-    const planPriceMap = { starter: 0, pro: 29, desk: 99 };
+    // Canonical tiers first. The legacy pro/desk keys are retained because
+    // the rename migration may not have run against every environment, and
+    // dropping them would under-report revenue there. Missing the new keys
+    // was the actual defect: `plus`/`premium` resolved to undefined, so every
+    // subscriber on a renamed tier contributed 0 to MRR.
+    const planPriceMap = { starter: 0, plus: 29, premium: 99, pro: 29, desk: 99 };
     const [planBreakdown, billingUsers, subscriptionChangesResult] = await Promise.all([
       pool.query(`
         SELECT current_plan AS plan, COUNT(*)::int AS count
@@ -10248,7 +10327,11 @@ const admin = {
     return {
       users: users.slice(0, 5),
       audit: audit.rows.slice(0, 5),
-      logs: logs.slice(0, 5),
+      // getSystemLogs resolves { rows, total, metrics, ... } — an object, unlike
+      // the other two. Calling .slice() on it threw
+      // "logs.slice is not a function" and turned every admin search into a 500,
+      // which is why the console's search box never returned results.
+      logs: (Array.isArray(logs) ? logs : logs?.rows || []).slice(0, 5),
       tables: tables.rows.map((row) => ({ name: row.name, rows: Number(row.rows || 0) }))
     };
   }
@@ -10691,6 +10774,11 @@ module.exports = {
   initializeDatabase,
   getSchemaGuardStats,
   runAdminWorkspaceMigration,
+  // Plan helpers, so routes can reject bad input before touching the database.
+  normalizePlanValue,
+  isValidPlanValue,
+  coercePlanValue,
+  CANONICAL_PLAN_VALUES,
   balance,
   portfolio,
   watchlist,

@@ -325,7 +325,9 @@ const {
   brokerage,
   describeDatabaseConfig,
   closeDatabase,
-  getSchemaGuardStats
+  getSchemaGuardStats,
+  isValidPlanValue,
+  CANONICAL_PLAN_VALUES
 } = require("./database");
 const db = pool;
 const {
@@ -1555,6 +1557,38 @@ const adminLoginVerifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many admin sign-in attempts. Please try again later." }
+});
+
+// Step-up (re-)authentication for destructive admin actions.
+//
+// This deliberately does NOT reuse `authLimiter`. That limiter is shared by ~21
+// unrelated routes (signup, signin, 2fa, passkeys, oauth, email change, account
+// delete...) and buckets by IP, so an admin simply USING the console — booting
+// it, polling /auth/me, opening the 2FA panel — can exhaust the shared budget
+// and then be unable to confirm a password change. Reproduced: the 41st auth
+// request from one IP returned 429, and the operator saw
+// "Too many requests, please try again later." with no way to proceed.
+//
+// Step-up is high-value and low-volume, so it gets its own bucket: keyed by
+// admin identity rather than IP (several admins may share an office/NAT), and
+// generous enough that a working session never trips it. The brute-force
+// protection that matters here is the password check plus the audit trail; this
+// limiter only blunts scripted guessing.
+const adminReauthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const identity =
+      req?.auth?.userId ||
+      req?.auth?.user?.id ||
+      req?.auth?.user?.email ||
+      req.ip ||
+      "unknown";
+    return `admin-reauth:${crypto.createHash("sha256").update(String(identity)).digest("base64url").slice(0, 16)}`;
+  },
+  message: { error: "Too many confirmation attempts. Please try again in a few minutes." }
 });
 
 const expensiveReadLimiter = rateLimit({
@@ -6975,7 +7009,7 @@ app.post("/api/admin/login/verify", adminLoginVerifyLimiter, async (req, res) =>
 // The per-route requireSignedIn calls are still correct but now redundant.
 app.use("/api/admin", requireSignedIn);
 
-app.post("/api/admin/reauth/verify", requireSignedIn, requireAdmin, authLimiter, async (req, res) => {
+app.post("/api/admin/reauth/verify", requireSignedIn, requireAdmin, adminReauthLimiter, async (req, res) => {
   try {
     const currentPassword = String(req.body?.currentPassword || "");
     if (!currentPassword) {
@@ -7427,6 +7461,17 @@ app.patch("/api/admin/users/:id/plan", requireAdmin, requireRecentAdminReauth, a
   try {
     const { id } = req.params;
     const { plan } = req.body;
+    // Reject an unknown plan as a client error. The data layer now throws
+    // INVALID_PLAN rather than silently storing the "starter" fallback, so
+    // without this the operator would get a generic 500 for what is really bad
+    // input.
+    if (!isValidPlanValue(plan)) {
+      return res.status(400).json({
+        error: "Unrecognized plan.",
+        message: `Choose one of: ${CANONICAL_PLAN_VALUES.join(", ")}.`,
+        code: "INVALID_PLAN"
+      });
+    }
     const reason = String(req.body?.reason || "Updated from admin dashboard").trim();
     const before = await admin.getUserSummary(id);
     const updatedUser = await admin.updateUserPlan(id, plan);
@@ -7588,6 +7633,21 @@ app.delete("/api/admin/users/:id", requireAdmin, requireRecentAdminReauth, async
 app.post("/api/admin/users/:id/sessions/revoke", requireAdmin, requireRecentAdminReauth, async (req, res) => {
   try {
     const { id } = req.params;
+    // Refuse to revoke the caller's OWN sessions.
+    //
+    // This is not a privilege boundary — an admin is allowed to act on their own
+    // account — but it silently kills the session making the request, so every
+    // subsequent admin call fails with AUTH_REQUIRED and the console looks
+    // broken. Observed exactly that while sweeping the admin API. Locking
+    // yourself out is never the intent here, and /sessions/revoke-all already
+    // offers an explicit excludeCurrentAdmin option for the bulk case.
+    if (Number(id) === Number(req.auth?.userId)) {
+      return res.status(400).json({
+        error: "You cannot revoke your own sessions.",
+        message: "Use the sign-out control to end your session, or target a different account.",
+        code: "CANNOT_REVOKE_OWN_SESSIONS"
+      });
+    }
     const reason = String(req.body?.reason || "Revoked by admin dashboard").trim();
     const result = await admin.revokeUserSessions(id);
     const updatedUser = await admin.getUserSummary(id);
@@ -7650,6 +7710,17 @@ app.post("/api/admin/users/bulk", requireAdmin, requireRecentAdminReauth, async 
     const allowedActions = new Set(["suspend", "reactivate", "plan", "role", "revoke_sessions"]);
     if (!allowedActions.has(action)) {
       return res.status(400).json({ error: "Unsupported bulk action." });
+    }
+
+    // Validate BEFORE touching any row. bulkUpdateUsers applies changes one user
+    // at a time, so an invalid value discovered mid-loop would leave the earlier
+    // users already updated and the batch half-applied.
+    if (action === "plan" && !isValidPlanValue(value)) {
+      return res.status(400).json({
+        error: "Unrecognized plan.",
+        message: `Choose one of: ${CANONICAL_PLAN_VALUES.join(", ")}.`,
+        code: "INVALID_PLAN"
+      });
     }
 
     const normalizedValue = action === "role"

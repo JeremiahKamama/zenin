@@ -3310,10 +3310,15 @@ export default function App() {
     try {
       let response = null;
       if (type === 'plan') {
-        response = await adminFetch(`/users/${userId}/plan`, {
+        // PATCH /users/:id/plan is behind requireRecentAdminReauth on the server,
+        // exactly like role/suspend/recover below. It was the ONE mutation not
+        // wrapped, so it surfaced the raw 428 ADMIN_REAUTH_REQUIRED as
+        // "Admin re-authentication required." and the operator had no way to
+        // supply a password — the plan simply never changed.
+        response = await withAdminReauth(() => adminFetch(`/users/${userId}/plan`, {
           method: 'PATCH',
           body: JSON.stringify({ plan: value, reason })
-        });
+        }));
         notify('success', 'User plan updated.', `The account is now on the ${String(value).toUpperCase()} plan.`);
       } else if (type === 'role') {
         response = await withAdminReauth(() => adminFetch(`/users/${userId}/role`, {
