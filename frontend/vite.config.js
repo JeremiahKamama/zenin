@@ -59,6 +59,18 @@ export default defineConfig(({ mode }) => {
       // sourceMappingURL comment from the deployed JS, so maps are never
       // served publicly — they only exist in Sentry after upload.
       sourcemap: "hidden",
+      // Vite's default 500 kB warning is advisory, not an error. The remaining
+      // chunks above it are genuinely large and intentional:
+      //   - vendor-apexcharts (~515 kB): the charting engine, used across
+      //     Portfolio/Analytics/Journal.
+      //   - App (~520 kB): the workspace application shell.
+      //   - App CSS (~1.07 MB raw / ~156 kB gzip): the single app stylesheet.
+      // The RevenueCat SDK (~682 kB) was the one genuine offender — it sat on
+      // the critical path for every visitor. It is now an async chunk (see the
+      // manualChunks note below), so it no longer loads until a paywall opens.
+      // Raise the threshold to the largest remaining intentional chunk so a
+      // real regression still surfaces.
+      chunkSizeWarningLimit: 1200,
       rollupOptions: {
         output: {
           manualChunks(id) {
@@ -76,7 +88,11 @@ export default defineConfig(({ mode }) => {
             if (id.includes("/tailwindcss/") || id.includes("@tailwindcss/")) return "vendor-tailwind";
             if (id.includes("@vercel/analytics") || id.includes("@vercel/speed-insights")) return "vendor-vercel";
             if (id.includes("@simplewebauthn/browser")) return "vendor-webauthn";
-            if (id.includes("@revenuecat/purchases-js")) return "vendor-billing";
+            // NOTE: @revenuecat/purchases-js is deliberately NOT pinned to a
+            // named chunk. Pinning it forced Vite to <link rel="modulepreload">
+            // the ~670 kB billing SDK on every page load, which defeated the
+            // lazy import in src/utils/revenueCat.js. Letting Rollup place it
+            // keeps it in an async chunk fetched only when a paywall opens.
             return undefined;
           },
         },

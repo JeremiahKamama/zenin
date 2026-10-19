@@ -1,4 +1,25 @@
-import { ErrorCode, LogLevel, Purchases, ReservedCustomerAttribute } from "@revenuecat/purchases-js";
+// RevenueCat's web SDK is ~680 kB. It was previously imported eagerly here,
+// and this module is imported eagerly by App.jsx — so the whole billing SDK
+// landed in the critical path for every visitor, including users who never
+// open a paywall. Load it on first use instead.
+//
+// The SDK is only ever touched from async handlers (configure / attributes /
+// error-code comparison), so deferring the import is transparent to callers.
+// `UserCancelledError` is compared as a stable numeric literal rather than
+// reaching into the SDK, so the synchronous error helpers below stay sync.
+const REVENUECAT_USER_CANCELLED_ERROR_CODE = 1; // ErrorCode.UserCancelledError
+let revenueCatSdkPromise = null;
+
+function loadRevenueCatSdk() {
+  if (!revenueCatSdkPromise) {
+    revenueCatSdkPromise = import("@revenuecat/purchases-js").catch((error) => {
+      // Allow a later retry if the chunk fails to load (e.g. offline).
+      revenueCatSdkPromise = null;
+      throw error;
+    });
+  }
+  return revenueCatSdkPromise;
+}
 
 export const REVENUECAT_WEB_API_KEY =
   String(import.meta.env.VITE_REVENUECAT_WEB_API_KEY || "").trim();
@@ -90,7 +111,8 @@ function chooseHigherPlan(candidate, current) {
 }
 
 export function isRevenueCatCancelledError(error) {
-  return error?.errorCode === ErrorCode.UserCancelledError;
+  // Mirrors ErrorCode.UserCancelledError from @revenuecat/purchases-js.
+  return error?.errorCode === REVENUECAT_USER_CANCELLED_ERROR_CODE;
 }
 
 export function formatRevenueCatError(error) {
@@ -141,6 +163,7 @@ export function deriveRevenueCatAccess(customerInfo) {
 }
 
 async function applyRevenueCatAttributes(instance, { email, displayName }) {
+  const { ReservedCustomerAttribute } = await loadRevenueCatSdk();
   const attributes = {};
   if (email) {
     attributes[ReservedCustomerAttribute.Email] = String(email).trim().toLowerCase();
@@ -162,6 +185,7 @@ export async function getRevenueCatInstance({ appUserId, email, displayName }) {
   }
 
   if (!purchasesInstance) {
+    const { Purchases, LogLevel } = await loadRevenueCatSdk();
     if (import.meta.env.DEV) {
       Purchases.setLogLevel(LogLevel.Debug);
     }

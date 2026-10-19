@@ -7,7 +7,20 @@
 // authenticated users without orphaning data. A single workspace doc
 // `onboarding:state` is the canonical store.
 
-import { readLocalJson, writeLocalJson } from "../utils/workspacePersistence";
+// Static import for the whole module. This file previously mixed a static
+// import (readLocalJson/writeLocalJson) with `await import()` of the SAME
+// module further down, which is self-defeating: the static import already
+// pulls workspacePersistence into this chunk, so the dynamic imports can never
+// split it out. Rollup warned about exactly that ("dynamically imported …
+// but also statically imported … dynamic import will not move module into
+// another chunk"). One static import removes the ambiguity without changing
+// behaviour — the calls were already resolving to the same module instance.
+import {
+  readLocalJson,
+  writeLocalJson,
+  loadWorkspaceCollection,
+  saveWorkspaceCollection,
+} from "../utils/workspacePersistence";
 
 const LOCAL_KEY = "zenin_onboarding_state";
 const REMOTE_NAMESPACE = "onboarding:state";
@@ -38,7 +51,6 @@ export async function loadOnboardingState() {
   console.count("loadOnboardingState");
   let remote = null;
   try {
-    const { loadWorkspaceCollection } = await import("../utils/workspacePersistence");
     const res = await loadWorkspaceCollection(REMOTE_NAMESPACE, []);
     if (res && Array.isArray(res.items) && res.items[0]) remote = safeParse(res.items[0]);
   } catch {
@@ -62,7 +74,6 @@ export async function saveOnboardingState(partial) {
   persistLocal(next);
   // Mirror to remote (best effort; ignore failures — local is source of resume).
   try {
-    const { saveWorkspaceCollection } = await import("../utils/workspacePersistence");
     await saveWorkspaceCollection(REMOTE_NAMESPACE, [next], 1).catch(() => null);
   } catch {
     /* guest or offline: local persists */
@@ -73,7 +84,6 @@ export async function saveOnboardingState(partial) {
 export async function clearOnboardingState() {
   persistLocal(defaultState());
   try {
-    const { saveWorkspaceCollection } = await import("../utils/workspacePersistence");
     await saveWorkspaceCollection(REMOTE_NAMESPACE, [], 1).catch(() => null);
   } catch {
     /* ignore */
@@ -95,7 +105,6 @@ export async function markOnboardingComplete(extra = {}) {
   };
   persistLocal(next);
   try {
-    const { saveWorkspaceCollection } = await import("../utils/workspacePersistence");
     await saveWorkspaceCollection(REMOTE_NAMESPACE, [next], 1).catch(() => null);
   } catch {
     /* guest or offline: local persists */
