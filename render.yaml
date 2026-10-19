@@ -14,6 +14,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Max concurrent Python helper processes (yfinance/pandas/numpy).
+      # Each costs ~82MB before fetching anything, and the Node process idles
+      # near 90MB. On this 512MB instance unbounded spawns caused OOM kills and
+      # a 502 outage every few minutes, which is what made the uptime cron fail.
+      # Raise this only alongside a larger plan.
+      - key: PY_MAX_CONCURRENT
+        value: "2"
       - key: FRONTEND_URL
         value: https://www.zenin.capital
       - key: FRONTEND_URLS

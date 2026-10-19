@@ -155,6 +155,132 @@ function resolvePythonBinary() {
   return "python3";
 }
 const pythonBinary = resolvePythonBinary();
+
+// ── Python subprocess concurrency gate ─────────────────────────────────────
+// Every fetch_*.py entrypoint imports yfinance, which pulls in pandas + numpy:
+// measured peak RSS is ~82MB before a single byte is fetched, and the Node
+// process itself idles around 90MB. On the 512MB Render instance a handful of
+// concurrent spawns exhausts memory and the container is OOM-killed — which
+// presents as a hard 502 outage every couple of minutes, with uptime resetting.
+//
+// These spawns are request- and sync-triggered, so without a cap the failure is
+// load-dependent and looks random. This wrapper keeps the public API of
+// child_process.spawn (returning an object with stdin/stdout/stderr and an
+// EventEmitter surface) so existing call sites keep their exact logic, but
+// start()s the real child only when a slot is free.
+//
+// Tune with PY_MAX_CONCURRENT (default 2).
+const PY_MAX_CONCURRENT = Math.max(1, Number(process.env.PY_MAX_CONCURRENT) || 2);
+let pyActive = 0;
+const pyWaiters = [];
+
+function acquirePythonSlot() {
+  if (pyActive < PY_MAX_CONCURRENT) {
+    pyActive += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => pyWaiters.push(resolve));
+}
+
+function releasePythonSlot() {
+  const next = pyWaiters.shift();
+  if (next) {
+    // Hand the slot directly to the next waiter without decrementing first,
+    // so a concurrent acquisition can never push past the cap.
+    next();
+    return;
+  }
+  pyActive = Math.max(0, pyActive - 1);
+}
+
+/**
+ * Drop-in replacement for child_process.spawn that limits how many Python
+ * helpers run at once. The returned object mimics a ChildProcess: it emits
+ * "close" and "error", and exposes stdin/stdout/stderr plus kill().
+ * stdin writes made before the real child starts are buffered and flushed.
+ */
+function spawnPythonGated(args, options) {
+  const { EventEmitter } = require("events");
+  const emitter = new EventEmitter();
+  emitter.stdout = new EventEmitter();
+  emitter.stderr = new EventEmitter();
+  emitter.stdin = {
+    _pending: [],
+    _target: null,
+    write(chunk) {
+      if (this._target) return this._target.write(chunk);
+      this._pending.push(chunk);
+      return true;
+    },
+    end(chunk) {
+      if (chunk !== undefined) this.write(chunk);
+      if (this._target) return this._target.end();
+      this._pending.push(null);
+      return this;
+    }
+  };
+
+  let child = null;
+  let settled = false;
+  let slotHeld = false;
+  let killed = false;
+
+  emitter.kill = (signal) => {
+    killed = true;
+    if (child) {
+      try { child.kill(signal); } catch { /* already gone */ }
+    }
+    return true;
+  };
+
+  acquirePythonSlot().then(() => {
+    if (killed) {
+      releasePythonSlot();
+      return;
+    }
+    slotHeld = true;
+    try {
+      child = spawn(pythonBinary, args, options);
+    } catch (err) {
+      slotHeld = false;
+      releasePythonSlot();
+      settled = true;
+      emitter.emit("error", err);
+      return;
+    }
+
+    // Re-emit child output through the facade.
+    child.stdout?.on("data", (d) => emitter.stdout.emit("data", d));
+    child.stderr?.on("data", (d) => emitter.stderr.emit("data", d));
+
+    // Flush anything written to stdin before the child existed.
+    for (const chunk of emitter.stdin._pending.splice(0)) {
+      try {
+        if (chunk === null) child.stdin?.end();
+        else child.stdin?.write(chunk);
+      } catch { /* child may have exited already */ }
+    }
+    emitter.stdin._target = child.stdin;
+
+    child.on("close", (code, signal) => {
+      if (!settled) {
+        settled = true;
+        if (slotHeld) { slotHeld = false; releasePythonSlot(); }
+      }
+      emitter.emit("close", code, signal);
+    });
+    child.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        if (slotHeld) { slotHeld = false; releasePythonSlot(); }
+      }
+      emitter.emit("error", err);
+    });
+  });
+
+  return emitter;
+}
+
 const { syncBinance, syncHyperliquid, syncLighter, syncPolymarket, syncBybit, syncIbkr, verifyExchangeCredentialScope } = require("./exchangeSync");
 const unifiedPortfolio = require("./unifiedPortfolio");
 const orchestrator = require("./portfolioSyncOrchestrator");
@@ -3714,7 +3840,7 @@ function fetchYFinancePrices(originalSymbols) {
 
     console.log("Fetching prices — original:", originalSymbols);
     // const safeSymbol = sanitizeSymbol(symbol);
-    const child = spawn(pythonBinary, ["fetch_prices.py"], { cwd: __dirname });
+    const child = spawnPythonGated(["fetch_prices.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -8928,7 +9054,7 @@ function fetchHistoryFromYahoo(symbol, interval) {
     const { period, interval: yfInterval } = mapping[interval] || mapping["1D"];
     const yfSymbol = normaliseSymbol(symbol);
 
-    const child = spawn(pythonBinary, ["fetch_history.py"], { cwd: __dirname });
+    const child = spawnPythonGated(["fetch_history.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d.toString(); });
@@ -9549,7 +9675,7 @@ app.get("/api/earnings", async (req, res) => {
       res.json(payload);
       resolve();
     };
-    const child = spawn(pythonBinary, ["fetch_earnings.py"], { cwd: __dirname });
+    const child = spawnPythonGated(["fetch_earnings.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -9673,7 +9799,7 @@ app.get("/api/finviz", async (req, res) => {
     const payload = await withInflightDedup("finviz", snapshotParams, () => new Promise((resolve) => {
       const finish = (value) => resolve(value);
       const scriptPath = path.join(__dirname, "scripts", "fetch_finviz.py");
-      const child = spawn(pythonBinary, [scriptPath, safeSymbol], { cwd: __dirname });
+      const child = spawnPythonGated([scriptPath, safeSymbol], { cwd: __dirname });
       let stdout = "";
       let stderr = "";
       let timeoutId = null;
@@ -9843,7 +9969,7 @@ app.get("/api/company-profile", async (req, res) => {
     };
 
     try {
-      const child = spawn(pythonBinary, ["fetch_company_profile.py"], { cwd: __dirname });
+      const child = spawnPythonGated(["fetch_company_profile.py"], { cwd: __dirname });
       let stdout = "";
       let stderr = "";
 
@@ -10061,7 +10187,7 @@ app.get("/api/earnings-calendar", async (req, res) => {
       resolve();
     };
 
-    const child = spawn(pythonBinary, ["fetch_earnings_calendar_finviz.py"], { cwd: __dirname });
+    const child = spawnPythonGated(["fetch_earnings_calendar_finviz.py"], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
 
@@ -16258,7 +16384,7 @@ app.get("/api/equities/market/actions", async (req, res) => {
  */
 async function runPythonScript(scriptPath, args = []) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonBinary, [scriptPath, ...args], { cwd: __dirname });
+    const child = spawnPythonGated([scriptPath, ...args], { cwd: __dirname });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (data) => (stdout += data));
