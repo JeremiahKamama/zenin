@@ -322,7 +322,8 @@ const {
   perpsBench,
   brokerage,
   describeDatabaseConfig,
-  closeDatabase
+  closeDatabase,
+  getSchemaGuardStats
 } = require("./database");
 const db = pool;
 const {
@@ -9294,6 +9295,12 @@ app.get("/health/details", (_req, res) => {
     integrations: {
       snaptrade: describeSnapTradeReadiness()
     },
+    // What the redundant-ALTER suppression did during the last schema init.
+    // A healthy restart against an up-to-date database skips the vast majority
+    // of ADD COLUMN statements and rewrites none; that is what removes the
+    // AccessExclusiveLock contention behind the boot deadlock. A rising
+    // `fellBack` count would mean catalog inspection is failing.
+    schemaGuard: getSchemaGuardStats(),
     caches: {
       provider: providerMemoryCache.stats(),
       macroIndicators: macroIndicatorsCache.stats(),

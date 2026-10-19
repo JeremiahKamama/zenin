@@ -3,10 +3,26 @@ const { watchlistData } = require("./data");
 const crypto = require("crypto");
 const portfolioSnapshots = require("./portfolioSnapshots");
 const { ensureUnifiedPortfolioSchema } = require("./unifiedPortfolio");
+const { planAddColumns } = require("./schemaDdl");
 const { tagsForExchange } = require("./exchangeSync");
 const stablecoins = require("./stablecoins");
 
 const QTY_EPSILON = 1e-8;
+
+// Most recent schema-initialization guard counters, exposed for diagnostics via
+// getSchemaGuardStats(). Kept at module scope so /health/details can report what
+// the last boot actually did without re-running any DDL.
+let lastSchemaGuardStats = { skipped: 0, rewritten: 0, ran: 0, fellBack: 0 };
+
+/**
+ * Report what the redundant-ALTER suppression did during the last schema init.
+ * A healthy restart against an up-to-date database shows a high `skipped` count
+ * and `rewritten: 0`; a non-zero `fellBack` means catalog inspection failed and
+ * the guard degraded to running statements verbatim.
+ */
+function getSchemaGuardStats() {
+  return { ...lastSchemaGuardStats };
+}
 const DEFAULT_BALANCE = 10000;
 const FEE_SOURCE_EXCHANGE_REPORTED = "exchange_reported";
 const FEE_SOURCE_CHEAPEST_AVENUE = "cheapest_avenue";
@@ -927,10 +943,111 @@ async function runAdminWorkspaceMigration({ force = false } = {}) {
 }
 
 async function initializeDatabase() {
+  // Schema initialization is idempotent (every statement is IF NOT EXISTS or a
+  // guarded UPDATE), so it is safe to re-run. We retry because the lock_timeout
+  // above deliberately converts a potential deadlock into a plain, retryable
+  // error: on a busy database the migration backs off rather than deadlocking
+  // with live traffic. Retrying with a short delay lets in-flight reads finish.
+  const MAX_ATTEMPTS = Math.max(1, Number(process.env.SCHEMA_INIT_ATTEMPTS) || 3);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await runSchemaInitialization();
+      return;
+    } catch (error) {
+      lastError = error;
+      // Only lock contention is worth retrying. A real schema error (bad SQL,
+      // missing permission) will fail identically every time, and retrying it
+      // just delays a clear failure and multiplies the log noise.
+      const retryable = error?.code === "55P03"    // lock_not_available (lock_timeout)
+        || error?.code === "40P01"                 // deadlock_detected
+        || error?.code === "40001";                // serialization_failure
+      if (!retryable || attempt === MAX_ATTEMPTS) {
+        throw error;
+      }
+      const delayMs = 1000 * attempt;
+      console.warn(
+        `Schema initialization hit lock contention (${error.code}); ` +
+        `retrying in ${delayMs}ms (attempt ${attempt}/${MAX_ATTEMPTS}).`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError || new Error("Schema initialization failed");
+}
+
+async function runSchemaInitialization() {
   const client = await pool.connect();
+
+  // Counters for the redundant-ALTER suppression installed below. Reported on
+  // /health/details so the effect is observable in production: a healthy
+  // restarted instance should show a high `skipped` count (every ADD COLUMN
+  // whose column already exists) and a `rewritten` count of 0.
+  const schemaGuardStats = { skipped: 0, rewritten: 0, ran: 0, fellBack: 0 };
+  lastSchemaGuardStats = schemaGuardStats;
+
+  // Shadow `query` for the rest of this function so that redundant
+  // "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" statements are suppressed.
+  //
+  // This is THE fix for the boot deadlock. `ADD COLUMN IF NOT EXISTS` takes an
+  // AccessExclusiveLock even when the column exists, so on a fully-migrated
+  // database this migration still requested an exclusive lock on every table it
+  // touches — while live user queries held shared locks on the same tables in
+  // the opposite order. Suppressing the no-op ALTER means the lock is never
+  // requested, so the cycle cannot form. See backend/schemaDdl.js.
+  const query = client.query.bind(client);
+  client.query = async function guardedQuery(text, params) {
+    if (typeof text === "string" && /^\s*ALTER\s+TABLE/i.test(text)) {
+      try {
+        const plan = await planAddColumns(text, (schema, table, columns) =>
+          query(
+            `SELECT column_name FROM information_schema.columns
+              WHERE table_name = $1
+                AND ($2::text IS NULL OR table_schema = $2)
+                AND column_name = ANY($3::text[])`,
+            [table, schema, columns]
+          ).then((result) => new Set(result.rows.map((row) => String(row.column_name).toLowerCase())))
+        );
+
+        if (plan.action === "skip") {
+          schemaGuardStats.skipped += 1;
+          return { command: "ALTER", rowCount: 0, rows: [], skipped: true };
+        }
+        if (plan.action === "rewrite") {
+          schemaGuardStats.rewritten += 1;
+          return query(plan.sql, params);
+        }
+      } catch (error) {
+        // The guard is an optimisation. If catalog inspection fails for any
+        // reason, fall through and run the original statement rather than
+        // breaking schema initialization entirely.
+        schemaGuardStats.fellBack += 1;
+        console.warn("Schema DDL guard fell back to the original statement:", error?.message || error);
+      }
+    }
+    schemaGuardStats.ran += 1;
+    return query(text, params);
+  };
 
   try {
     await client.query("BEGIN");
+
+    // Bound how long this transaction may wait for ANY lock it needs.
+    //
+    // This BOUNDS a wait; it does NOT by itself prevent a deadlock. Verified
+    // empirically against PostgreSQL 17: a circular wait with `lock_timeout`
+    // set still fails with "deadlock detected" (40P01), because the deadlock
+    // detector fires before the timeout elapses. `lock_timeout` only cancels a
+    // plain, non-cyclic block (55P03).
+    //
+    // So this is a safety net, not the fix. The actual fix for the production
+    // deadlock is the redundant-ALTER suppression installed below, which stops
+    // the migration from REQUESTING an AccessExclusiveLock on healthy tables in
+    // the first place. See backend/schemaDdl.js for the full write-up.
+    const SCHEMA_LOCK_TIMEOUT_MS = Math.max(1000, Number(process.env.SCHEMA_LOCK_TIMEOUT_MS) || 5000);
+    await client.query(`SET LOCAL lock_timeout = ${SCHEMA_LOCK_TIMEOUT_MS}`);
 
     // Serialize schema initialization across processes.
     //
@@ -10539,6 +10656,7 @@ const brokerage = {
 module.exports = {
   pool,
   initializeDatabase,
+  getSchemaGuardStats,
   runAdminWorkspaceMigration,
   balance,
   portfolio,
