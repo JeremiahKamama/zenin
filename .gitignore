@@ -39,3 +39,4 @@ scratch/
 .shot*.cjs
 *.mockup.html
 design_draft.html
+.vercel
