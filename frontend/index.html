@@ -186,6 +186,69 @@
       })();
     </script>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Stale-entry recovery.
+      //
+      // Vite emits hashed chunks and Vercel garbage-collects superseded ones. A
+      // browser holding a cached index.html therefore requests an entry bundle
+      // that may already be deleted. The module script then fails to load and
+      // NOTHING renders — the user is left on the boot shell above ("Checking
+      // session" on /app) indefinitely, because no application code ever runs to
+      // recover or explain.
+      //
+      // lazyWithReloadRetry() in App.jsx handles stale LAZY chunks, but it cannot
+      // help when the entry chunk itself is gone: the app never boots far enough
+      // to run it.
+      //
+      // This closes that gap. If the module fails to execute shortly after load,
+      // reload once — and only once, so a genuinely broken deploy cannot trap the
+      // browser in a refresh loop.
+      (function () {
+        var FLAG = "zenin_entry_reload_attempted";
+        var ENTRY_TIMEOUT_MS = 6000;
+        var booted = false;
+
+        // main.jsx calls this as soon as React mounts.
+        window.__zeninBooted = function () {
+          booted = true;
+          try { sessionStorage.removeItem(FLAG); } catch (e) {}
+        };
+
+        function reloadOnce(reason) {
+          if (booted) return;
+          try {
+            if (sessionStorage.getItem(FLAG) === "1") return; // already tried
+            sessionStorage.setItem(FLAG, "1");
+          } catch (e) {
+            return; // no sessionStorage: do not risk a reload loop
+          }
+          console.warn("[Zenin] Reloading to recover a stale build (" + reason + ")");
+          window.location.reload();
+        }
+
+        // 1. A module script that fails to fetch or parse fires this on window.
+        window.addEventListener("error", function (event) {
+          var target = event && event.target;
+          if (target && target.tagName === "SCRIPT") {
+            reloadOnce("entry script failed to load");
+          }
+        }, true);
+
+        // 2. A rejected dynamic import surfaces as an unhandled rejection.
+        window.addEventListener("unhandledrejection", function (event) {
+          var reason = event && event.reason;
+          var message = String((reason && reason.message) || reason || "");
+          if (/Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError/i.test(message)) {
+            reloadOnce("stale chunk");
+          }
+        });
+
+        // 3. Nothing executed at all — the strongest signal of a dead entry.
+        window.setTimeout(function () {
+          if (!booted) reloadOnce("app did not start");
+        }, ENTRY_TIMEOUT_MS);
+      })();
+    </script>
   <!-- impeccable-live-start -->
   <!-- impeccable-live-end -->
 </body>

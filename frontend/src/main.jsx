@@ -15,6 +15,9 @@ import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { GenericErrorBoundary } from "./components/ErrorBoundary";
 
+// Shared with the boot guard in index.html — see the note where it is used.
+const STALE_RELOAD_FLAG = "zenin_entry_reload_attempted";
+
 function resolveEntry(pathname) {
   if (typeof window !== "undefined" && window.__ZENIN_ENTRY__) {
     return window.__ZENIN_ENTRY__;
@@ -68,13 +71,17 @@ async function loadEntryComponent(currentEntry) {
         // Force a reload once to pick up the freshly deployed bundle. Guarded
         // by a session flag so we don't reload-loop if the new build is also
         // broken.
+        //
+        // This deliberately shares ONE flag name with the boot guard in
+        // index.html. Two independent flags would each be allowed one reload,
+        // so a single stale build could reload twice in a row.
         try {
-          if (!window.sessionStorage.getItem("zenin_chunk_reload")) {
-            window.sessionStorage.setItem("zenin_chunk_reload", "1");
+          if (!window.sessionStorage.getItem(STALE_RELOAD_FLAG)) {
+            window.sessionStorage.setItem(STALE_RELOAD_FLAG, "1");
             window.location.reload();
             return () => null; // render nothing while reloading
           }
-          window.sessionStorage.removeItem("zenin_chunk_reload");
+          window.sessionStorage.removeItem(STALE_RELOAD_FLAG);
         } catch {}
       }
     }
@@ -105,6 +112,12 @@ const hasPrerenderedMarkup =
   rootElement?.dataset?.prerendered === "public";
 
 loadEntryComponent(entry).then((RootComponent) => {
+  // Tell the index.html boot guard that application code is running, so its
+  // "nothing executed" timer stands down instead of reloading a healthy page.
+  if (typeof window !== "undefined" && typeof window.__zeninBooted === "function") {
+    try { window.__zeninBooted(); } catch {}
+  }
+
   const app = (
     <React.StrictMode>
       <GenericErrorBoundary>
