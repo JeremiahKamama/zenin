@@ -187,7 +187,10 @@ function normalizeErrorPayload(payload, status) {
 export class ZeninRequestError extends Error {
   constructor(message, options = {}) {
     super(message);
-    this.name = "ZeninRequestError";
+    // Default name, but allow callers to preserve the underlying error's
+    // identity (e.g. "AbortError") so existing `err?.name === "AbortError"`
+    // guards throughout the app keep working.
+    this.name = options.name || "ZeninRequestError";
     this.status = Number(options.status || 0);
     this.code = options.code || "REQUEST_FAILED";
     this.error = options.error || "Request failed";
@@ -230,6 +233,32 @@ export const AUTH_TIMEOUT_MS = 90000;
 // Post-auth session confirmation (`/auth/me`). Lower than AUTH_TIMEOUT_MS
 // because it runs after the backend has already answered once, so it is warm.
 export const AUTH_SESSION_TIMEOUT_MS = 20000;
+
+// An aborted request is a NORMAL outcome, not a failure. Effects clean up with
+// `return () => controller.abort()`, so every dependency change (interval,
+// symbol, account filter, modal open) aborts whatever was in flight. If that
+// rejection is not recognised and swallowed, the browser reports an unhandled
+// promise rejection and floods the console with:
+//   "Uncaught (in promise) AbortError: signal is aborted without reason"
+//   "Uncaught (in promise) AbortError: request-timeout"
+// Recognise every shape an abort can take, because the reason a browser
+// surfaces varies: a DOMException with name AbortError, a bare AbortError, a
+// raw string reason, or (in older engines) a plain Error with the name set.
+export function isAbortError(error) {
+  if (!error) return false;
+  if (typeof error === "string") {
+    return error === "request-timeout" || error === "csrf-timeout" || /abort/i.test(error);
+  }
+  if (typeof error !== "object") return false;
+  if (error.name === "AbortError") return true;
+  if (error.code === "ABORT_ERR") return true;
+  if (error.code === "REQUEST_TIMEOUT") return true;
+  if (error.code === "REQUEST_ABORTED") return true;
+  if (error.code === "AUTH_SERVICE_TIMEOUT") return true;
+  // Some wrappers re-throw with the original abort stashed on `cause`.
+  if (error.cause && error.cause !== error) return isAbortError(error.cause);
+  return false;
+}
 
 const circuit = { failures: 0, openedAt: 0 };
 function circuitAllow() {
@@ -399,12 +428,18 @@ export async function zeninFetchJson(endpoint, options = {}) {
       throw error;
     }
 
-    if (error?.name === "AbortError") {
+    if (error?.name === "AbortError" || isAbortError(error)) {
+      // Preserve the abort identity on the thrown error. Callers all over the
+      // app tear down in-flight requests on cleanup (`controller.abort()`), so
+      // this is a routine outcome — not a backend failure. `code` and `name`
+      // both carry the abort signal so existing `err?.name === "AbortError"`
+      // checks keep working and new code can use isAbortError().
       throw new ZeninRequestError("Zenin's backend did not respond before the request was cancelled. Please wait a moment and try again.", {
         status: 0,
         code: "REQUEST_ABORTED",
+        name: "AbortError",
         error: "Request aborted",
-        retryable: true,
+        retryable: false,
         details: null,
         endpoint: buildZeninUrl(endpoint),
         cause: error,

@@ -13,6 +13,7 @@ import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, res
 import { classifyPortfolioInstrument, PORTFOLIO_BUCKETS } from "../utils/portfolioInstrumentClassifier.js";
 import { isStable } from "../utils/stablecoins";
 import { formatPercent } from "../utils/format";
+import { isAbortError } from "../utils/zeninFetch";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { buildConnectionRegistry } from "../utils/tradePerformance.js";
@@ -773,7 +774,10 @@ const isProfitable = currentAccountEquity >= initialBalance;
         setHistoryStatus(rows.length ? "ready" : "empty");
       })
       .catch((err) => {
-        if (cancelled || err?.name === "AbortError") return;
+        // Use the shared helper, not a bare name check: an abort can arrive as a
+        // DOMException, a raw string reason ("request-timeout"), or a wrapped
+        // error, and a name-only test lets those escape as console errors.
+        if (cancelled || isAbortError(err)) return;
         setSnapshotHistory([]);
         setHistoryStatus("error");
       });

@@ -47,7 +47,7 @@ import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "./utils/portfolioHeadline";
 import { fetchBrokerageWorkspaceSummary } from "./utils/brokerageApi.js";
 import { useUnifiedPortfolio } from "./hooks/useUnifiedPortfolio";
-import { zeninFetch, zeninFetchJson, AUTH_SESSION_TIMEOUT_MS } from "./utils/zeninFetch";
+import { zeninFetch, zeninFetchJson, AUTH_SESSION_TIMEOUT_MS, isAbortError } from "./utils/zeninFetch";
 import { syncPredictionWalletSource, disconnectPredictionWalletSource } from "./services/portfolioService";
 import { getReferralCode, getReferralStats, initReferralTrackingIfPresent } from "./utils/referralApi";
 import { buildAssetRoute } from "./utils/assetRegistry";
@@ -58,7 +58,7 @@ import { NotificationCenter } from "./components/NotificationCenter";
 import { useNotificationStream } from "./hooks/useNotificationStream";
 import { IndicatorActionsProvider } from "./utils/indicatorActions";
 import { startRegistration } from "@simplewebauthn/browser";
-import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection } from "./utils/workspacePersistence";
+import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection, readLocalJson, writeLocalJson } from "./utils/workspacePersistence";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
 function AnimatedTradeToast({ toast, onDismiss }) {
@@ -298,6 +298,13 @@ const Analytics = lazyWithReloadRetry(
 
 const BACKEND_URL = ZENIN_API_BASE_URL;
 const GUEST_ACCESS_VALUES = new Set(["1", "true", "yes"]);
+// Background/periodic loaders (notifications, workspace docs) must fail fast.
+// The 90s zeninFetch default is sized for a foreground cold-start that the user
+// is actively waiting on; for a 60s background poll it means the request can
+// outlive its own interval and pile up. A shorter budget keeps them bounded and
+// lets the connection indicator, not a stack trace, report the outage.
+const NOTIFICATIONS_TIMEOUT_MS = 15000;
+const WORKSPACE_DOC_TIMEOUT_MS = 20000;
 const SYNC_ENABLED_PROVIDERS = new Set(["binance", "bybit", "hyperliquid", "lighter", "polymarket", "interactive_brokers"]);
 // Providers shown in the connect UI but not yet syncable (honest "coming soon"
 // stubs — no fabricated sync capability). Rendered disabled with a "Soon" badge.
@@ -1564,6 +1571,9 @@ function App() {
   });
   const notificationToastIdsRef = useRef(new Set());
   const notificationsSeededRef = useRef(false);
+  // Coalesces overlapping notification refreshes (mount + focus + websocket +
+  // 60s poll + panel open can all fire at once after login).
+  const notificationsInFlightRef = useRef(null);
   const [homeMarketMovers, setHomeMarketMovers] = useState([]);
   const [homeMacroData, setHomeMacroData] = useState([]);
   const [error, setError] = useState(null);
@@ -2906,39 +2916,59 @@ useEffect(() => {
   const refreshWorkspaceNotifications = useCallback(async ({ toastNew = false } = {}) => {
     console.count("refreshNotifications");
     if (!hasAuthToken()) return [];
-    setNotificationCenterLoading(true);
-    setNotificationCenterError("");
-    try {
-      const res = await zeninFetch("/notifications?limit=50");
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `Notifications refresh failed (${res.status})`);
-      }
-      const incoming = Array.isArray(data?.notifications) ? data.notifications : [];
-      setWorkspaceNotifications(incoming);
-      setUnreadNotificationCount(Number(data?.unreadCount || incoming.filter((item) => !item?.readAt).length || 0));
+    // This loader is invoked as `void refreshWorkspaceNotifications()` from many
+    // call sites (mount, focus, websocket events, 60s poll, panel open). Without
+    // a guard, overlapping calls stack up, each one flipping the loading flag and
+    // each one able to time out — which is what produced the repeating
+    // "Uncaught (in promise) AbortError: request-timeout" console spam. Coalesce:
+    // share the in-flight promise instead of starting a second request.
+    if (notificationsInFlightRef.current) return notificationsInFlightRef.current;
 
-      const nextIds = new Set(incoming.map((item) => String(item?.id || "")).filter(Boolean));
-      if (toastNew && notificationsSeededRef.current) {
-        const latestActionable = incoming.find((item) => (
-          !item?.readAt
-          && !notificationToastIdsRef.current.has(String(item?.id || ""))
-          && isActionableWorkspaceNotification(item)
-        ));
-        if (latestActionable) {
-          showTradeToast(latestActionable.title || "New workspace notification", notificationToastTone(latestActionable));
+    const run = (async () => {
+      setNotificationCenterLoading(true);
+      setNotificationCenterError("");
+      try {
+        const res = await zeninFetch("/notifications?limit=50", { timeoutMs: NOTIFICATIONS_TIMEOUT_MS });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || `Notifications refresh failed (${res.status})`);
         }
+        const incoming = Array.isArray(data?.notifications) ? data.notifications : [];
+        setWorkspaceNotifications(incoming);
+        setUnreadNotificationCount(Number(data?.unreadCount || incoming.filter((item) => !item?.readAt).length || 0));
+
+        const nextIds = new Set(incoming.map((item) => String(item?.id || "")).filter(Boolean));
+        if (toastNew && notificationsSeededRef.current) {
+          const latestActionable = incoming.find((item) => (
+            !item?.readAt
+            && !notificationToastIdsRef.current.has(String(item?.id || ""))
+            && isActionableWorkspaceNotification(item)
+          ));
+          if (latestActionable) {
+            showTradeToast(latestActionable.title || "New workspace notification", notificationToastTone(latestActionable));
+          }
+        }
+        notificationToastIdsRef.current = nextIds;
+        notificationsSeededRef.current = true;
+        return incoming;
+      } catch (error) {
+        // A timeout or abort here is expected during a Render wake-up and is
+        // already surfaced by connectionStatus. Log it quietly rather than as an
+        // uncaught rejection, and never treat it as a hard error banner.
+        if (isAbortError(error) || error?.code === "REQUEST_TIMEOUT") {
+          return [];
+        }
+        console.warn("Notifications refresh failed.", error);
+        setNotificationCenterError(error?.message || "Zenin could not refresh workspace notifications.");
+        return [];
+      } finally {
+        notificationsInFlightRef.current = null;
+        setNotificationCenterLoading(false);
       }
-      notificationToastIdsRef.current = nextIds;
-      notificationsSeededRef.current = true;
-      return incoming;
-    } catch (error) {
-      console.warn("Notifications refresh failed.", error);
-      setNotificationCenterError(error?.message || "Zenin could not refresh workspace notifications.");
-      return [];
-    } finally {
-      setNotificationCenterLoading(false);
-    }
+    })();
+
+    notificationsInFlightRef.current = run;
+    return run;
   }, []);
 
   // Merge an incoming realtime notification into the inbox (deduped by id) and
@@ -5016,17 +5046,28 @@ const handleOptionTradeClosed = async (tradeId) => {
 
     const loadWorkspaceSettings = async () => {
       console.count("loadWorkspaceSettings");
+      // Paint the last-known-good preferences from localStorage immediately, then
+      // reconcile with the server. Previously this awaited the network before
+      // anything appeared, so a slow/cold backend made "Loading workspace" hang
+      // for the full 90s timeout even though the settings were already on disk.
+      const cachedPreferences = readLocalJson("zenin_workspace_preferences", null);
+      if (cachedPreferences && typeof cachedPreferences === "object") {
+        setPreferences((prev) => ({ ...prev, ...cachedPreferences }));
+      }
       try {
-        const preferencesResult = await loadWorkspaceDoc("settings:preferences", null);
+        const preferencesResult = await loadWorkspaceDoc("settings:preferences", null, {
+          timeoutMs: WORKSPACE_DOC_TIMEOUT_MS,
+        });
         if (cancelled) return;
         if (preferencesResult?.document && typeof preferencesResult.document === "object") {
           setPreferences((prev) => ({
             ...prev,
             ...preferencesResult.document
           }));
+          writeLocalJson("zenin_workspace_preferences", preferencesResult.document);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !isAbortError(error) && error?.code !== "REQUEST_TIMEOUT") {
           console.warn("Workspace settings sync unavailable.", error);
         }
       } finally {

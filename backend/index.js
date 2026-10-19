@@ -9285,6 +9285,15 @@ app.get("/health/details", (_req, res) => {
       rssMb: Math.round(mem.rss / 1048576),
       heapUsedMb: Math.round(mem.heapUsed / 1048576)
     },
+    // Integration readiness as BOOLEANS ONLY. Never echo a key, prefix, or
+    // length — the whole point is to answer "is this var set on the box that
+    // actually runs the backend?" without leaking anything. This exists because
+    // a key set on Vercel does nothing for a Render-hosted API: the frontend
+    // cannot hold these secrets, and a "button looks dead" report is otherwise
+    // indistinguishable from a code bug.
+    integrations: {
+      snaptrade: describeSnapTradeReadiness()
+    },
     caches: {
       provider: providerMemoryCache.stats(),
       macroIndicators: macroIndicatorsCache.stats(),
@@ -9292,6 +9301,32 @@ app.get("/health/details", (_req, res) => {
     }
   });
 });
+
+/**
+ * Report SnapTrade wiring without exposing any secret material.
+ * @returns {{configuredKeys: boolean, enabled: boolean, pilotWorkspaces: number, ready: boolean}}
+ */
+function describeSnapTradeReadiness() {
+  const hasClientId = Boolean(String(process.env.SNAPTRADE_CLIENT_ID || "").trim());
+  const hasConsumerKey = Boolean(String(process.env.SNAPTRADE_CONSUMER_KEY || "").trim());
+  const enabledRaw = String(process.env.SNAPTRADE_ENABLED || "").trim().toLowerCase();
+  const enabled = enabledRaw === "true" || enabledRaw === "1" || enabledRaw === "yes";
+  const pilotWorkspaces = String(process.env.SNAPTRADE_PILOT_WORKSPACES || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean).length;
+  // `configuredKeys` mirror's the provider's own isConfigured() gate: it needs
+  // BOTH the client id and the consumer key, so one without the other is a
+  // silent no-op that still looks "set" in a dashboard.
+  return {
+    configuredKeys: hasClientId && hasConsumerKey,
+    hasClientId,
+    hasConsumerKey,
+    enabled,
+    pilotWorkspaces,
+    ready: hasClientId && hasConsumerKey && enabled
+  };
+}
 
 // Readiness probe — verifies dependencies (Postgres) so load balancers stop
 // routing traffic to an instance that can't actually serve requests.

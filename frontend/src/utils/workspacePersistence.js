@@ -25,11 +25,13 @@ export function writeLocalJson(key, value) {
   }
 }
 
-export async function loadWorkspaceDoc(namespace, fallback = null) {
+export async function loadWorkspaceDoc(namespace, fallback = null, { timeoutMs } = {}) {
   if (!hasWorkspaceSession()) {
     return { namespace, document: fallback, updatedAt: null };
   }
-  const res = await zeninFetch(`/db/workspace/docs/${encodeURIComponent(namespace)}`);
+  const res = await zeninFetch(`/db/workspace/docs/${encodeURIComponent(namespace)}`, {
+    ...(Number(timeoutMs) > 0 ? { timeoutMs } : {}),
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data?.error || `Workspace document request failed (${res.status})`);

@@ -9,7 +9,7 @@ import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWor
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "../utils/portfolioHeadline";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { zeninFetchJson, isAbortError } from "../utils/zeninFetch";
 import MarketSignals2 from "./market/MarketSignals2";
 import { useWorkspaceRouter } from "../utils/useWorkspaceRouter";
 import MacroContextEnhanced from "./market/MacroContextEnhanced";
@@ -466,7 +466,11 @@ export function HomeModule({
           moversPerfCacheRef.current.set(key, perf);
           nextByKey[key] = perf;
         } catch (error) {
-          if (signal.aborted) return;
+          // An abort here is expected: this effect re-runs whenever the movers
+          // universe or the refresh nonce changes, and its cleanup aborts
+          // whatever was in flight. Do not log it — logging it was a large share
+          // of the console noise. Any other error is a real failure.
+          if (signal.aborted || isAbortError(error)) return;
           console.warn(`[Home] Performance fetch failed for ${key}:`, error?.message || error);
         }
       }
@@ -484,10 +488,19 @@ export function HomeModule({
         });
         setMoversPerformanceByKey(hydrated);
       })
-      .finally(() => {
-        if (!signal.aborted) {
-          setMoversLoading(false);
+      // Without this catch, an abort from the cleanup below escapes the chain as
+      // an unhandled rejection:
+      //   "Uncaught (in promise) AbortError: signal is aborted without reason"
+      .catch((error) => {
+        if (!isAbortError(error)) {
+          console.warn("[Home] Movers performance batch failed:", error?.message || error);
         }
+      })
+      .finally(() => {
+        // Always clear the loading flag. Previously an aborted (superseded)
+        // effect left it stuck true, so the movers row could spin forever even
+        // though a newer effect had already taken over.
+        setMoversLoading(false);
       });
 
     return () => controller.abort();
@@ -573,14 +586,14 @@ export function HomeModule({
           })
         });
       } catch (error) {
+        // Aborts are expected on unmount/re-run; only surface real failures.
+        if (signal.aborted || isAbortError(error)) return;
         console.warn("[Home] Today view headlines fetch failed:", error?.message || error);
-        if (!signal.aborted) {
-          setTodayView((prev) => ({
-            ...prev,
-            headlines: ["Macro and earnings feeds unavailable, showing portfolio-native signals."]
-          }));
-          setEventRows([]);
-        }
+        setTodayView((prev) => ({
+          ...prev,
+          headlines: ["Macro and earnings feeds unavailable, showing portfolio-native signals."]
+        }));
+        setEventRows([]);
       }
     };
     hydrateTodayView();
@@ -1056,7 +1069,7 @@ export function HomeModule({
           unavailableSources,
         });
       } catch (err) {
-        if (signal.aborted) return;
+        if (signal.aborted || isAbortError(err)) return;
         console.error("Market Context: Fetch failed", err);
         if (!hasAnyCache) {
           setMacroData([]);
@@ -1071,7 +1084,7 @@ export function HomeModule({
         // When stale cache exists, keep showing it — the user sees the last-known-good state
         // with the existing "stale" health chip.
       } finally {
-        if (!signal.aborted) setMarketDataLoading(false);
+        setMarketDataLoading(false);
       }
     };
 
