@@ -9260,17 +9260,27 @@ function markBootFailed(err) {
 // Lightweight liveness probe — confirms the process is up and serving HTTP.
 // Intentionally dependency-free: a database hiccup must not make the instance
 // look dead, and this is the endpoint uptime monitors poll.
+// Minimal by design. This is polled by uptime monitors (cron-job.org every
+// 5 minutes) which may treat an oversized body as a failed check, so it returns
+// only what a monitor needs. Diagnostics live on /health/details instead.
 app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    up: Math.round(process.uptime())
+  });
+});
+
+// Operational detail, kept OFF the monitoring path so its size can grow without
+// breaking a probe. Exposes memory and bounded-cache state: a cache pinned at
+// its max with evictions climbing is healthy; unbounded growth is not. This is
+// what makes an approaching Render memory limit visible BEFORE the OOM kill.
+app.get("/health/details", (_req, res) => {
   const mem = process.memoryUsage();
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
     initialized: bootState.ready,
-    // Memory is reported so an approaching instance limit is visible BEFORE
-    // Render OOM-kills the container. `caches` exposes the bounded caches:
-    // a size pinned at max with evictions climbing is normal; unbounded growth
-    // is not, and this makes that difference observable from the outside.
     memory: {
       rssMb: Math.round(mem.rss / 1048576),
       heapUsedMb: Math.round(mem.heapUsed / 1048576)
