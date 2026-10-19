@@ -40,3 +40,4 @@ scratch/
 *.mockup.html
 design_draft.html
 .vercel
+.env*
