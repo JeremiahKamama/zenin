@@ -16,6 +16,8 @@ const { OAuth2Client } = require("google-auth-library");
 const { Webhook } = require("svix");
 const {
   getEmailDeliveryConfig,
+  getTemplateVariableMap,
+  sendTemplateTest,
   isEmailDeliveryProductionReady,
   sendAdminLoginCodeEmail,
   sendPasswordResetEmail,
@@ -7041,6 +7043,87 @@ app.get("/api/admin/users/recovery-status", requireSignedIn, requireAdmin, requi
     });
   } catch (error) {
     return handleServerError(res, "Failed to check recovery status", error);
+  }
+});
+
+/**
+ * Read-only: which Resend template id and variables each flow uses.
+ *
+ * Resend renders an unknown {{{VARIABLE}}} as empty instead of erroring, so a
+ * name mismatch sends a broken email with a SUCCESS response. This exposes the
+ * exact names each template receives so they can be compared with the template.
+ */
+app.get("/api/admin/email/templates", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      delivery: getEmailDeliveryConfig(),
+      templates: getTemplateVariableMap()
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to describe email templates", error);
+  }
+});
+
+/**
+ * Send a real message through one named template to confirm the id resolves.
+ *
+ * Resend has no "look up a template by name" call, so a test send is the only
+ * reliable verification. Restricted to a real admin session and rate-limited by
+ * the shared admin limiter; the recipient is always the caller's own address, so
+ * this cannot be used to mail arbitrary third parties.
+ */
+app.post("/api/admin/email/templates/:kind/test", requireSignedIn, requireAdmin, async (req, res) => {
+  try {
+    const kind = String(req.params.kind || "").trim();
+    const known = getTemplateVariableMap();
+    if (!Object.prototype.hasOwnProperty.call(known, kind)) {
+      return apiError(res, 400, {
+        error: "Unknown email template.",
+        message: `Unknown template '${kind}'. Expected one of: ${Object.keys(known).join(", ")}.`,
+        code: "EMAIL_TEMPLATE_UNKNOWN",
+        retryable: false
+      });
+    }
+
+    // Always send to the signed-in admin — never to a caller-supplied address.
+    const recipient = String(req.auth?.user?.email || "").trim();
+    if (!recipient) {
+      return apiError(res, 400, {
+        error: "No email address on this admin account.",
+        code: "EMAIL_RECIPIENT_MISSING",
+        retryable: false
+      });
+    }
+
+    const result = await sendTemplateTest(kind, recipient);
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: req.auth?.user?.id || null,
+      action: "TEST_EMAIL_TEMPLATE",
+      details: { requestId: req.requestId, kind, templateId: result.templateId, ok: Boolean(result.ok) },
+      ipAddress: resolveClientIp(req)
+    });
+
+    if (!result.ok) {
+      return apiError(res, 502, {
+        error: "Template test failed.",
+        message: result.error?.message || "The provider rejected this template.",
+        code: "EMAIL_TEMPLATE_TEST_FAILED",
+        retryable: true,
+        details: { kind, templateId: result.templateId, providerError: result.error || null }
+      });
+    }
+
+    return res.json({
+      success: true,
+      kind,
+      templateId: result.templateId,
+      recipient,
+      providerMessageId: result.providerMessageId
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to test email template", error);
   }
 });
 

@@ -13,6 +13,10 @@ const RESEND_WEBHOOK_CONFIGURED = Boolean(String(process.env.RESEND_WEBHOOK_SECR
 const RESEND_PASSWORD_RESET_TEMPLATE_ID = String(process.env.RESEND_PASSWORD_RESET_TEMPLATE_ID || process.env.RESEND_TEMPLATE_RESET_PASSWORD || "reset-password").trim();
 const RESEND_EMAIL_VERIFICATION_TEMPLATE_ID = String(process.env.RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || process.env.RESEND_TEMPLATE_EMAIL_VERIFICATION || "email-verification").trim();
 const RESEND_EMAIL_CHANGE_TEMPLATE_ID = String(process.env.RESEND_EMAIL_CHANGE_TEMPLATE_ID || process.env.RESEND_TEMPLATE_EMAIL_CHANGE || "email-change-verification").trim();
+// Admin sign-in codes reuse the verification template when no dedicated one is
+// set, because both render a single CODE variable. Declared here (not read
+// inline at the call site) so every consumer and the diagnostics agree.
+const RESEND_ADMIN_LOGIN_TEMPLATE_ID = String(process.env.RESEND_ADMIN_LOGIN_TEMPLATE_ID || "").trim();
 const RESEND_ALERT_TEMPLATE_ID = String(process.env.RESEND_ALERT_TEMPLATE_ID || process.env.RESEND_TEMPLATE_ALERT || "").trim();
 
 // Detect placeholder / unconfigured key
@@ -125,10 +129,103 @@ function getEmailDeliveryConfig() {
       passwordReset: RESEND_PASSWORD_RESET_TEMPLATE_ID || null,
       emailVerification: RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || null,
       emailChange: RESEND_EMAIL_CHANGE_TEMPLATE_ID || null,
+      adminLogin: RESEND_ADMIN_LOGIN_TEMPLATE_ID || RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || null,
       alert: RESEND_ALERT_TEMPLATE_ID || null
     },
     productionReady: Boolean(RESEND_CONFIGURED && SMTP_FROM_CONFIGURED && !SMTP_FROM_USES_RESEND_TEST_DOMAIN)
   };
+}
+
+/**
+ * Describes which variables each Resend template receives.
+ *
+ * Resend renders an unknown `{{{VARIABLE}}}` as EMPTY rather than failing, so a
+ * casing mismatch produces an email with a blank code or link and a successful
+ * "sent" response — the silent failure mode this diagnostic exists to catch.
+ * Senders pass several casings of the same value as a hedge; this exposes the
+ * full set so the names can be compared against the actual template.
+ */
+function getTemplateVariableMap() {
+  const appNames = { APP_NAME: "Zenin Capital", app_name: "Zenin Capital", company_name: "Zenin Capital" };
+  return {
+    passwordReset: {
+      templateId: RESEND_PASSWORD_RESET_TEMPLATE_ID || null,
+      variables: ["RESET_LINK", "reset_link", ...Object.keys(appNames)]
+    },
+    emailVerification: {
+      templateId: RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || null,
+      variables: ["CODE", "code", "PURPOSE", "purpose", "NEW_EMAIL", "new_email", ...Object.keys(appNames)]
+    },
+    emailChange: {
+      templateId: RESEND_EMAIL_CHANGE_TEMPLATE_ID || null,
+      variables: ["CODE", "code", "PURPOSE", "purpose", "NEW_EMAIL", "new_email", ...Object.keys(appNames)]
+    },
+    adminLogin: {
+      templateId: RESEND_ADMIN_LOGIN_TEMPLATE_ID || RESEND_EMAIL_VERIFICATION_TEMPLATE_ID || null,
+      variables: ["CODE", "code", "PURPOSE", "purpose", "EXPIRES_IN_MINUTES", "expires_in_minutes", ...Object.keys(appNames)]
+    },
+    alert: {
+      templateId: RESEND_ALERT_TEMPLATE_ID || null,
+      variables: ["TITLE", "title", "BODY", "body", "WORKSPACE_NAME", "workspace_name", "SYMBOL", "symbol", "SEVERITY", "severity", "ACTION_URL", "action_url", ...Object.keys(appNames)]
+    }
+  };
+}
+
+/**
+ * Send a real message through a named template so its configuration can be
+ * verified end to end. Returns the provider's actual response, including the
+ * error when the template id is unknown — which is the only reliable way to
+ * confirm an id exists, since Resend gives no separate lookup for template names.
+ *
+ * Never throws: the caller receives `{ ok: false, error }` instead.
+ *
+ * @param {keyof ReturnType<typeof getTemplateVariableMap>} kind
+ * @param {string} email recipient
+ * @param {Record<string, unknown>} [variables] values for the template
+ */
+async function sendTemplateTest(kind, email, variables = {}) {
+  const map = getTemplateVariableMap();
+  const entry = map[kind];
+  if (!entry) {
+    return { ok: false, error: { message: `Unknown template kind: ${kind}` }, available: Object.keys(map) };
+  }
+  if (!entry.templateId) {
+    return { ok: false, error: { message: `No template id configured for '${kind}'.` }, templateId: null };
+  }
+  const client = getResendClient();
+  if (!client) {
+    return { ok: false, error: { message: "Resend is not configured (RESEND_API_KEY missing or placeholder)." }, templateId: entry.templateId };
+  }
+
+  // Every alias gets the same value, so whichever casing the template uses is
+  // populated. The sample values are obviously fake so a test send is never
+  // mistaken for a real code.
+  const sample = String(variables.SAMPLE || "123456");
+  const payload = {
+    from: SMTP_FROM,
+    to: email,
+    subject: `[Template test] ${kind}`,
+    template: {
+      id: entry.templateId,
+      variables: buildTemplateVariables(
+        entry.variables.reduce((acc, name) => {
+          acc[name] = /link|url/i.test(name) ? "https://www.zenin.capital/app" : sample;
+          return acc;
+        }, { ...variables })
+      )
+    },
+    tags: [{ name: "zenin_type", value: `template_test_${kind}` }]
+  };
+
+  try {
+    const { data, error } = await client.emails.send(payload);
+    if (error) {
+      return { ok: false, templateId: entry.templateId, error };
+    }
+    return { ok: true, templateId: entry.templateId, providerMessageId: data?.id || null };
+  } catch (error) {
+    return { ok: false, templateId: entry.templateId, error: { message: error?.message || String(error) } };
+  }
 }
 
 function isEmailDeliveryProductionReady() {
@@ -660,6 +757,8 @@ async function sendJournalReportEmail(email, payload = {}) {
 
 module.exports = {
   getEmailDeliveryConfig,
+  getTemplateVariableMap,
+  sendTemplateTest,
   isEmailDeliveryProductionReady,
   sendAdminLoginCodeEmail,
   sendAlertEmail,
