@@ -44,7 +44,19 @@ export function useNotificationStream({ activeWorkspaceId, isAuthenticated, onEv
       if (closed) return;
       let es;
       try {
-        es = new EventSource(buildStreamUrl("/notifications/stream"));
+        // `withCredentials` is REQUIRED here, not optional.
+        //
+        // The API is cross-origin (www.zenin.capital -> zenin-mx6w.onrender.com)
+        // and `EventSource` defaults to `withCredentials: false`, which omits
+        // cookies entirely. The session cookie therefore never reached the
+        // server, `requireSignedIn` rejected every attempt, and the browser
+        // retried forever — filling the console with
+        // "GET /api/notifications/stream 401 (Unauthorized)" in an endless loop.
+        //
+        // The server already sends Access-Control-Allow-Credentials: true and
+        // allow-lists this origin, so asking for credentials is all that was
+        // missing. Same-origin deployments are unaffected.
+        es = new EventSource(buildStreamUrl("/notifications/stream"), { withCredentials: true });
       } catch {
         scheduleReconnect();
         return;
