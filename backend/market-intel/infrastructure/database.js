@@ -24,6 +24,41 @@ async function initializeMarketIntelTables(db) {
     throw new TypeError("A pg.Pool instance is required.");
   }
 
+  // Serialize this DDL against other boots AND against initializeDatabase().
+  //
+  // These 13 CREATE TABLE statements previously ran bare: no transaction, no
+  // lock, each auto-committing individually. On a fresh database they can
+  // interleave with the ~130-statement schema transaction (or with a second
+  // instance booting) and Postgres aborts one side with "deadlock detected" —
+  // which failed the entire boot. On an already-initialized database the
+  // IF NOT EXISTS clauses take no conflicting lock, which is why the fault only
+  // appeared on the first deploy after new tables were introduced.
+  //
+  // A session-level advisory lock (rather than xact-scoped) is used here because
+  // this path issues many independent auto-committing statements on a pool. It
+  // must be released explicitly in `finally`, or a failure would hold it for the
+  // life of the connection.
+  const client = await db.connect();
+  const SCHEMA_INIT_LOCK_KEY = 748291034;
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_INIT_LOCK_KEY]);
+    await initializeMarketIntelTablesLocked(client);
+  } finally {
+    try {
+      await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_INIT_LOCK_KEY]);
+    } catch { /* connection already gone; lock dies with the session */ }
+    client.release();
+  }
+}
+
+/**
+ * The DDL body. Receives a dedicated client so every statement runs on the same
+ * connection while the advisory lock is held.
+ *
+ * @param {import("pg").PoolClient} db
+ * @returns {Promise<void>}
+ */
+async function initializeMarketIntelTablesLocked(db) {
   // Company profiles (cached from providers)
   await db.query(`
     CREATE TABLE IF NOT EXISTS market_companies (
