@@ -9144,11 +9144,19 @@ const bootState = {
 
 function markBootReady(stage) {
   if (stage in bootState.stages) bootState.stages[stage] = true;
-  if (stage === "postgres") bootState.ready = true;
+  if (stage === "postgres") {
+    bootState.ready = true;
+    // Clear any earlier failure. A transient boot error (a deadlock, a dropped
+    // connection, a cold database) must not poison readiness forever — that
+    // reported "unavailable" long after Postgres was demonstrably healthy.
+    bootState.failed = null;
+    bootState.failedAt = null;
+  }
 }
 
 function markBootFailed(err) {
   bootState.failed = (err && err.message) || "unknown";
+  bootState.failedAt = new Date().toISOString();
 }
 
 // Lightweight liveness probe — confirms the process is up and serving HTTP.
@@ -9170,16 +9178,19 @@ app.get("/health/ready", async (_req, res) => {
   const checks = {};
   let allOk = true;
 
-  // If boot already failed, report that rather than re-probing indefinitely.
-  if (bootState.failed) {
-    checks.boot = `error: ${bootState.failed}`;
-    allOk = false;
-  } else if (!bootState.ready) {
-    checks.boot = "initializing";
-    allOk = false;
-  } else {
+  // The LIVE dependency probe below is the source of truth. The boot flag is
+  // reported for diagnosis only: it is written once during startup, so trusting
+  // it made readiness claim "unavailable" (stale "deadlock detected") long after
+  // Postgres was provably healthy and serving requests. A deadlock during boot
+  // is transient and must not permanently mark the instance unready.
+  if (bootState.ready) {
     checks.boot = "ok";
+  } else if (bootState.failed) {
+    checks.boot = `error during startup: ${bootState.failed}`;
+  } else {
+    checks.boot = "initializing";
   }
+  if (bootState.failedAt) checks.bootFailedAt = bootState.failedAt;
 
   try {
     await pool.query("SELECT 1");
@@ -9188,6 +9199,10 @@ app.get("/health/ready", async (_req, res) => {
     checks.postgres = `error: ${err?.message || "unknown"}`;
     allOk = false;
   }
+
+  // Not-yet-initialized still counts as unready so traffic is not routed to a
+  // half-booted instance — but a boot error that has since cleared does not.
+  if (!bootState.ready) allOk = false;
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "ready" : "unavailable",

@@ -932,6 +932,20 @@ async function initializeDatabase() {
   try {
     await client.query("BEGIN");
 
+    // Serialize schema initialization across processes.
+    //
+    // This transaction runs ~130 DDL statements against shared tables. When two
+    // instances boot at the same time — a deploy overlapping a restart, or a
+    // crash-loop — they contend for the same relation locks and Postgres aborts
+    // one with "deadlock detected", which then failed the whole boot. A
+    // transaction-scoped advisory lock makes concurrent boots queue instead:
+    // the second waits, then finds the schema already created (all statements
+    // are IF NOT EXISTS / idempotent) and commits immediately.
+    //
+    // The lock is released automatically on COMMIT/ROLLBACK; the key is an
+    // arbitrary constant unique to schema initialization.
+    await client.query("SELECT pg_advisory_xact_lock($1)", [748291034]);
+
     // Ensure pgcrypto is available for gen_random_uuid(), which is used by
     // decision_threads and daily_briefings. Idempotent and safe on all
     // supported Postgres versions (pgcrypto ships with Postgres 9.4+).
