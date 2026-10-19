@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getGuestWorkspacePath, getSignedInWorkspacePath, storePostAuthRedirect } from "../utils/authRedirect";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { zeninFetchJson, AUTH_TIMEOUT_MS, AUTH_SESSION_TIMEOUT_MS } from "../utils/zeninFetch";
 import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "../utils/backendAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
 
@@ -138,7 +138,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       if (!isValidEmail(signinForm.email)) throw new Error("Enter a valid email address.");
       if (!signinForm.password.trim()) throw new Error("Enter your password.");
       const payload = { email: signinForm.email.trim(), password: signinForm.password, rememberMe: true };
-      const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload) });
+      const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload), timeoutMs: AUTH_TIMEOUT_MS });
       if (data?.requiresVerification) {
         redirectToFullVerification(signinForm.email.trim());
         return;
@@ -147,7 +147,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
         redirectToFullMfa();
         return;
       }
-      const me = await zeninFetchJson("/api/auth/me");
+      const me = await zeninFetchJson("/api/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
       if (!me?.authenticated || !me?.user) throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
       redirectToApp();
     } catch (err) {
@@ -167,13 +167,13 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
       if (!isStrongPassword(signupForm.password)) {
         throw new Error("Password must be 10+ characters with letters, numbers, and symbols.");
       }
-      const data = await zeninFetchJson("/api/auth/signup", { method: "POST", body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.fullName.trim() }) });
+      const data = await zeninFetchJson("/api/auth/signup", { method: "POST", body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.fullName.trim() }), timeoutMs: AUTH_TIMEOUT_MS });
       if (data?.requiresVerification) {
         setSigninForm((prev) => ({ ...prev, email: signupForm.email.trim() }));
         redirectToFullVerification(signupForm.email.trim());
         return;
       }
-      const me = await zeninFetchJson("/api/auth/me");
+      const me = await zeninFetchJson("/api/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
       if (!me?.authenticated || !me?.user) throw new Error("Signed up but Zenin could not start your workspace session.");
       redirectToApp();
     } catch (err) {
@@ -202,7 +202,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
     setError("");
     try {
       if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
-      await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }) });
+      await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }), timeoutMs: AUTH_TIMEOUT_MS });
       setMode("forgot_success");
     } catch (err) {
       setError(getAuthErrorMessage(err, "Failed to send reset link"));
@@ -350,7 +350,7 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
                     const authResp = await startAuthentication(opts);
                     const verify = await verifySupabasePasskeyAuthentication({ response: authResp, challengeId: opts.challengeId, rememberMe: true });
                     if (verify?.success) {
-                      const me = await zeninFetchJson("/api/auth/me");
+                      const me = await zeninFetchJson("/api/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
                       if (!me?.authenticated || !me?.user) throw new Error("Signed in but session not established.");
                       redirectToApp();
                     } else {

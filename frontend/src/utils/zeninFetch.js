@@ -8,7 +8,11 @@ import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
 // Accept new tier ids (plus/premium) and legacy ids (pro/desk) for the dev
 // "simulate plan" override during the rename rollout.
 const SIMULATED_PLAN_VALUES = new Set(["starter", "plus", "premium", "pro", "desk"]);
-const CSRF_FETCH_TIMEOUT_MS = 12000;
+// CSRF token fetch. This runs BEFORE every write (including sign-in), so it is
+// frequently the very first request against a cold-starting backend. It must be
+// at least as generous as AUTH_TIMEOUT_MS, otherwise CSRF fails during a wake-up
+// and the user sees an "auth service" error even though sign-in never ran.
+const CSRF_FETCH_TIMEOUT_MS = 90000;
 const CSRF_FETCH_ATTEMPTS = 1;
 let csrfTokenCache = null;
 
@@ -81,7 +85,15 @@ async function ensureCsrfToken() {
   let lastError = null;
   for (let attempt = 1; attempt <= CSRF_FETCH_ATTEMPTS; attempt += 1) {
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const timeoutId = controller ? setTimeout(() => controller.abort("csrf-timeout"), CSRF_FETCH_TIMEOUT_MS) : null;
+    let didTimeout = false;
+    const timeoutId = controller
+      ? setTimeout(() => {
+          didTimeout = true;
+          // Abort with a DOMException: a plain string reason is surfaced raw
+          // by fetch, which would skip the AUTH_SERVICE_TIMEOUT mapping below.
+          controller.abort(new DOMException("csrf-timeout", "AbortError"));
+        }, CSRF_FETCH_TIMEOUT_MS)
+      : null;
     try {
       response = await fetch(buildZeninUrl("/auth/csrf"), {
         credentials: "include",
@@ -90,17 +102,18 @@ async function ensureCsrfToken() {
       break;
     } catch (error) {
       lastError = error;
+      // Prefer our own timeout flag over the error shape — see zeninFetch.
+      if (didTimeout) {
+        throw new ZeninRequestError("Zenin's auth service is taking too long to respond. Please wait a moment and try again.", {
+          status: 0,
+          code: "AUTH_SERVICE_TIMEOUT",
+          error: "Auth service timeout",
+          retryable: true,
+          endpoint: buildZeninUrl("/auth/csrf"),
+          cause: error,
+        });
+      }
       if (error?.name !== "AbortError" || attempt === CSRF_FETCH_ATTEMPTS) {
-        if (error?.name === "AbortError") {
-          throw new ZeninRequestError("Zenin's auth service is taking too long to respond. Please wait a moment and try again.", {
-            status: 0,
-            code: "AUTH_SERVICE_TIMEOUT",
-            error: "Auth service timeout",
-            retryable: true,
-            endpoint: buildZeninUrl("/auth/csrf"),
-            cause: error,
-          });
-        }
         throw error;
       }
     } finally {
@@ -199,6 +212,25 @@ const BACKOFF_MAX_MS = 8000;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_OPEN_MS = 20000;
 
+// Bounded default request timeout. Every network call MUST be able to fail.
+// An unbounded request is what turned a Render cold start into a permanent
+// "Signing in..." hang: the connection was held open by the edge, fetch never
+// settled, and the caller's `finally` (which clears the loading flag) never
+// ran. The default is deliberately generous — long enough to outlast a cold
+// start (~30-60s) but finite, so the UI always recovers into an error state.
+// Callers may raise it via `timeoutMs` for genuinely long operations.
+const DEFAULT_TIMEOUT_MS = 90000;
+
+// Auth endpoints run against a backend that may be cold-starting (Render
+// spins the service down when idle). Sign-in is the first request a user
+// makes, so it is the most likely to hit a wake-up. Give auth calls an
+// explicit, generous budget so the request always settles one way or the
+// other and the button can never hang on "Signing in...".
+export const AUTH_TIMEOUT_MS = 90000;
+// Post-auth session confirmation (`/auth/me`). Lower than AUTH_TIMEOUT_MS
+// because it runs after the backend has already answered once, so it is warm.
+export const AUTH_SESSION_TIMEOUT_MS = 20000;
+
 const circuit = { failures: 0, openedAt: 0 };
 function circuitAllow() {
   if (circuit.failures < CIRCUIT_FAILURE_THRESHOLD) return true;
@@ -239,7 +271,7 @@ function sleep(ms, signal) {
 }
 
 export async function zeninFetch(endpoint, options = {}) {
-  const { skipSimulationHeaders = false, timeoutMs = 0, ...fetchOptions } = options;
+  const { skipSimulationHeaders = false, timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
   const url = buildZeninUrl(endpoint);
   const method = String(fetchOptions.method || "GET").toUpperCase();
 
@@ -288,7 +320,9 @@ export async function zeninFetch(endpoint, options = {}) {
       signal = controller.signal;
       timeoutId = setTimeout(() => {
         didTimeout = true;
-        controller.abort("request-timeout");
+        // Abort with a DOMException so the rejection has the standard
+        // AbortError shape. (A plain string reason is surfaced raw by fetch.)
+        controller.abort(new DOMException("request-timeout", "AbortError"));
       }, Number(timeoutMs));
     }
 
@@ -318,14 +352,19 @@ export async function zeninFetch(endpoint, options = {}) {
       return response; // non-retryable or exhausted -> caller handles
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
+      // Check OUR timeout flag first. fetch() rejects with the raw abort
+      // reason, and a string reason (e.g. "request-timeout") arrives as a
+      // String rather than a DOMException — so a `name === "AbortError"` test
+      // alone silently misses our own timeouts and mis-reports them as
+      // generic network errors.
+      if (didTimeout) {
+        throw new ZeninRequestError(
+          "Zenin's backend is taking too long to respond. Please wait a moment and try again.",
+          { status: 0, code: "REQUEST_TIMEOUT", error: "Request timeout", retryable: true, endpoint: url, cause: error }
+        );
+      }
       if (error?.name === "AbortError") {
-        // Timeout or external abort: do not retry silently.
-        if (didTimeout) {
-          throw new ZeninRequestError(
-            "Zenin's backend is taking too long to respond. Please wait a moment and try again.",
-            { status: 0, code: "REQUEST_TIMEOUT", error: "Request timeout", retryable: true, endpoint: url, cause: error }
-          );
-        }
+        // An external abort (caller-supplied signal): do not retry silently.
         throw error;
       }
       lastErr = error;

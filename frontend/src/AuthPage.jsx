@@ -3,7 +3,7 @@ import { SpeedInsights } from "@vercel/speed-insights/react";
 import "./public.css";
 import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
-import { zeninFetchJson } from "./utils/zeninFetch";
+import { zeninFetchJson, AUTH_TIMEOUT_MS, AUTH_SESSION_TIMEOUT_MS } from "./utils/zeninFetch";
 import { persistZeninAuth, startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/backendAuth";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { PasswordRequirementsList } from "@/components/ui/async-state";
@@ -142,7 +142,7 @@ export default function AuthPage() {
   };
 
   const finishSignedInSession = async () => {
-    const me = await zeninFetchJson("/api/auth/me", { timeoutMs: 3500 });
+    const me = await zeninFetchJson("/api/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
     if (!me?.authenticated || !me?.user) {
       throw new Error("Signed in successfully, but Zenin could not start your workspace session.");
     }
@@ -254,7 +254,7 @@ export default function AuthPage() {
       if (oauthCallback) return;
       if (!mounted) return;
       try {
-        const me = await zeninFetchJson("/api/auth/me", { timeoutMs: 3500 });
+        const me = await zeninFetchJson("/api/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
         if (mounted && me?.authenticated && !isRecoveryLinkActive()) {
           redirectToApp();
         }
@@ -276,7 +276,8 @@ export default function AuthPage() {
     }
     const data = await zeninFetchJson("/api/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.displayName.trim() })
+      body: JSON.stringify({ email: signupForm.email.trim(), password: signupForm.password, displayName: signupForm.displayName.trim() }),
+      timeoutMs: AUTH_TIMEOUT_MS
     });
     if (data?.requiresVerification) {
       updateMode("verify");
@@ -293,7 +294,7 @@ export default function AuthPage() {
     if (!isValidEmail(signinForm.email)) throw new Error("Enter a valid email address.");
     if (!signinForm.password.trim()) throw new Error("Enter your password.");
     const payload = { email: signinForm.email.trim(), password: signinForm.password, rememberMe };
-    const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload) });
+    const data = await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload), timeoutMs: AUTH_TIMEOUT_MS });
     if (data?.requiresVerification) {
       updateMode("verify");
       setMessage(data?.message || "Verify your email before opening your workspace.");
@@ -311,26 +312,26 @@ export default function AuthPage() {
     const code = String(mfaForm.code || "").trim();
     if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit authenticator code.");
     const payload = { email: signinForm.email.trim(), password: signinForm.password, verificationCode: code, rememberMe };
-    await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload) });
+    await zeninFetchJson("/api/auth/signin", { method: "POST", body: JSON.stringify(payload), timeoutMs: AUTH_TIMEOUT_MS });
     await finishSignedInSession();
   });
 
   const onForgotRequest = () => runAction(async () => {
     if (!isValidEmail(forgotForm.email)) throw new Error("Enter a valid email address.");
-    await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }) });
+    await zeninFetchJson("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ email: forgotForm.email.trim() }), timeoutMs: AUTH_TIMEOUT_MS });
     setMessage("Reset instructions sent. Open the email link here to set a new password.");
   });
 
   const onVerifyEmail = () => runAction(async () => {
     const code = String(verificationForm.code || "").trim();
     if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit verification code.");
-    await zeninFetchJson("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ code }) });
+    await zeninFetchJson("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ code }), timeoutMs: AUTH_TIMEOUT_MS });
     setMessage("Email verified. Opening your workspace...");
     await finishSignedInSession();
   });
 
   const onResendVerification = () => runAction(async () => {
-    const data = await zeninFetchJson("/api/auth/resend-verification", { method: "POST", body: JSON.stringify({}) });
+    const data = await zeninFetchJson("/api/auth/resend-verification", { method: "POST", body: JSON.stringify({}), timeoutMs: AUTH_TIMEOUT_MS });
     const devCode = data?.devVerificationCode ? ` Dev code: ${data.devVerificationCode}.` : "";
     setMessage(data?.verificationEmailSent === false
       ? `Zenin created a new code, but email delivery is not configured or failed.${devCode}`
@@ -353,7 +354,7 @@ export default function AuthPage() {
       }
     }
     if (!token) throw new Error("No reset token found in the URL. Open the recovery link from your email.");
-    await zeninFetchJson("/api/auth/forgot-password/confirm", { method: "POST", body: JSON.stringify({ token, newPassword: forgotForm.newPassword }) });
+    await zeninFetchJson("/api/auth/forgot-password/confirm", { method: "POST", body: JSON.stringify({ token, newPassword: forgotForm.newPassword }), timeoutMs: AUTH_TIMEOUT_MS });
     await finishSignedInSession();
   });
 

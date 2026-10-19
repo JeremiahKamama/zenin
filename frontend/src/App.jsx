@@ -47,7 +47,7 @@ import { getSnapshotFallbackMessage } from "./utils/staleNotice";
 import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "./utils/portfolioHeadline";
 import { fetchBrokerageWorkspaceSummary } from "./utils/brokerageApi.js";
 import { useUnifiedPortfolio } from "./hooks/useUnifiedPortfolio";
-import { zeninFetch, zeninFetchJson } from "./utils/zeninFetch";
+import { zeninFetch, zeninFetchJson, AUTH_SESSION_TIMEOUT_MS } from "./utils/zeninFetch";
 import { syncPredictionWalletSource, disconnectPredictionWalletSource } from "./services/portfolioService";
 import { getReferralCode, getReferralStats, initReferralTrackingIfPresent } from "./utils/referralApi";
 import { buildAssetRoute } from "./utils/assetRegistry";
@@ -4851,18 +4851,26 @@ const handleOptionTradeClosed = async (tradeId) => {
       }
 
       try {
-        let res = await zeninFetch("/auth/me", { timeoutMs: 3500 });
+        // This is the first request after a page load, so it is the one most
+        // likely to hit a cold-starting backend. Use the shared session budget
+        // rather than a tight 3.5s, which would bounce a waking user to the
+        // auth gate even though their session is valid.
+        let res = await zeninFetch("/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
         let data = await res.json().catch(() => ({}));
         if (res.ok && (!data?.authenticated || !data?.user) && !allowGuestAccess) {
           const exchanged = await ensureZeninSessionFromSupabase();
           if (exchanged?.user) {
-            res = await zeninFetch("/auth/me", { timeoutMs: 3500 });
+            res = await zeninFetch("/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
             data = await res.json().catch(() => ({}));
           }
         }
         if (!mounted) return;
         if (!res.ok || !data?.authenticated || !data?.user) {
           if (!allowGuestAccess) {
+            // Clear the boot gate before navigating away. Without this the
+            // loading screen stays mounted during the redirect and pins there
+            // if navigation is slow or the effect re-runs.
+            setAccessCheckLoading(false);
             redirectToAuthGate();
             return;
           }
@@ -4939,6 +4947,9 @@ const handleOptionTradeClosed = async (tradeId) => {
       } catch {
         if (!mounted) return;
         if (!allowGuestAccess) {
+          // See note above: always release the boot gate, including on the
+          // error path. A thrown auth probe must never strand the loader.
+          setAccessCheckLoading(false);
           redirectToAuthGate();
           return;
         }
