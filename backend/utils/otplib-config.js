@@ -84,6 +84,21 @@ const cryptoPlugin = {
 
 /**
  * Create a configured TOTP instance that behaves like the default authenticator.
+ *
+ * ⚠️  TWO TRAPS IN THIS VERSION OF @otplib/totp — BOTH ALREADY BIT US.
+ *
+ * 1. SIGNATURE. `verify` is `verify(token, { secret })` — TWO arguments. Passing
+ *    a single object `verify({ token, secret })` leaves `secret` undefined in the
+ *    second position, so the call REJECTS with SecretMissingError. That is what
+ *    made authenticator enrollment always fail with "Secret is required".
+ *    `generate` likewise takes an options object: `generate({ secret })`.
+ *
+ * 2. RETURN SHAPE. `verify` resolves `{ valid: boolean }`, NOT a bare boolean.
+ *    So `if (!result)` is always false — callers must read `result.valid`.
+ *
+ * `verify` and `generate` are async; `generateSecret` is synchronous. Always
+ * await the async ones. See backend/test/unit/totpAwait.test.js, which fails if
+ * any call site regresses to the mis-shaped or un-awaited form.
  */
 const authenticator = new TOTP({
   crypto: cryptoPlugin,

@@ -8225,7 +8225,17 @@ app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, re
             code: "MFA_SECRET_UNAVAILABLE"
           });
         }
-        mfaValid = authenticator.verify({ token: verificationCode, secret: decryptedSecret });
+        // Signature is verify(token, { secret }) and it RESOLVES an object
+        // `{ valid }` — not a bare boolean, and not a single options object.
+        // Passing { token, secret } as one argument left `secret` undefined, so
+        // this rejected with SecretMissingError and TOTP sign-in could never
+        // succeed. Treat a rejection as an invalid code.
+        try {
+          const verification = await authenticator.verify(verificationCode, { secret: decryptedSecret });
+          mfaValid = Boolean(verification?.valid);
+        } catch {
+          mfaValid = false;
+        }
       } else {
         // sms or email
         const expectedHash = hashToken(`${user.twoFactorMethod}:${verificationCode}`);
@@ -8718,7 +8728,16 @@ app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFacto
     let secretToStore = null;
     if (method === "authenticator") {
       if (!secret) return res.status(400).json({ error: "Secret is required for authenticator method." });
-      const isValid = authenticator.verify({ token: verificationCode, secret });
+      // verify(token, { secret }) resolves `{ valid }`. See the note at the
+      // sign-in call site: the previous single-object form left `secret`
+      // undefined, so enrollment always failed with "Secret is required".
+      let verification;
+      try {
+        verification = await authenticator.verify(verificationCode, { secret });
+      } catch {
+        verification = { valid: false };
+      }
+      const isValid = Boolean(verification?.valid);
       if (!isValid) return res.status(400).json({ error: "Invalid verification code." });
       // Encrypt the secret before storing it (#2)
       secretToStore = encryptTotpSecret(secret);

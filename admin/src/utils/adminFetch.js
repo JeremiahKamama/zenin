@@ -87,10 +87,10 @@ function describeNetworkFailure(error) {
   };
 }
 
-export async function adminFetch(endpoint, options = {}) {
-  const url = endpoint.startsWith('http') 
-    ? endpoint 
-    : `${ADMIN_API_BASE_URL}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+async function requestAgainstBase(baseUrl, endpoint, options = {}) {
+  const url = endpoint.startsWith('http')
+    ? endpoint
+    : `${baseUrl}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
   const method = String(options.method || 'GET').toUpperCase();
 
   const headers = {
@@ -201,4 +201,21 @@ export async function adminFetch(endpoint, options = {}) {
 
   // Unreachable in practice: the loop either returns or throws.
   throw lastError || new Error("Admin request failed");
+}
+
+export async function adminFetch(endpoint, options = {}) {
+  return requestAgainstBase(ADMIN_API_BASE_URL, endpoint, options);
+}
+
+/**
+ * Call the shared account/auth API (`/api/auth/*`) from the admin console.
+ *
+ * Admin MFA enrollment (`/api/auth/2fa/*`, `/api/auth/passkeys/*`) lives on the
+ * account API rather than `/api/admin/*`, because the admin gate is satisfied by
+ * an ordinary account-level second factor. Reusing `requestAgainstBase` keeps the
+ * same CSRF handling, timeouts, and retry rules as every other admin call instead
+ * of duplicating them.
+ */
+export async function authApiFetch(endpoint, options = {}) {
+  return requestAgainstBase(AUTH_API_BASE_URL, endpoint, options);
 }

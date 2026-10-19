@@ -375,6 +375,13 @@ const twoFactorEnableSchema = z.object({
   verificationCode: z.string().length(6),
   provider: z.string().max(50).optional().nullable(),
   target: z.string().max(255).optional().nullable(),
+  // Required by the handler for method "authenticator": it verifies the submitted
+  // code against this secret before storing it. Without it declared here, Zod
+  // stripped the field (validate assigns result.data), so the handler always saw
+  // `secret === undefined` and rejected with "Secret is required for
+  // authenticator method." — making authenticator enrollment impossible for every
+  // user, not just admins. Base32 TOTP secrets are short, so cap the length.
+  secret: z.string().max(128).optional().nullable(),
 });
 
 const passkeyRegisterSchema = z.object({

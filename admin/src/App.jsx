@@ -90,7 +90,8 @@ import {
   Filler
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
-import { adminFetch } from './utils/adminFetch';
+import { adminFetch, authApiFetch } from './utils/adminFetch';
+import AdminMfaEnrollment from './components/AdminMfaEnrollment';
 import { copyTextToClipboard, downloadCsvFile, downloadJsonFile } from './utils/adminUi';
 import CoverageRegistryView from './CoverageRegistryView';
 import { COVERAGE_SEED } from './coverageSeed';
@@ -99,13 +100,6 @@ const ActivityIcon = Activity;
 const AuditIcon = ShieldCheck;
 const IntegrationsIcon = LayoutGrid;
 const TerminalIcon = Terminal;
-
-// Where an admin goes to enroll 2FA / a passkey. Enrollment lives in the main
-// app's Settings section, not the console, so the ADMIN_MFA_REQUIRED state links
-// straight there instead of telling the admin to go find it. The section name
-// must match the app's `sections` list (capitalised); `?section=` deep links are
-// now honoured after fixing a non-standard `location.searchParams` lookup.
-const ADMIN_APP_SECURITY_URL = 'https://www.zenin.capital/app?section=Settings';
 
 ChartJS.register(
   CategoryScale,
@@ -3088,7 +3082,9 @@ export default function App() {
 
   const checkAuth = async () => {
     try {
-      const data = await adminFetch('/../auth/me');
+      // Uses the dedicated auth base URL rather than traversing out of the admin
+      // base with '/../', which relied on the URL resolving as expected.
+      const data = await authApiFetch('/auth/me');
       if (data.authenticated && data.user?.isAdmin) {
         setIsAuthenticated(true);
         setUser(data.user);
@@ -3743,46 +3739,29 @@ export default function App() {
       const needsAdminIp = errorCode === 'ADMIN_IP_RESTRICTED';
 
       if (needsMfaEnrollment || needsAdminIp) {
+        // MFA enrollment happens IN the console. It previously linked out to the
+        // client app's personal profile ("Settings -> Security"), which is a
+        // different product surface for a different account concept — and never
+        // actually enrolled the factor the admin gate requires.
+        if (needsMfaEnrollment) {
+          return <AdminMfaEnrollment onEnrolled={() => fetchData()} />;
+        }
+
         return (
           <div style={{ padding: '40px', margin: '40px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
               <Shield size={28} color="var(--accent)" />
-              <h3 style={{ margin: 0 }}>
-                {needsMfaEnrollment ? 'Two-factor authentication required' : 'IP address not allowed'}
-              </h3>
+              <h3 style={{ margin: 0 }}>IP address not allowed</h3>
             </div>
             <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '8px' }}>
-              {needsMfaEnrollment
-                ? 'Your admin account is signed in, but admin data is locked until you enroll a second factor (an authenticator app or a passkey). This is a security requirement, not an outage.'
-                : 'Your account is authorized, but this network is not on the admin allow-list.'}
+              Your account is authorized, but this network is not on the admin allow-list.
             </p>
-            {needsMfaEnrollment ? (
-              <>
-                <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '20px' }}>
-                  Open the Zenin app, go to <strong>Settings → Security</strong>, and enable two-factor
-                  authentication or register a passkey. Then return here — no redeploy is needed.
-                </p>
-                <a
-                  className="btn btn-primary"
-                  href={ADMIN_APP_SECURITY_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open Security Settings
-                </a>
-              </>
-            ) : (
-              <p style={{ color: 'var(--text-muted)', marginBottom: '20px' }}>
-                Connect from an approved network, or ask an owner to add your IP to
-                <code style={{ marginLeft: '6px' }}>ADMIN_ALLOWED_IPS</code>.
-              </p>
-            )}
-            <button
-              className="btn btn-secondary"
-              style={{ marginTop: '16px', marginLeft: needsMfaEnrollment ? '8px' : 0 }}
-              onClick={() => fetchData()}
-            >
-              I've enrolled — reload admin data
+            <p style={{ color: 'var(--text-muted)', marginBottom: '20px' }}>
+              Connect from an approved network, or ask an owner to add your IP to
+              <code style={{ marginLeft: '6px' }}>ADMIN_ALLOWED_IPS</code>.
+            </p>
+            <button className="btn btn-secondary" onClick={() => fetchData()}>
+              Retry
             </button>
           </div>
         );
