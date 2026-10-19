@@ -68,7 +68,18 @@ services:
       # and the brokerage routes additionally require ENABLED=true. Without all
       # three, /api/brokerage/providers returns available:false and the UI shows
       # "Brokerage not available yet" — the Connect brokerage button looks dead.
-      # Secrets use sync:false, so set the real values in the Render dashboard.
+      #
+      # THESE MUST BE SET ON RENDER, ON THE zenin-mx6w SERVICE. The browser calls
+      # https://zenin-mx6w.onrender.com/api directly, so this process is the only
+      # one that reads them. A key placed on Vercel, or on the database host, is
+      # never consulted by the brokerage code path and has no effect.
+      #
+      # Verify at any time (booleans only, never secret values):
+      #   curl -s https://zenin-mx6w.onrender.com/health/details
+      # Expect integrations.snaptrade: {"configuredKeys":true,"enabled":true,"ready":true}
+      #
+      # Watch out for a single var named SNAPTRADE holding a masked blob — that
+      # matches neither name below and silently does nothing.
       - key: SNAPTRADE_CLIENT_ID
         sync: false
       - key: SNAPTRADE_CONSUMER_KEY
