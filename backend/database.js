@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const portfolioSnapshots = require("./portfolioSnapshots");
 const { ensureUnifiedPortfolioSchema } = require("./unifiedPortfolio");
 const { planAddColumns } = require("./schemaDdl");
+const { partitionColumns, redactRow } = require("./adminRedaction");
 const { tagsForExchange } = require("./exchangeSync");
 const stablecoins = require("./stablecoins");
 
@@ -9460,11 +9461,28 @@ const admin = {
           AND constraint_type = 'FOREIGN KEY'
       `, [selectedTableName]);
 
-      const previewResult = await pool.query(`
-        SELECT *
-        FROM ${quoteIdentifier(selectedTableName)}
-        LIMIT $1 OFFSET $2
-      `, [safePageSize, offset]);
+      // Redact credential material before previewing.
+      //
+      // This was `SELECT *`, which on app_users returned password_hash, the
+      // encrypted TOTP seed, backup codes, passkeys and both verification-code
+      // hashes to any admin — proven against a live instance. It now names only
+      // the columns an operator may see (see adminRedaction.js for the policy).
+      const { previewable, withheld } = partitionColumns(
+        selectedTableName,
+        columnsResult.rows.map((row) => row.name)
+      );
+
+      let previewRows = [];
+      if (previewable.length > 0) {
+        const columnList = previewable.map((name) => quoteIdentifier(name)).join(", ");
+        const previewResult = await pool.query(`
+          SELECT ${columnList}
+          FROM ${quoteIdentifier(selectedTableName)}
+          LIMIT $1 OFFSET $2
+        `, [safePageSize, offset]);
+        previewRows = previewResult.rows.map((row) => redactRow(selectedTableName, row, { previewable, withheld }));
+      }
+      const withheldSet = new Set(withheld.map((name) => String(name).toLowerCase()));
 
       const rowCountResult = await pool.query(`
         SELECT COUNT(*)::bigint AS count
@@ -9479,9 +9497,24 @@ const admin = {
         page: safePage,
         pageSize: safePageSize,
         totalPages: Math.max(1, Math.ceil(rowCount / safePageSize)),
-        queryPreview: `SELECT * FROM ${selectedTableName} LIMIT ${safePageSize} OFFSET ${offset};`,
-        previewRows: previewResult.rows,
-        columns: columnsResult.rows,
+        // NOTE: this string is DISPLAY ONLY — the real query is parameterised.
+        // It reflects the redacted column list so the UI cannot suggest that
+        // withheld columns were returned.
+        queryPreview: previewable.length
+          ? `SELECT ${previewable.join(", ")} FROM ${selectedTableName} LIMIT ${safePageSize} OFFSET ${offset};`
+          : `-- preview withheld for ${selectedTableName}`,
+        previewRows,
+        columns: columnsResult.rows.map((row) => ({
+          ...row,
+          redacted: withheldSet.has(String(row.name).toLowerCase())
+        })),
+        // Report the redaction so the UI can explain the missing columns rather
+        // than appearing to have lost data.
+        redaction: {
+          applied: withheld.length > 0,
+          withheldColumns: withheld,
+          previewWithheld: previewable.length === 0
+        },
         indexes: indexesResult.rows,
         schemaSummary: {
           primaryKey: primaryKeyResult.rows.map((row) => row.name).join(", ") || "None",

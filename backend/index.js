@@ -7271,11 +7271,35 @@ app.get("/api/admin/stats", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/database", requireAdmin, async (req, res) => {
   try {
+    const requestedTable = String(req.query?.table || "").trim() || null;
     const stats = await admin.getDatabaseStats({
-      table: req.query?.table || null,
+      table: requestedTable,
       page: req.query?.page || 1,
       pageSize: req.query?.pageSize || 10
     });
+
+    // Reading user tables is a personal-data access, so it is attributable.
+    //
+    // Mutations (plan changes, suspensions) were already logged; READS were not,
+    // which left no record of who viewed what. Column redaction is enforced in
+    // getDatabaseStats, but an unanswered "who looked at this?" is its own
+    // compliance problem, so record the access without recording the data.
+    const previewedTable = stats?.selectedTable?.name || requestedTable;
+    if (previewedTable) {
+      await admin.logAdminAction({
+        adminId: req.auth?.user?.id || 0,
+        targetUserId: null,
+        action: "VIEW_TABLE_PREVIEW",
+        details: {
+          requestId: req.requestId,
+          table: previewedTable,
+          page: Number(req.query?.page) || 1,
+          pageSize: Number(req.query?.pageSize) || 10,
+          rowCount: stats?.selectedTable?.rows ?? null
+        }
+      }).catch(() => null);
+    }
+
     res.json(stats);
   } catch (error) {
     handleServerError(res, "getDatabaseStats", error);
