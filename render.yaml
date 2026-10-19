@@ -36,8 +36,37 @@ services:
         value: "false"
       - key: ADMIN_EMAIL
         value: admin@zenin.app
+      # Mailbox that receives admin-console sign-in codes. Must match the
+      # recipient the backend resolves at request time; the account itself is
+      # auto-provisioned as an admin by initializeDatabase.
+      - key: ADMIN_LOGIN_EMAIL
+        value: kamama@zenin.capital
       - key: ADMIN_MIGRATION_KEY
         sync: false
+      # ── SnapTrade brokerage (Connect brokerage) ─────────────────────────────
+      # The provider registers ONLY when CLIENT_ID and CONSUMER_KEY are present,
+      # and the brokerage routes additionally require ENABLED=true. Without all
+      # three, /api/brokerage/providers returns available:false and the UI shows
+      # "Brokerage not available yet" — the Connect brokerage button looks dead.
+      # Secrets use sync:false, so set the real values in the Render dashboard.
+      - key: SNAPTRADE_CLIENT_ID
+        sync: false
+      - key: SNAPTRADE_CONSUMER_KEY
+        sync: false
+      - key: SNAPTRADE_SECRET
+        sync: false
+      - key: SNAPTRADE_ENABLED
+        value: "true"
+      # Optional: restrict the pilot to specific workspace ids (comma-separated).
+      # Empty means "open pilot" — every workspace may connect a brokerage.
+      - key: SNAPTRADE_PILOT_WORKSPACES
+        value: ""
+      # "production" (default) or "sandbox".
+      - key: SNAPTRADE_ENVIRONMENT
+        value: production
+      # Where SnapTrade returns the operator after the hosted portal.
+      - key: SNAPTRADE_CALLBACK_URL
+        value: https://www.zenin.capital/app?section=portfolio
       # Sentry — error monitoring / performance / release tracking.
       # DSN + project/org are non-secret; auth token is secret (sync: false).
       - key: SENTRY_BACKEND_DSN

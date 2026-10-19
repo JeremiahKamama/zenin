@@ -4865,6 +4865,20 @@ const handleOptionTradeClosed = async (tradeId) => {
           }
         }
         if (!mounted) return;
+        // Distinguish "the backend says you are not signed in" from "the
+        // backend could not be reached". A 5xx/gateway error or a timeout is
+        // NOT evidence that the session is invalid, and treating it as such
+        // cleared the stored user and silently dropped a signed-in operator
+        // into guest mode (or bounced them to the auth gate) during a brief
+        // backend outage. On a transport failure, keep the cached identity and
+        // let the next reload re-probe.
+        const authProbeUnavailable = !res.ok && (
+          res.status === 0 || res.status >= 500 || res.status === 408 || res.status === 429
+        );
+        if (authProbeUnavailable && localStorage.getItem("zenin_auth_user")) {
+          setAccessCheckLoading(false);
+          return;
+        }
         if (!res.ok || !data?.authenticated || !data?.user) {
           if (!allowGuestAccess) {
             // Clear the boot gate before navigating away. Without this the
@@ -4946,6 +4960,13 @@ const handleOptionTradeClosed = async (tradeId) => {
         setAccessCheckLoading(false);
       } catch {
         if (!mounted) return;
+        // A thrown probe means the request never completed (network failure,
+        // timeout, CORS-less gateway error page). That is NOT proof the session
+        // is invalid, so keep the cached identity rather than discarding it.
+        if (localStorage.getItem("zenin_auth_user")) {
+          setAccessCheckLoading(false);
+          return;
+        }
         if (!allowGuestAccess) {
           // See note above: always release the boot gate, including on the
           // error path. A thrown auth probe must never strand the loader.
