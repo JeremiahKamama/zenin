@@ -21,7 +21,11 @@ const {
   isEmailDeliveryProductionReady,
   sendAdminLoginCodeEmail,
   sendPasswordResetEmail,
-  sendVerificationEmail
+  sendVerificationEmail,
+  // sendAlertEmail was fully implemented in email.js and exported, but never
+  // imported here — so no admin notification could be emailed by any code
+  // path. That is why the Settings toggles had nothing to drive.
+  sendAlertEmail
 } = require("./email");
 const { dispatchWorkspaceNotification } = require("./workspaceNotificationDispatcher");
 const cors = require("cors");
@@ -6936,6 +6940,141 @@ app.use("/api/admin/*", adminRateLimit);
 const ADMIN_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
 const ADMIN_LOGIN_MAX_ATTEMPTS = 5;
 
+/**
+ * Admin console notification settings — defaults and the delivery pipeline.
+ *
+ * The Settings page shipped with seven notification toggles wired to local
+ * React state. Nothing persisted them and nothing read them, so no admin
+ * notification email was ever sent. These are the defaults the stored document
+ * is merged over, and the keys the UI reads.
+ */
+const ADMIN_SETTINGS_DEFAULTS = Object.freeze({
+  // Notification categories. Each maps to a real event source below.
+  systemIncidentAlerts: true,
+  failedLoginAlerts: true,
+  billingNotices: true,
+  weeklySummary: false,
+  // Security posture.
+  enforceTwoFactor: true,
+  // Interface.
+  compactDensity: true,
+  emailAlerts: true
+});
+
+/**
+ * Which settings key gates which event category.
+ *
+ * A single `emailAlerts` master switch also gates everything, so turning it off
+ * silences the console without the admin having to clear each category and
+ * remember what they were.
+ */
+const ADMIN_NOTIFICATION_CATEGORY_KEYS = Object.freeze({
+  system: "systemIncidentAlerts",
+  security: "failedLoginAlerts",
+  billing: "billingNotices",
+  summary: "weeklySummary"
+});
+
+/** Read settings with defaults applied. Never throws — a settings outage must
+ *  not take down the incident or audit path that wanted to notify someone. */
+async function readAdminNotificationSettings() {
+  try {
+    const { settings } = await admin.getAdminSettings(ADMIN_SETTINGS_DEFAULTS);
+    return { ...ADMIN_SETTINGS_DEFAULTS, ...settings };
+  } catch (error) {
+    console.error("[AdminNotify] Could not read settings; using defaults:", error?.message || error);
+    return { ...ADMIN_SETTINGS_DEFAULTS };
+  }
+}
+
+/**
+ * Deliver one admin notification email to every subscribed recipient.
+ *
+ * Records a delivery row per recipient so "was this actually emailed?" is
+ * answerable after the fact. A send that fails silently was previously
+ * indistinguishable from one that was never attempted.
+ */
+async function dispatchAdminNotification({
+  category,
+  eventType,
+  subject,
+  title,
+  body,
+  severity = "info",
+  actionUrl,
+  metadata = {}
+} = {}) {
+  const normalizedCategory = String(category || "system").trim().toLowerCase();
+  const settings = await readAdminNotificationSettings();
+
+  // Master switch, then the per-category switch.
+  if (!settings.emailAlerts) {
+    return { sent: 0, skipped: "email_alerts_disabled" };
+  }
+  const gateKey = ADMIN_NOTIFICATION_CATEGORY_KEYS[normalizedCategory];
+  if (gateKey && settings[gateKey] === false) {
+    return { sent: 0, skipped: `${gateKey}_disabled` };
+  }
+
+  let recipients = [];
+  try {
+    recipients = await admin.listAdminNotificationRecipientsForCategory(normalizedCategory);
+  } catch (error) {
+    console.error("[AdminNotify] Could not load recipients:", error?.message || error);
+    return { sent: 0, skipped: "recipient_lookup_failed" };
+  }
+
+  if (!recipients.length) {
+    return { sent: 0, skipped: "no_recipients" };
+  }
+
+  const resolvedSubject = String(subject || title || "Zenin admin notification").slice(0, 140);
+  const results = [];
+
+  // Sequential rather than parallel: this is a handful of addresses, and a
+  // burst of concurrent sends is what trips provider rate limits.
+  for (const recipient of recipients) {
+    let delivery = null;
+    try {
+      delivery = await sendAlertEmail(recipient.email, {
+        type: normalizedCategory,
+        title: resolvedSubject,
+        body: String(body || title || "An event needs your attention.").slice(0, 1200),
+        severity,
+        workspaceName: "Zenin Admin",
+        actionUrl: actionUrl || process.env.ADMIN_APP_URL || "https://admin.zenin.capital"
+      });
+    } catch (error) {
+      delivery = { sent: false, error: { message: error?.message || String(error) } };
+    }
+
+    const sent = getEmailDeliverySent(delivery);
+    try {
+      await admin.recordAdminNotificationDelivery({
+        category: normalizedCategory,
+        eventType: eventType || null,
+        subject: resolvedSubject,
+        recipient: recipient.email,
+        status: sent ? "sent" : "failed",
+        provider: delivery?.provider || "resend",
+        providerMessageId: delivery?.providerMessageId || null,
+        error: sent ? null : delivery?.error?.message || "Unknown delivery failure",
+        payload: metadata
+      });
+    } catch (error) {
+      console.error("[AdminNotify] Could not record delivery:", error?.message || error);
+    }
+
+    results.push({ email: recipient.email, sent });
+  }
+
+  const sentCount = results.filter((row) => row.sent).length;
+  if (!sentCount) {
+    console.warn(`[AdminNotify] ${normalizedCategory}/${eventType || "event"} delivered to 0 of ${results.length} recipients.`);
+  }
+  return { sent: sentCount, attempted: results.length, results };
+}
+
 function resolveAdminLoginRecipient() {
   // Hardcoded on purpose. This is the ONE mailbox that can receive an admin
   // sign-in code, and the requirement is that it is always this address.
@@ -7096,6 +7235,22 @@ app.post("/api/admin/login/verify", adminLoginVerifyLimiter, async (req, res) =>
         eventType: "admin_login_code_invalid",
         context: { attempts }
       }).catch(() => null);
+
+      // Alert on the attempt that reaches the limit, not on every wrong digit:
+      // the point is to surface a credential-stuffing attempt against the
+      // console, and mailing on each typo would train the operator to ignore
+      // these. The counted attempt is included so the threshold is auditable.
+      if (Number(attempts) >= ADMIN_LOGIN_MAX_ATTEMPTS) {
+        void dispatchAdminNotification({
+          category: "security",
+          eventType: "admin_login_locked",
+          subject: "Admin console: repeated failed sign-in attempts",
+          body: `The admin console received ${attempts} incorrect sign-in codes and the active challenge is now locked.\n\nSource IP: ${resolveClientIp(req) || "unknown"}`,
+          severity: "critical",
+          metadata: { attempts, ipAddress: resolveClientIp(req) || null }
+        }).catch((error) => console.error("[AdminNotify] login alert failed:", error?.message || error));
+      }
+
       return apiError(res, 400, {
         error: "Invalid code",
         message: "That code is not correct. Check the email and try again.",
@@ -7580,6 +7735,217 @@ app.get("/api/admin/revenuecat/customers/lookup", requireAdmin, async (req, res)
   }
 });
 
+// ── Admin console settings ────────────────────────────────────────────────
+// The Settings page previously showed controls that wrote to local React
+// state only, so every change was lost on refresh and nothing read the values.
+// These routes give that page real storage.
+
+app.get("/api/admin/settings", requireAdmin, async (req, res) => {
+  try {
+    const stored = await admin.getAdminSettings(ADMIN_SETTINGS_DEFAULTS);
+    return res.json({
+      settings: stored.settings,
+      updatedAt: stored.updatedAt,
+      defaults: ADMIN_SETTINGS_DEFAULTS
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to load admin settings", error);
+  }
+});
+
+const adminSettingsSchema = z.object({
+  settings: z.record(z.string(), z.union([z.boolean(), z.number(), z.string()]))
+});
+
+app.patch("/api/admin/settings", requireAdmin, requireRecentAdminReauth, validate(adminSettingsSchema), async (req, res) => {
+  try {
+    const incoming = req.body.settings || {};
+    // Merge over what is stored rather than replacing: the console may be
+    // showing a subset of keys, and a partial save must not drop the rest.
+    const current = await admin.getAdminSettings(ADMIN_SETTINGS_DEFAULTS);
+    const next = { ...current.settings, ...incoming };
+
+    const result = await admin.saveAdminSettings(next, {
+      adminId: req.auth?.user?.id || 0,
+      defaults: ADMIN_SETTINGS_DEFAULTS
+    });
+
+    // Settings changes are security-relevant: turning off failed-login alerts
+    // changes what the operators will notice.
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: null,
+      action: "UPDATE_ADMIN_SETTINGS",
+      details: { changed: Object.keys(incoming), requestId: req.requestId },
+      ipAddress: resolveClientIp(req)
+    }).catch(() => null);
+
+    return res.json({ success: true, settings: result.settings, updatedAt: result.updatedAt });
+  } catch (error) {
+    return handleServerError(res, "Failed to save admin settings", error);
+  }
+});
+
+// ── Admin notification recipients ─────────────────────────────────────────
+
+app.get("/api/admin/notification-recipients", requireAdmin, async (req, res) => {
+  try {
+    const recipients = await admin.listAdminNotificationRecipients();
+    const deliveries = await admin.listAdminNotificationDeliveries({ limit: 25 });
+    return res.json({ recipients, deliveries });
+  } catch (error) {
+    return handleServerError(res, "Failed to load notification recipients", error);
+  }
+});
+
+const adminRecipientSchema = z.object({
+  email: z.string().trim().email(),
+  label: z.string().trim().max(120).optional(),
+  categories: z.array(z.enum(["system", "security", "billing", "summary"])).optional()
+});
+
+app.post("/api/admin/notification-recipients", requireAdmin, requireRecentAdminReauth, validate(adminRecipientSchema), async (req, res) => {
+  try {
+    const created = await admin.addAdminNotificationRecipient({
+      email: req.body.email,
+      label: req.body.label,
+      categories: req.body.categories,
+      adminId: req.auth?.user?.id || 0
+    });
+
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: null,
+      action: "ADD_NOTIFICATION_RECIPIENT",
+      details: { email: req.body.email, categories: req.body.categories || null, requestId: req.requestId },
+      ipAddress: resolveClientIp(req)
+    }).catch(() => null);
+
+    return res.json({ success: true, recipient: created });
+  } catch (error) {
+    return handleServerError(res, "Failed to add notification recipient", error);
+  }
+});
+
+const adminRecipientUpdateSchema = z.object({
+  label: z.string().trim().max(120).nullable().optional(),
+  categories: z.array(z.enum(["system", "security", "billing", "summary"])).optional(),
+  isActive: z.boolean().optional()
+});
+
+app.patch("/api/admin/notification-recipients/:id", requireAdmin, requireRecentAdminReauth, validate(adminRecipientUpdateSchema), async (req, res) => {
+  try {
+    const updated = await admin.updateAdminNotificationRecipient(req.params.id, req.body);
+    if (!updated) {
+      return apiError(res, 404, {
+        error: "Recipient not found",
+        message: "That notification recipient no longer exists.",
+        code: "RECIPIENT_NOT_FOUND",
+        retryable: false
+      });
+    }
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: null,
+      action: "UPDATE_NOTIFICATION_RECIPIENT",
+      details: { id: updated.id, changed: Object.keys(req.body || {}), requestId: req.requestId },
+      ipAddress: resolveClientIp(req)
+    }).catch(() => null);
+    return res.json({ success: true, recipient: updated });
+  } catch (error) {
+    return handleServerError(res, "Failed to update notification recipient", error);
+  }
+});
+
+app.delete("/api/admin/notification-recipients/:id", requireAdmin, requireRecentAdminReauth, async (req, res) => {
+  try {
+    const removed = await admin.removeAdminNotificationRecipient(req.params.id);
+    if (!removed) {
+      return apiError(res, 404, {
+        error: "Recipient not found",
+        message: "That notification recipient no longer exists.",
+        code: "RECIPIENT_NOT_FOUND",
+        retryable: false
+      });
+    }
+    await admin.logAdminAction({
+      adminId: req.auth?.user?.id || 0,
+      targetUserId: null,
+      action: "REMOVE_NOTIFICATION_RECIPIENT",
+      details: { id: Number(req.params.id), requestId: req.requestId },
+      ipAddress: resolveClientIp(req)
+    }).catch(() => null);
+    return res.json({ success: true });
+  } catch (error) {
+    return handleServerError(res, "Failed to remove notification recipient", error);
+  }
+});
+
+// A real send, so the admin can prove delivery works end to end instead of
+// trusting a toggle. Idempotent in effect: it sends one clearly-labelled email.
+app.post("/api/admin/notification-recipients/test", requireAdmin, requireRecentAdminReauth, async (req, res) => {
+  try {
+    const settings = await readAdminNotificationSettings();
+    // The test deliberately bypasses the per-category gate (the point is to
+    // verify transport) but still reports whether the gate would have blocked
+    // a real notification, so the admin is not misled.
+    const recipients = await admin.listAdminNotificationRecipients();
+    const active = recipients.filter((row) => row.isActive);
+    if (!active.length) {
+      return apiError(res, 400, {
+        error: "No notification recipients",
+        message: "Add at least one recipient before sending a test.",
+        code: "NO_NOTIFICATION_RECIPIENTS",
+        retryable: false
+      });
+    }
+
+    const results = [];
+    for (const recipient of active) {
+      let delivery = null;
+      try {
+        delivery = await sendAlertEmail(recipient.email, {
+          type: "test",
+          title: "Zenin admin test notification",
+          body: "This is a test from the Zenin admin console. If you received it, notification email is working.",
+          severity: "info",
+          workspaceName: "Zenin Admin",
+          actionUrl: process.env.ADMIN_APP_URL || "https://admin.zenin.capital"
+        });
+      } catch (error) {
+        delivery = { sent: false, error: { message: error?.message || String(error) } };
+      }
+      const sent = getEmailDeliverySent(delivery);
+      await admin.recordAdminNotificationDelivery({
+        category: "test",
+        eventType: "admin_test",
+        subject: "Zenin admin test notification",
+        recipient: recipient.email,
+        status: sent ? "sent" : "failed",
+        provider: delivery?.provider || "resend",
+        providerMessageId: delivery?.providerMessageId || null,
+        error: sent ? null : delivery?.error?.message || "Unknown delivery failure",
+        payload: { initiatedBy: req.auth?.user?.id || null }
+      }).catch(() => null);
+      results.push({ email: recipient.email, sent, error: sent ? null : delivery?.error?.message || null });
+    }
+
+    const sentCount = results.filter((row) => row.sent).length;
+    return res.json({
+      success: true,
+      sent: sentCount,
+      attempted: results.length,
+      results,
+      // Surface the gate state so a passing test is not mistaken for
+      // "notifications are enabled" when the category is switched off.
+      emailAlertsEnabled: settings.emailAlerts !== false,
+      deliveryConfigured: isEmailDeliveryProductionReady()
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to send test notification", error);
+  }
+});
+
 app.get("/api/admin/alerts", requireAdmin, async (req, res) => {
   try {
     const status = String(req.query?.status || "").trim().toLowerCase() || null;
@@ -8007,6 +8373,17 @@ app.post("/api/admin/incidents", requireAdmin, requireRecentAdminReauth, async (
       },
       ipAddress: resolveClientIp(req)
     });
+
+    // Notify the operator mailbox. Fire-and-forget: the incident is already
+    // recorded, and a mail failure must not fail the request that raised it.
+    void dispatchAdminNotification({
+      category: "system",
+      eventType: "incident_created",
+      subject: `Incident: ${title}`,
+      body: `${title}\n\nSeverity: ${severity}\nReason: ${reason}`,
+      severity,
+      metadata: { incidentId: incident.id, sourceLogId, requestId }
+    }).catch((error) => console.error("[AdminNotify] incident dispatch failed:", error?.message || error));
 
     return res.status(201).json({ success: true, incident });
   } catch (error) {

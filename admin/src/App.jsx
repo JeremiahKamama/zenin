@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Users from 'lucide-react/dist/esm/icons/users.mjs';
 import Menu from 'lucide-react/dist/esm/icons/menu.mjs';
 import SettingsIcon from 'lucide-react/dist/esm/icons/settings.mjs';
@@ -23,6 +23,8 @@ import Clock from 'lucide-react/dist/esm/icons/clock.mjs';
 import { avatarInitials } from './utils/initials';
 import { normalizePlanId, planLabel, planOptionLabel, PLANS } from './utils/plans';
 import PlanChangeModal from './components/PlanChangeModal';
+import RecipientManagerModal from './components/RecipientManagerModal';
+import ActionPromptModal from './components/ActionPromptModal';
 import { pluralize } from './utils/pluralize';
 import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right.mjs';
 import ArrowDownRight from 'lucide-react/dist/esm/icons/arrow-down-right.mjs';
@@ -580,7 +582,36 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
   const recentActivity = details?.recentActivity || [];
   const revenueCat = details?.revenueCat || null;
 
-  const requestReason = (label) => window.prompt(`Reason for ${label.toLowerCase()}:`, '')?.trim();
+  /**
+   * Collect an audit reason through the shared dialog instead of window.prompt.
+   *
+   * The native prompt showed only a label, so the operator typed a
+   * justification without being able to see which account, plan, or session
+   * count they were acting on. `context` renders those facts beside the field.
+   *
+   * Returns the reason string, or null when dismissed — callers must treat
+   * null as "do not proceed", which is what `if (!reason) return;` expresses.
+   */
+  const requestReason = async ({ title, description, context = [], confirmLabel = 'Confirm', tone = 'neutral' }) => {
+    const values = await adminUi.promptAction?.({
+      title,
+      description,
+      tone,
+      confirmLabel,
+      context,
+      fields: [{
+        name: 'reason',
+        label: 'Reason',
+        kind: 'textarea',
+        placeholder: 'Recorded in the audit trail',
+        maxLength: 500,
+        minLength: 10,
+        required: true,
+        help: 'This is stored against the action and is what a future investigator will read.'
+      }]
+    });
+    return values?.reason ?? null;
+  };
 
   const submitPlanChange = async ({ plan, reason }) => {
     setPlanModal((prev) => (prev ? { ...prev, busy: true, error: '' } : prev));
@@ -651,10 +682,20 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                 <select
                   className="filter-select"
                   value={resolvedUser.adminRole || 'user'}
-                  onChange={(e) => {
-                    const reason = requestReason(`updating ${resolvedUser.email} role`);
+                  onChange={async (e) => {
+                    const nextRole = e.target.value;
+                    const reason = await requestReason({
+                      title: 'Change admin role',
+                      description: 'This changes what the account can do in this console.',
+                      confirmLabel: 'Change role',
+                      context: [
+                        { label: 'Account', value: resolvedUser.email },
+                        { label: 'Current role', value: formatAdminRoleLabel(resolvedUser.adminRole || 'user') },
+                        { label: 'New role', value: formatAdminRoleLabel(nextRole) }
+                      ]
+                    });
                     if (!reason) return;
-                    onUpdate(resolvedUser.id, 'role', e.target.value, reason).catch(() => {});
+                    onUpdate(resolvedUser.id, 'role', nextRole, reason).catch(() => {});
                   }}
                   style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '6px', fontSize: '12px' }}
                 >
@@ -796,8 +837,17 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
               <button 
                 className="btn btn-secondary" 
                 style={{ flex: 1, gap: '8px', fontSize: '13px', height: '38px' }}
-                onClick={() => {
-                  const reason = requestReason(`resetting password for ${resolvedUser.email}`);
+                onClick={async () => {
+                  const reason = await requestReason({
+                    title: 'Send a password reset',
+                    description: 'Emails the account holder a single-use reset link.',
+                    confirmLabel: 'Send reset link',
+                    context: [
+                      { label: 'Account', value: resolvedUser.email },
+                      { label: 'Plan', value: formatPlanLabel(resolvedUser.plan) },
+                      { label: 'Active sessions', value: String(resolvedUser.activeSessionCount ?? 0) }
+                    ]
+                  });
                   if (!reason) return;
                   onResetPassword(resolvedUser.id, reason);
                 }}
@@ -807,8 +857,18 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
               <button 
                 className="btn btn-secondary" 
                 style={{ flex: 1, gap: '8px', fontSize: '13px', height: '38px' }}
-                onClick={() => {
-                  const reason = requestReason(`revoking all sessions for ${resolvedUser.email}`);
+                onClick={async () => {
+                  const reason = await requestReason({
+                    title: 'Revoke all sessions',
+                    description: 'Signs the account out everywhere. Use this when a session may be compromised.',
+                    confirmLabel: 'Revoke sessions',
+                    tone: 'danger',
+                    context: [
+                      { label: 'Account', value: resolvedUser.email },
+                      { label: 'Sessions to end', value: String(resolvedUser.activeSessionCount ?? 0) },
+                      { label: 'Last seen', value: formatRelativeTime(resolvedUser.lastSeenAt) }
+                    ]
+                  });
                   if (!reason) return;
                   onRevokeSessions(resolvedUser.id, reason);
                 }}
@@ -828,8 +888,23 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                   border: resolvedUser.suspendedAt ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(239, 68, 68, 0.2)', 
                   color: resolvedUser.suspendedAt ? 'var(--success)' : 'var(--danger)' 
                 }}
-                onClick={() => {
-                  const reason = requestReason(`${resolvedUser.suspendedAt ? 'reactivating' : 'suspending'} ${resolvedUser.email}`);
+                onClick={async () => {
+                  const reason = await requestReason({
+                    title: resolvedUser.suspendedAt ? 'Reactivate this account' : 'Suspend this account',
+                    description: resolvedUser.suspendedAt
+                      ? 'Restores access immediately.'
+                      : 'Blocks sign-in immediately. The account and its data are kept.',
+                    confirmLabel: resolvedUser.suspendedAt ? 'Reactivate' : 'Suspend',
+                    tone: resolvedUser.suspendedAt ? 'neutral' : 'danger',
+                    context: [
+                      { label: 'Account', value: resolvedUser.email },
+                      { label: 'Plan', value: formatPlanLabel(resolvedUser.plan) },
+                      {
+                        label: 'Suspended since',
+                        value: resolvedUser.suspendedAt ? formatRelativeTime(resolvedUser.suspendedAt) : 'Not suspended'
+                      }
+                    ]
+                  });
                   if (!reason) return;
                   onUpdate(resolvedUser.id, 'suspend', !resolvedUser.suspendedAt, reason).catch(() => {});
                 }}
@@ -840,8 +915,18 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
               <button 
                 className="btn btn-danger" 
                 style={{ flex: 0.5, gap: '8px', height: '38px', fontSize: '13px' }}
-                onClick={() => {
-                  const reason = requestReason(`deleting ${resolvedUser.email}`);
+                onClick={async () => {
+                  const reason = await requestReason({
+                    title: `Permanently delete ${resolvedUser.email}`,
+                    description: 'This cannot be undone. The account and its associated data are removed.',
+                    confirmLabel: 'Continue to delete',
+                    tone: 'danger',
+                    context: [
+                      { label: 'Account', value: resolvedUser.email },
+                      { label: 'Plan', value: formatPlanLabel(resolvedUser.plan) },
+                      { label: 'Joined', value: formatRelativeTime(resolvedUser.joined || resolvedUser.createdAt) }
+                    ]
+                  });
                   if (!reason) return;
                   onUpdate(resolvedUser.id, 'delete', true, reason).catch(() => {});
                 }}
@@ -1394,8 +1479,20 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
     setSelectedIds((prev) => prev.includes(userId) ? prev.filter((entry) => entry !== userId) : [...prev, userId]);
   };
 
-  const saveCurrentView = () => {
-    const name = window.prompt('Name this saved user view:', '');
+  const saveCurrentView = async () => {
+    const saved = await adminUi.promptAction({
+      title: 'Save this user view',
+      description: 'Stores the current filters and columns so you can return to them.',
+      confirmLabel: 'Save view',
+      fields: [{
+        name: 'name',
+        label: 'View name',
+        placeholder: 'e.g. Suspended premium accounts',
+        maxLength: 60,
+        required: true
+      }]
+    });
+    const name = saved?.name;
     if (!name) return;
     setSavedViews((prev) => [...prev.filter((entry) => entry.name !== name), { name, searchQuery, planFilter, statusFilter, roleFilter }]);
   };
@@ -1407,9 +1504,28 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
     setRoleFilter(view.roleFilter || 'all');
   };
 
-  const runBulkAction = (action, value = null) => {
+  const runBulkAction = async (action, value = null) => {
     if (!selectedIds.length) return;
-    const reason = window.prompt(`Reason for ${action.replace(/_/g, ' ')} on ${selectedIds.length} selected user(s):`, '');
+    const bulkValues = await adminUi.promptAction({
+      title: `Bulk action: ${String(action).replace(/_/g, ' ')}`,
+      description: 'This applies to every selected account. The reason is recorded once for the batch.',
+      tone: 'danger',
+      confirmLabel: 'Apply to selection',
+      context: [
+        { label: 'Accounts selected', value: String(selectedIds.length) },
+        { label: 'Action', value: String(action).replace(/_/g, ' ') }
+      ],
+      fields: [{
+        name: 'reason',
+        label: 'Reason',
+        kind: 'textarea',
+        placeholder: 'Recorded against all selected accounts',
+        maxLength: 500,
+        minLength: 10,
+        required: true
+      }]
+    });
+    const reason = bulkValues?.reason;
     if (!reason) return;
     onBulkAction({ action, userIds: selectedIds, value, reason });
     setSelectedIds([]);
@@ -1811,8 +1927,20 @@ const AuditTrailView = ({ auditData, onSelectEvent, onOpenUser, seedQuery = '' }
     return matchesSearch && matchesSeverity;
   });
 
-  const saveCurrentView = () => {
-    const name = window.prompt('Name this saved audit view:', '');
+  const saveCurrentView = async () => {
+    const savedAudit = await adminUi.promptAction({
+      title: 'Save this audit view',
+      description: 'Stores the current audit filters for quick reuse.',
+      confirmLabel: 'Save view',
+      fields: [{
+        name: 'name',
+        label: 'View name',
+        placeholder: 'e.g. Plan changes this week',
+        maxLength: 60,
+        required: true
+      }]
+    });
+    const name = savedAudit?.name;
     if (!name) return;
     setSavedViews((prev) => [...prev.filter((entry) => entry.name !== name), { name, query, severityFilter }]);
   };
@@ -2344,8 +2472,20 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
     return matchesSearch && matchesLevel && matchesService;
   });
 
-  const saveCurrentView = () => {
-    const name = window.prompt('Name this saved log view:', '');
+  const saveCurrentView = async () => {
+    const savedLog = await adminUi.promptAction({
+      title: 'Save this log view',
+      description: 'Stores the current log filters for quick reuse.',
+      confirmLabel: 'Save view',
+      fields: [{
+        name: 'name',
+        label: 'View name',
+        placeholder: 'e.g. Critical errors today',
+        maxLength: 60,
+        required: true
+      }]
+    });
+    const name = savedLog?.name;
     if (!name) return;
     setSavedViews((prev) => [...prev.filter((entry) => entry.name !== name), { name, query, levelFilter, serviceFilter }]);
   };
@@ -2575,6 +2715,16 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
   );
 };
 
+const ADMIN_SETTINGS_FALLBACK = {
+  compactDensity: true,
+  enforceTwoFactor: true,
+  emailAlerts: true,
+  systemIncidentAlerts: true,
+  failedLoginAlerts: true,
+  billingNotices: true,
+  weeklySummary: false,
+};
+
 const SettingsView = ({ onRevokeAllSessions }) => {
   const adminUi = useAdminUi();
   const [theme, setTheme] = useState('dark');
@@ -2582,19 +2732,175 @@ const SettingsView = ({ onRevokeAllSessions }) => {
     const root = document.documentElement;
     root.classList.toggle('light-theme-active', theme === 'light');
   }, [theme]);
-  const [settingsDraft, setSettingsDraft] = useState({
-    compactDensity: true,
-    enforceTwoFactor: true,
-    emailAlerts: true,
-    systemIncidentAlerts: true,
-    failedLoginAlerts: true,
-    billingNotices: true,
-    weeklySummary: true,
-  });
+
+  // These toggles were local React state only. Nothing persisted them and
+  // nothing read them, so every change was lost on refresh and — critically —
+  // the notification switches controlled no delivery whatsoever.
+  const [settingsDraft, setSettingsDraft] = useState(ADMIN_SETTINGS_FALLBACK);
+  const [savedSettings, setSavedSettings] = useState(ADMIN_SETTINGS_FALLBACK);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsNotice, setSettingsNotice] = useState('');
+  const [recipients, setRecipients] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
+  const [recipientsLoading, setRecipientsLoading] = useState(false);
+  const [recipientsBusy, setRecipientsBusy] = useState(false);
+  const [recipientsError, setRecipientsError] = useState('');
+  const [recipientsOpen, setRecipientsOpen] = useState(false);
+
+  const loadSettings = useCallback(async () => {
+    setSettingsLoading(true);
+    setSettingsError('');
+    try {
+      const payload = await adminFetch('/admin/settings');
+      const next = { ...ADMIN_SETTINGS_FALLBACK, ...(payload?.settings || {}) };
+      setSettingsDraft(next);
+      setSavedSettings(next);
+    } catch (error) {
+      setSettingsError(error?.message || 'Could not load settings.');
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, []);
+
+  const loadRecipients = useCallback(async () => {
+    setRecipientsLoading(true);
+    setRecipientsError('');
+    try {
+      const payload = await adminFetch('/admin/notification-recipients');
+      setRecipients(Array.isArray(payload?.recipients) ? payload.recipients : []);
+      setDeliveries(Array.isArray(payload?.deliveries) ? payload.deliveries : []);
+    } catch (error) {
+      setRecipientsError(error?.message || 'Could not load recipients.');
+    } finally {
+      setRecipientsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSettings();
+    void loadRecipients();
+  }, [loadSettings, loadRecipients]);
 
   const toggleSetting = (key) => {
     setSettingsDraft((prev) => ({ ...prev, [key]: !prev[key] }));
+    setSettingsNotice('');
   };
+
+  const dirtyKeys = useMemo(
+    () => Object.keys(settingsDraft).filter((key) => settingsDraft[key] !== savedSettings[key]),
+    [settingsDraft, savedSettings]
+  );
+
+  const saveSettings = useCallback(async () => {
+    if (!dirtyKeys.length) {
+      adminUi.showToast('Nothing to save.', 'No settings have changed.');
+      return;
+    }
+    setSettingsSaving(true);
+    setSettingsError('');
+    try {
+      const payload = {};
+      dirtyKeys.forEach((key) => {
+        payload[key] = settingsDraft[key];
+      });
+      const result = await adminFetch('/admin/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ settings: payload })
+      });
+      const next = { ...ADMIN_SETTINGS_FALLBACK, ...(result?.settings || {}) };
+      setSettingsDraft(next);
+      setSavedSettings(next);
+      setSettingsNotice(
+        `Saved ${dirtyKeys.length} ${dirtyKeys.length === 1 ? 'change' : 'changes'}. These now affect live delivery.`
+      );
+    } catch (error) {
+      setSettingsError(error?.message || 'Could not save settings.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [adminUi, dirtyKeys, settingsDraft]);
+
+  const addRecipient = useCallback(
+    async ({ email, label, categories }) => {
+      setRecipientsBusy(true);
+      setRecipientsError('');
+      try {
+        await adminFetch('/admin/notification-recipients', {
+          method: 'POST',
+          body: JSON.stringify({ email, label, categories })
+        });
+        await loadRecipients();
+      } catch (error) {
+        setRecipientsError(error?.message || 'Could not add that recipient.');
+      } finally {
+        setRecipientsBusy(false);
+      }
+    },
+    [loadRecipients]
+  );
+
+  const updateRecipient = useCallback(
+    async (id, patch) => {
+      setRecipientsBusy(true);
+      setRecipientsError('');
+      // Optimistic: the chip is a toggle and waiting for a round trip makes it
+      // feel unresponsive. Reverted by the reload if the write fails.
+      setRecipients((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+      try {
+        await adminFetch(`/admin/notification-recipients/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(patch)
+        });
+        await loadRecipients();
+      } catch (error) {
+        setRecipientsError(error?.message || 'Could not update that recipient.');
+        await loadRecipients();
+      } finally {
+        setRecipientsBusy(false);
+      }
+    },
+    [loadRecipients]
+  );
+
+  const removeRecipient = useCallback(
+    async (recipient) => {
+      const removal = await adminUi.promptAction({
+        title: `Remove ${recipient.email}`,
+        description: 'This address will stop receiving admin notification email.',
+        tone: 'danger',
+        confirmLabel: 'Remove recipient',
+        fields: [{
+          name: 'reason',
+          label: 'Reason',
+          kind: 'textarea',
+          placeholder: 'e.g. Moved to a distribution list',
+          maxLength: 500,
+          minLength: 10,
+          required: true
+        }]
+      });
+      if (!removal) return;
+      setRecipientsBusy(true);
+      setRecipientsError('');
+      try {
+        await adminFetch(`/admin/notification-recipients/${recipient.id}`, { method: 'DELETE' });
+        await loadRecipients();
+      } catch (error) {
+        setRecipientsError(error?.message || 'Could not remove that recipient.');
+      } finally {
+        setRecipientsBusy(false);
+      }
+    },
+    [loadRecipients]
+  );
+
+  const sendTestNotification = useCallback(async () => {
+    const result = await adminFetch('/admin/notification-recipients/test', { method: 'POST' });
+    await loadRecipients();
+    return result;
+  }, [loadRecipients]);
 
   return (
   <div className="fade-in">
@@ -2612,7 +2918,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
             <div style={{ width: '80px', height: '80px', borderRadius: '12px', background: 'var(--bg-app)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px auto' }}>
               <Shield size={32} color="var(--accent)" />
             </div>
-            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '11px', padding: '6px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Logo uploader opened.', 'Asset uploads can be connected here without changing the settings layout.')}>Change Logo</button>
+            <button className="btn btn-secondary" style={{ width: '100%', fontSize: '11px', padding: '6px', height: '32px' }} disabled title="Not yet available: no asset storage is configured for organisation branding.">Change Logo</button>
             <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>PNG, JPG or SVG Max 2MB</p>
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -2750,7 +3056,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <Users size={16} color="var(--text-muted)" />
               <span style={{ fontSize: '13px' }}>Role Permissions</span>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Role editor opened.', 'The permissions matrix can be layered in here next.')}>Manage Roles</button>
+            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px', height: '32px' }} disabled title="Not yet available: admin roles are currently fixed (user, admin, owner) and set per user on the Users tab.">Manage Roles</button>
           </div>
         </div>
       </div>
@@ -2780,7 +3086,13 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <Toggle active={settingsDraft[item.key]} onClick={() => toggleSetting(item.key)} />
             </div>
           ))}
-          <button className="btn btn-secondary" style={{ width: '100%', marginTop: '8px', height: '38px', fontSize: '12px', color: 'var(--accent)', borderColor: 'var(--accent-soft)' }} onClick={() => adminUi.showPlaceholder('Recipient manager opened.', 'Notification recipients can be connected here without changing the surrounding settings flow.')}>Manage Notification Recipients</button>
+          <button
+            className="btn btn-secondary"
+            style={{ width: '100%', marginTop: '8px', height: '38px', fontSize: '12px', color: 'var(--accent)', borderColor: 'var(--accent-soft)' }}
+            onClick={() => setRecipientsOpen(true)}
+          >
+            Manage Notification Recipients{recipients.filter((r) => r.isActive).length ? ` (${recipients.filter((r) => r.isActive).length})` : ''}
+          </button>
         </div>
       </div>
 
@@ -2799,7 +3111,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>View and manage API keys</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('API key manager opened.', 'Key rotation and scoped permissions can be wired in here next.')}>Manage Keys</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} disabled title="Not yet available: this console authenticates with your admin session; no service API keys are issued yet.">Manage Keys</button>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2819,7 +3131,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Secret rotation requested.', 'This is ready for a provider-backed webhook secret rotation flow.')}>Rotate Secret</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', height: '32px' }} disabled title="Not yet available: no outbound webhook signing secret is provisioned yet.">Rotate Secret</button>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2861,7 +3173,18 @@ const SettingsView = ({ onRevokeAllSessions }) => {
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Download a copy of your workspace data</p>
               </div>
             </div>
-            <button className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Workspace export requested.', 'This is a safe placeholder until a signed export job endpoint is connected.')}>Export Data</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 16px', fontSize: '12px', height: '32px' }} onClick={() => adminUi.downloadJson(
+              `zenin-admin-settings-${new Date().toISOString().slice(0, 10)}.json`,
+              {
+                exportedAt: new Date().toISOString(),
+                settings: savedSettings,
+                unsavedChanges: dirtyKeys,
+                notificationRecipients: recipients,
+                recentDeliveries: deliveries
+              },
+              'Configuration exported.',
+              'Your console settings, recipients, and recent delivery log were downloaded as JSON.'
+            )}>Export Configuration</button>
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -2899,7 +3222,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Temporarily deactivate this workspace.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Workspace deactivation is guarded.', 'Add a confirmation workflow here when you are ready to support destructive admin actions.')}>Deactivate</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} disabled title="Intentionally unavailable: deactivating the whole workspace is destructive and has no confirmation workflow yet. Suspend individual users on the Users tab instead.">Deactivate</button>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
@@ -2909,7 +3232,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Permanently delete all sandbox data.</p>
             </div>
           </div>
-          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} onClick={() => adminUi.showPlaceholder('Sandbox reset is intentionally blocked here.', 'Hook this up only when you have a multi-step confirmation and audit trail in place.')}>Reset Sandbox</button>
+          <button className="btn" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', color: 'var(--danger)', background: 'transparent', fontSize: '11px', padding: '6px 12px', height: '32px' }} disabled title="Intentionally unavailable: resetting a sandbox would destroy data, and no confirmation workflow or audit trail exists for it yet.">Reset Sandbox</button>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
@@ -2934,10 +3257,34 @@ const SettingsView = ({ onRevokeAllSessions }) => {
         </div>
       </div>
       <div style={{ display: 'flex', gap: '16px' }}>
-        <button className="btn btn-secondary" style={{ width: '120px' }} onClick={() => adminUi.showPlaceholder('Draft reset skipped.', 'The settings on this page are still local until the persistence endpoint is added.')}>Cancel</button>
-        <button className="btn btn-primary" style={{ width: '180px' }} onClick={() => adminUi.showPlaceholder('Settings saved locally.', 'This refactor keeps the controls responsive and ready for API persistence.')}>Save All Changes</button>
+        <button className="btn btn-secondary" style={{ width: '120px' }} onClick={() => { setSettingsDraft(savedSettings); setSettingsNotice(''); setSettingsError(''); }} disabled={settingsSaving || !dirtyKeys.length}>Discard Changes</button>
+        <button className="btn btn-primary" style={{ width: '180px' }} onClick={saveSettings} disabled={settingsSaving || settingsLoading}>{settingsSaving ? 'Saving…' : dirtyKeys.length ? `Save ${dirtyKeys.length} Change${dirtyKeys.length === 1 ? '' : 's'}` : 'Save All Changes'}</button>
       </div>
     </div>
+
+    {settingsError ? (
+      <p className="modal-error" role="alert" style={{ marginTop: '16px' }}>{settingsError}</p>
+    ) : null}
+    {settingsNotice ? (
+      <p className="settings-saved" role="status" style={{ marginTop: '16px' }}>{settingsNotice}</p>
+    ) : null}
+    {settingsLoading ? (
+      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '12px' }}>Loading settings…</p>
+    ) : null}
+
+    <RecipientManagerModal
+      open={recipientsOpen}
+      onClose={() => setRecipientsOpen(false)}
+      recipients={recipients}
+      deliveries={deliveries}
+      loading={recipientsLoading}
+      busy={recipientsBusy}
+      error={recipientsError}
+      onAdd={addRecipient}
+      onUpdate={updateRecipient}
+      onRemove={removeRecipient}
+      onSendTest={sendTestNotification}
+    />
   </div>
   );
 };
@@ -3089,6 +3436,12 @@ export default function App() {
   // (retry is reasonable) from a 403 (retrying can never help).
   const [errorStatus, setErrorStatus] = useState(0);
   const [toasts, setToasts] = useState([]);
+  // Imperative dialog state backing adminUi.promptAction. A ref holds the
+  // promise resolver so awaiting callers resume exactly where they paused.
+  const [promptSpec, setPromptSpec] = useState(null);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptError, setPromptError] = useState('');
+  const promptResolverRef = useRef(null);
 
   const dismissToast = (id) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
@@ -3123,6 +3476,31 @@ export default function App() {
     notify('success', successTitle, successMessage);
   };
 
+  /**
+   * Ask the admin for input with a real dialog.
+   *
+   * Replaces every `window.prompt`. The native prompt is blocking (it freezes
+   * the JS thread, stalling any in-flight request), unstylable, incapable of
+   * showing the context the admin needs to answer well, and silently
+   * return-null-able once a browser suppresses further dialogs — after which
+   * the action appears to do nothing at all.
+   *
+   * Returns a promise resolving to the field values, or null if dismissed.
+   */
+  const promptAction = useCallback((spec) => {
+    return new Promise((resolve) => {
+      promptResolverRef.current = resolve;
+      setPromptSpec(spec);
+    });
+  }, []);
+
+  const closePrompt = useCallback((result = null) => {
+    setPromptSpec(null);
+    const resolve = promptResolverRef.current;
+    promptResolverRef.current = null;
+    if (resolve) resolve(result);
+  }, []);
+
   const showPlaceholder = (title, message) => {
     notify('info', title, message);
   };
@@ -3133,6 +3511,7 @@ export default function App() {
     downloadJson,
     downloadCsv,
     showPlaceholder,
+    promptAction,
   }), [notify, copyText, downloadJson, downloadCsv]);
 
   const checkAuth = async () => {
@@ -3351,7 +3730,20 @@ export default function App() {
       if (Number(error?.status) !== 428 || error?.code !== 'ADMIN_REAUTH_REQUIRED') {
         throw error;
       }
-      const currentPassword = window.prompt('Confirm your admin password to continue:', '')?.trim();
+      const reauthValues = await adminUi.promptAction({
+        title: 'Confirm your password',
+        description: 'This action requires you to re-authenticate. Your session was last confirmed a while ago.',
+        confirmLabel: 'Confirm',
+        fields: [{
+          name: 'password',
+          label: 'Admin password',
+          type: 'password',
+          autoComplete: 'current-password',
+          required: true,
+          help: 'Bounded re-authentication: you will not be asked again for 15 minutes.'
+        }]
+      });
+      const currentPassword = reauthValues?.password?.trim();
       if (!currentPassword) {
         throw new Error('Admin confirmation is required to continue.');
       }
@@ -3390,7 +3782,28 @@ export default function App() {
         }));
         notify('success', value ? 'User suspended.' : 'User reactivated.', value ? 'The account has been suspended.' : 'The account is active again.');
       } else if (type === 'delete') {
-        if (!window.confirm('Are you sure you want to permanently delete this user?')) return;
+        // Typed confirmation rather than window.confirm. A confirm dialog is
+        // dismissed reflexively — it is one click and most people do not read
+        // it — and this is irreversible.
+        const typed = await adminUi.promptAction({
+          title: 'Permanently delete this account',
+          description: 'The account and its associated data are removed. This cannot be undone.',
+          tone: 'danger',
+          confirmLabel: 'Delete account',
+          context: [
+            { label: 'Account', value: userId },
+            { label: 'Reason recorded', value: reason || '—' }
+          ],
+          fields: [{
+            name: 'confirmation',
+            label: 'Type DELETE to confirm',
+            placeholder: 'DELETE',
+            required: true,
+            validateLiteral: 'DELETE',
+            validateLiteralMessage: 'Type DELETE exactly — this action cannot be undone.'
+          }]
+        });
+        if (!typed) return;
         await withAdminReauth(() => adminFetch(`/users/${userId}`, { method: 'DELETE', body: JSON.stringify({ reason }) }));
         setIsPanelOpen(false);
         setSelectedUser(null);
@@ -3440,7 +3853,22 @@ export default function App() {
 
   const runMigration = async () => {
     try {
-      const reason = window.prompt('Reason for running the admin workspace migration:', '')?.trim();
+      const migrationValues = await adminUi.promptAction({
+        title: 'Run the admin workspace migration',
+        description: 'Rewrites workspace records. This is not reversible without a database backup.',
+        tone: 'danger',
+        confirmLabel: 'Run migration',
+        fields: [{
+          name: 'reason',
+          label: 'Reason',
+          kind: 'textarea',
+          placeholder: 'e.g. Aligning legacy desks after the tier rename',
+          maxLength: 500,
+          minLength: 10,
+          required: true
+        }]
+      });
+      const reason = migrationValues?.reason?.trim();
       if (!reason) return;
       await adminFetch('/migrations/admin-workspace', { method: 'POST', body: JSON.stringify({ reason }) });
       notify('success', 'Migration successful.', 'The admin workspace migration completed successfully.');
@@ -3451,7 +3879,27 @@ export default function App() {
   };
 
   const handleAddUser = async (userData) => {
-    const reason = window.prompt(`Reason for creating ${userData.email}:`, '')?.trim();
+    const createValues = await adminUi.promptAction({
+      title: 'Create this account',
+      description: 'The address receives a sign-in code and can access the platform immediately.',
+      confirmLabel: 'Create account',
+      context: [
+        { label: 'Email', value: userData.email },
+        { label: 'Name', value: userData.name || '—' },
+        { label: 'Plan', value: formatPlanLabel(userData.plan) },
+        { label: 'Role', value: formatAdminRoleLabel(userData.adminRole || 'user') }
+      ],
+      fields: [{
+        name: 'reason',
+        label: 'Reason',
+        kind: 'textarea',
+        placeholder: 'e.g. Requested by the ops team',
+        maxLength: 500,
+        minLength: 10,
+        required: true
+      }]
+    });
+    const reason = createValues?.reason?.trim();
     if (!reason) {
       throw new Error('Creation reason is required.');
     }
@@ -3503,7 +3951,19 @@ export default function App() {
   };
 
   const handleCreateAlert = async () => {
-    const title = window.prompt('Alert title:', '')?.trim();
+    const alertValues = await adminUi.promptAction({
+      title: 'Create an alert rule',
+      description: 'Alerts surface on the Overview and can be assigned to an operator.',
+      confirmLabel: 'Create alert',
+      fields: [{
+        name: 'title',
+        label: 'Alert title',
+        placeholder: 'e.g. Webhook failures above 5%',
+        maxLength: 140,
+        required: true
+      }]
+    });
+    const title = alertValues?.title?.trim();
     if (!title) return;
     try {
       await adminFetch('/alerts', {
@@ -3519,7 +3979,26 @@ export default function App() {
 
   const handleResolveAlert = async (alert) => {
     if (!alert?.id) return;
-    const reason = window.prompt(`Reason for resolving alert "${alert.title}":`, '')?.trim();
+    const resolveValues = await adminUi.promptAction({
+      title: 'Resolve this alert',
+      description: 'Marks the alert as handled and records why.',
+      confirmLabel: 'Resolve alert',
+      context: [
+        { label: 'Alert', value: alert.title },
+        { label: 'Severity', value: alert.severity || 'warning' },
+        { label: 'Raised', value: formatRelativeTime(alert.createdAt) }
+      ],
+      fields: [{
+        name: 'reason',
+        label: 'Resolution',
+        kind: 'textarea',
+        placeholder: 'e.g. Transient provider timeout — resolved upstream',
+        maxLength: 500,
+        minLength: 10,
+        required: true
+      }]
+    });
+    const reason = resolveValues?.reason?.trim();
     if (!reason) return;
     try {
       await adminFetch(`/alerts/${alert.id}`, {
@@ -3535,9 +4014,56 @@ export default function App() {
 
   const handleCreateIncidentFromLog = async (log) => {
     if (!log) return;
-    const title = window.prompt('Incident title:', `Investigate ${log.service || 'system'} issue`)?.trim();
+    const incidentValues = await adminUi.promptAction({
+      title: 'Raise an incident',
+      description: 'Operators subscribed to system notifications are emailed when this is created.',
+      confirmLabel: 'Create incident',
+      context: [
+        { label: 'Source log', value: log.message ? String(log.message).slice(0, 120) : '—' },
+        { label: 'Service', value: log.service || 'system' },
+        { label: 'Level', value: log.level || 'unknown' }
+      ],
+      fields: [
+        {
+          name: 'title',
+          label: 'Incident title',
+          defaultValue: `Investigate ${log.service || 'system'} issue`,
+          maxLength: 140,
+          required: true
+        },
+        {
+          name: 'reason',
+          label: 'Reason',
+          kind: 'textarea',
+          defaultValue: String(log.message || '').slice(0, 400),
+          maxLength: 500,
+          minLength: 10,
+          required: true
+        }
+      ]
+    });
+    const title = incidentValues?.title?.trim();
     if (!title) return;
-    const reason = window.prompt('Reason for creating this incident:', log.message || '')?.trim();
+    const incidentReason = await adminUi.promptAction({
+      title: 'Raise an incident from this log',
+      description: 'Operators subscribed to system notifications are emailed.',
+      confirmLabel: 'Create incident',
+      context: [
+        { label: 'Service', value: log.service || 'system' },
+        { label: 'Level', value: log.level || 'unknown' },
+        { label: 'Message', value: String(log.message || '').slice(0, 160) }
+      ],
+      fields: [{
+        name: 'reason',
+        label: 'Reason',
+        kind: 'textarea',
+        defaultValue: String(log.message || '').slice(0, 400),
+        maxLength: 500,
+        minLength: 10,
+        required: true
+      }]
+    });
+    const reason = incidentReason?.reason?.trim();
     if (!reason) return;
     try {
       await adminFetch('/incidents', {
@@ -3565,7 +4091,22 @@ export default function App() {
   };
 
   const handleRetryIntegration = async (integrationName) => {
-    const reason = window.prompt(`Reason for retrying ${integrationName}:`, '')?.trim();
+    const retryValues = await adminUi.promptAction({
+      title: `Retry ${integrationName}`,
+      description: 'Re-runs the provider connection and updates its health state.',
+      confirmLabel: 'Retry connection',
+      context: [{ label: 'Integration', value: integrationName }],
+      fields: [{
+        name: 'reason',
+        label: 'Reason',
+        kind: 'textarea',
+        placeholder: 'e.g. Credentials rotated in the provider dashboard',
+        maxLength: 500,
+        minLength: 10,
+        required: true
+      }]
+    });
+    const reason = retryValues?.reason?.trim();
     if (!reason) return;
     try {
       await adminFetch(`/integrations/${encodeURIComponent(integrationName)}/retry`, {
@@ -3581,9 +4122,39 @@ export default function App() {
   };
 
   const handleRevokeAllSessions = async () => {
-    const reason = window.prompt('Reason for revoking all active sessions:', '')?.trim();
-    if (!reason) return;
-    const excludeCurrentAdmin = !window.confirm('Include your current admin session in the revoke? Choose Cancel to keep your current session active.');
+    // Two decisions in one dialog. The old flow was a prompt then a confirm
+    // whose wording made "Cancel" mean "keep my session" — the opposite of what
+    // Cancel normally does. An explicit, labelled checkbox removes that trap.
+    const revokeValues = await adminUi.promptAction({
+      title: 'Revoke all active sessions',
+      description: 'Signs every account out everywhere. Use during a suspected credential compromise.',
+      tone: 'danger',
+      confirmLabel: 'Revoke sessions',
+      context: [
+        { label: 'Scope', value: 'Every account on the platform' },
+        { label: 'Your session', value: 'Kept unless you tick the box below' }
+      ],
+      fields: [
+        {
+          name: 'reason',
+          label: 'Reason',
+          kind: 'textarea',
+          placeholder: 'e.g. Suspected token leak from a partner integration',
+          maxLength: 500,
+          minLength: 10,
+          required: true
+        },
+        {
+          name: 'includeCurrentSession',
+          label: 'Also sign me out (you will need to sign in again)',
+          type: 'checkbox',
+          defaultValue: false
+        }
+      ]
+    });
+    if (!revokeValues) return;
+    const reason = revokeValues.reason?.trim();
+    const excludeCurrentAdmin = !revokeValues.includeCurrentSession;
     try {
       const result = await withAdminReauth(() => adminFetch('/sessions/revoke-all', {
         method: 'POST',
@@ -3969,7 +4540,7 @@ export default function App() {
               <p style={{ color: 'var(--success)', fontSize: '11px' }}>All Systems Operational</p>
             </div>
           </div>
-          <button type="button" className="status-link-btn" style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => showPlaceholder('Status page opened.', 'Link this to your public status page when it is available.')}>
+          <button type="button" className="status-link-btn" style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }} disabled title="Not yet available: no public status page is published.">
             <span>View Status Page</span> <ExternalLink size={10} />
           </button>
           <button type="button" className="nav-item nav-button" style={{ marginTop: '16px', margin: '16px -16px 0 -16px', padding: '12px 16px', borderTop: '1px solid var(--border)' }} onClick={() => setIsLogoutModalOpen(true)}>
@@ -4013,7 +4584,7 @@ export default function App() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-            <button type="button" style={{ position: 'relative', background: 'none', border: 'none', color: 'var(--text-secondary)' }} onClick={() => showPlaceholder('Notifications center opened.', 'This is ready for a richer notification tray when alert data is available.')}>
+            <button type="button" style={{ position: 'relative', background: 'none', border: 'none', color: 'var(--text-secondary)' }} onClick={() => setActiveTab('logs')} title="Opens System Logs — the notification tray is not built yet.">
               <Bell size={20} />
               <div style={{ position: 'absolute', top: '-4px', right: '-4px', background: 'var(--accent)', width: '14px', height: '14px', borderRadius: '50%', fontSize: '10px', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-header)' }}>7</div>
             </button>
@@ -4106,6 +4677,25 @@ export default function App() {
         onClose={() => setIsCommandPaletteOpen(false)}
       />
       <ToastViewport toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Imperative dialog host. Mounted once at the root so any handler can
+          await adminUi.promptAction(spec) without threading modal state through
+          the component tree. */}
+      <ActionPromptModal
+        open={Boolean(promptSpec)}
+        spec={promptSpec}
+        busy={promptBusy}
+        error={promptError}
+        onClose={() => {
+          if (promptBusy) return;
+          setPromptError('');
+          closePrompt(null);
+        }}
+        onConfirm={(values) => {
+          setPromptError('');
+          closePrompt(values);
+        }}
+      />
     </div>
     </AdminUiContext.Provider>
   );

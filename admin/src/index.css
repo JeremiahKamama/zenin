@@ -2232,3 +2232,540 @@ body {
     min-height: 44px;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Imperative dialog + notification recipients
+   ─────────────────────────────────────────────────────────────────────────
+   Replaces the last 20 window.prompt/window.confirm calls. The shell needs
+   the geometry the native dialogs had for free; the recipient manager needs
+   a list layout that survives a narrow viewport.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  z-index: 90;
+  /* Enter fast; the exit is intentionally not animated here because the node
+     unmounts immediately, and a half-finished exit reads as a glitch. */
+  animation: modal-overlay-in var(--duration-fast) var(--ease-out);
+}
+
+@keyframes modal-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-container {
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  animation: modal-container-in var(--duration-base) var(--ease-out);
+}
+
+.modal-container--wide {
+  max-width: 720px;
+}
+
+@keyframes modal-container-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-container {
+    animation: none;
+  }
+}
+
+.modal-container:focus {
+  outline: none;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 20px 8px;
+}
+
+.modal-title {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.modal-subtitle {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+.modal-context {
+  margin: 12px 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+}
+
+.modal-context.is-danger {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.modal-context-message {
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.modal-context-list {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.modal-context-message + .modal-context-list {
+  margin-top: 10px;
+}
+
+.modal-context-row {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.modal-context-row dt {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  min-width: 116px;
+}
+
+.modal-context-row dd {
+  margin: 0;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.modal-body {
+  padding: 8px 20px 4px;
+  display: grid;
+  gap: 16px;
+}
+
+.modal-field {
+  display: grid;
+  gap: 6px;
+}
+
+.modal-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-field-head label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.modal-field-counter {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.modal-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  /* Named properties only — `transition: all` also animates layout. */
+  transition: border-color var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+textarea.modal-input {
+  resize: vertical;
+  min-height: 76px;
+  line-height: 1.5;
+}
+
+.modal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.modal-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.modal-input.is-invalid {
+  border-color: var(--danger, #EF4444);
+}
+
+.modal-field-help,
+.modal-field-error {
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.modal-field-help { color: var(--text-muted); }
+.modal-field-error { color: var(--danger, #EF4444); }
+
+.modal-error {
+  font-size: 12.5px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 9px;
+  color: var(--danger, #EF4444);
+}
+
+.modal-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  /* 44px effective target: the label is the hit area, not just the box. */
+  padding: 8px 4px;
+  margin: -8px -4px;
+  border-radius: 8px;
+}
+
+.modal-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .modal-checkbox:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px 20px;
+  flex-wrap: wrap;
+}
+
+/* ── Notification recipients ───────────────────────────────────────────── */
+
+.recipient-form {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.recipient-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.recipient-categories {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.recipient-categories legend {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 0;
+}
+
+.recipient-category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.recipient-category {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  min-height: 44px;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.recipient-category input {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .recipient-category:hover {
+    border-color: var(--text-muted);
+  }
+}
+
+.recipient-list,
+.delivery-log {
+  padding-top: 20px;
+}
+
+.recipient-list-heading {
+  font-size: 13px;
+  font-weight: 650;
+  margin: 0 0 12px;
+}
+
+.recipient-empty {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.recipient-items,
+.delivery-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.recipient-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.recipient-item.is-inactive {
+  opacity: 0.55;
+}
+
+.recipient-item-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.recipient-item-email {
+  font-size: 13px;
+  font-weight: 600;
+  /* A long address must not blow out the row. */
+  overflow-wrap: anywhere;
+}
+
+.recipient-item-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.recipient-item-categories {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recipient-chip {
+  font: inherit;
+  font-size: 11px;
+  padding: 5px 10px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+.recipient-chip.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .recipient-chip:hover:not(:disabled) {
+    border-color: var(--text-muted);
+  }
+}
+
+.recipient-chip:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.recipient-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.recipient-mini {
+  font-size: 11.5px;
+  padding: 6px 12px;
+  min-height: 32px;
+}
+
+.delivery-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.delivery-log-head .recipient-list-heading {
+  margin: 0;
+}
+
+.delivery-test-result {
+  font-size: 12.5px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--success, #22C55E);
+}
+
+.delivery-test-result.is-failure {
+  color: var(--danger, #EF4444);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.delivery-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.delivery-status {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+
+.delivery-status--sent {
+  color: var(--success, #22C55E);
+  border-color: currentColor;
+}
+
+.delivery-status--failed {
+  color: var(--danger, #EF4444);
+  border-color: currentColor;
+}
+
+.delivery-subject {
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.delivery-recipient {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.delivery-time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.delivery-error {
+  grid-column: 1 / -1;
+  color: var(--danger, #EF4444);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.settings-saved {
+  font-size: 12.5px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--success, #22C55E);
+}
+
+@media (max-width: 720px) {
+  .recipient-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .recipient-item {
+    grid-template-columns: 1fr;
+  }
+
+  .recipient-item-actions {
+    grid-column: 1 / -1;
+  }
+
+  .delivery-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .modal-actions {
+    /* Full-width actions stack so neither is a 30px sliver. */
+    flex-direction: column-reverse;
+  }
+
+  .modal-actions .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}

@@ -2909,6 +2909,70 @@ async function runSchemaInitialization() {
       ON admin_login_challenges(email_hash, created_at DESC);
     `);
 
+    // ── Admin console settings ────────────────────────────────────────────
+    // The Settings page had seven notification toggles bound to local React
+    // state. Nothing read them, nothing stored them, and no email was ever
+    // sent as a result of them — they were decorative. This is the storage
+    // they needed.
+    //
+    // A singleton row (id = 1) rather than a key/value table: these settings
+    // are a fixed, known-shaped object, and a single row lets the whole object
+    // be validated and replaced atomically.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_settings (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT admin_settings_singleton CHECK (id = 1)
+      );
+    `);
+
+    // Recipients for admin notification email. Kept in its own table because
+    // the set is mutable and each address needs its own verification and
+    // per-category opt-in, which a JSON array inside admin_settings cannot
+    // express without rewriting the whole document on every change.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_notification_recipients (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL,
+        label TEXT,
+        categories TEXT[] NOT NULL DEFAULT ARRAY['system','security','billing']::TEXT[],
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        verified_at TIMESTAMPTZ,
+        created_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_notification_recipients_email
+      ON admin_notification_recipients (LOWER(email));
+    `);
+
+    // Audit of what was actually delivered. "Are notifications wired to send
+    // email?" was unanswerable without this: a send could fail silently and
+    // leave no trace anywhere.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_notification_deliveries (
+        id SERIAL PRIMARY KEY,
+        category TEXT NOT NULL,
+        event_type TEXT,
+        subject TEXT,
+        recipient TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        provider TEXT,
+        provider_message_id TEXT,
+        error TEXT,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_notification_deliveries_created
+      ON admin_notification_deliveries (created_at DESC);
+    `);
+
     // Passkey sign-in looks a credential up with
     //   WHERE passkeys_json @> '[{"credentialID": "..."}]'::jsonb
     // which is a sequential scan over app_users without a supporting index —
@@ -9432,6 +9496,198 @@ const admin = {
         db: 99.96
       }
     };
+  },
+
+  // ── Admin console settings ─────────────────────────────────────────────
+
+  /**
+   * Read the stored console settings, merged over defaults.
+   *
+   * Merging on READ means a settings object written before a new key existed
+   * still returns a complete shape, so the UI never has to guard every field.
+   */
+  getAdminSettings: async (defaults = {}) => {
+    const result = await pool.query(`
+      SELECT settings, updated_at, updated_by_user_id
+      FROM admin_settings WHERE id = 1
+    `);
+    const row = result.rows[0];
+    return {
+      settings: { ...defaults, ...(row?.settings && typeof row.settings === "object" ? row.settings : {}) },
+      updatedAt: row?.updated_at || null,
+      updatedByUserId: row?.updated_by_user_id ?? null
+    };
+  },
+
+  /** Replace the settings document. Returns what is now stored. */
+  saveAdminSettings: async (settings, { adminId = null, defaults = {} } = {}) => {
+    const payload = settings && typeof settings === "object" ? settings : {};
+    const result = await pool.query(`
+      INSERT INTO admin_settings (id, settings, updated_by_user_id, updated_at)
+      VALUES (1, $1::jsonb, $2, NOW())
+      ON CONFLICT (id) DO UPDATE
+        SET settings = $1::jsonb,
+            updated_by_user_id = $2,
+            updated_at = NOW()
+      RETURNING settings, updated_at
+    `, [JSON.stringify(payload), adminId ? toUserId(adminId) : null]);
+    const row = result.rows[0];
+    return {
+      settings: { ...defaults, ...(row?.settings || {}) },
+      updatedAt: row?.updated_at || null
+    };
+  },
+
+  // ── Admin notification recipients ──────────────────────────────────────
+
+  listAdminNotificationRecipients: async () => {
+    const result = await pool.query(`
+      SELECT id, email, label, categories, is_active, verified_at, created_at, updated_at
+      FROM admin_notification_recipients
+      ORDER BY created_at ASC
+    `);
+    return result.rows.map((row) => ({
+      id: row.id,
+      email: row.email,
+      label: row.label || "",
+      categories: Array.isArray(row.categories) ? row.categories : [],
+      isActive: row.is_active !== false,
+      verifiedAt: row.verified_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  },
+
+  addAdminNotificationRecipient: async ({ email, label, categories, adminId }) => {
+    const result = await pool.query(`
+      INSERT INTO admin_notification_recipients (email, label, categories, created_by_user_id)
+      VALUES ($1, $2, $3::text[], $4)
+      ON CONFLICT (LOWER(email)) DO UPDATE
+        SET label = EXCLUDED.label,
+            categories = EXCLUDED.categories,
+            is_active = TRUE,
+            updated_at = NOW()
+      RETURNING id, email, label, categories, is_active, verified_at
+    `, [
+      String(email || "").trim().toLowerCase(),
+      String(label || "").trim() || null,
+      Array.isArray(categories) && categories.length ? categories : ["system", "security", "billing"],
+      adminId ? toUserId(adminId) : null
+    ]);
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          label: row.label || "",
+          categories: row.categories || [],
+          isActive: row.is_active !== false,
+          verifiedAt: row.verified_at
+        }
+      : null;
+  },
+
+  updateAdminNotificationRecipient: async (id, { label, categories, isActive } = {}) => {
+    const result = await pool.query(`
+      UPDATE admin_notification_recipients
+      SET label = COALESCE($2, label),
+          categories = COALESCE($3::text[], categories),
+          is_active = COALESCE($4, is_active),
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, email, label, categories, is_active, verified_at
+    `, [
+      Number(id),
+      label === undefined ? null : String(label || "").trim() || null,
+      Array.isArray(categories) ? categories : null,
+      typeof isActive === "boolean" ? isActive : null
+    ]);
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          label: row.label || "",
+          categories: row.categories || [],
+          isActive: row.is_active !== false,
+          verifiedAt: row.verified_at
+        }
+      : null;
+  },
+
+  removeAdminNotificationRecipient: async (id) => {
+    const result = await pool.query(
+      "DELETE FROM admin_notification_recipients WHERE id = $1 RETURNING id",
+      [Number(id)]
+    );
+    return Boolean(result.rows[0]);
+  },
+
+  /** Active recipients subscribed to a category. */
+  listAdminNotificationRecipientsForCategory: async (category) => {
+    const result = await pool.query(`
+      SELECT id, email, label, categories
+      FROM admin_notification_recipients
+      WHERE is_active = TRUE
+        AND (categories IS NULL OR categories = '{}' OR $1 = ANY(categories))
+      ORDER BY created_at ASC
+    `, [String(category || "").trim().toLowerCase()]);
+    return result.rows.map((row) => ({ id: row.id, email: row.email, label: row.label || "" }));
+  },
+
+  // ── Delivery audit ─────────────────────────────────────────────────────
+
+  recordAdminNotificationDelivery: async ({
+    category,
+    eventType = null,
+    subject = null,
+    recipient,
+    status = "pending",
+    provider = null,
+    providerMessageId = null,
+    error = null,
+    payload = {}
+  }) => {
+    const result = await pool.query(`
+      INSERT INTO admin_notification_deliveries
+        (category, event_type, subject, recipient, status, provider, provider_message_id, error, payload)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+      RETURNING id, created_at
+    `, [
+      String(category || "system"),
+      eventType ? String(eventType).slice(0, 120) : null,
+      subject ? String(subject).slice(0, 240) : null,
+      String(recipient || "").trim().toLowerCase(),
+      String(status || "pending"),
+      provider ? String(provider).slice(0, 60) : null,
+      providerMessageId ? String(providerMessageId).slice(0, 200) : null,
+      error ? String(error).slice(0, 1000) : null,
+      JSON.stringify(payload || {})
+    ]);
+    return result.rows[0] || null;
+  },
+
+  listAdminNotificationDeliveries: async ({ limit = 50 } = {}) => {
+    const capped = Math.min(Math.max(Number(limit) || 50, 1), 200);
+    const result = await pool.query(`
+      SELECT id, category, event_type, subject, recipient, status, provider,
+             provider_message_id, error, created_at
+      FROM admin_notification_deliveries
+      ORDER BY created_at DESC
+      LIMIT $1
+    `, [capped]);
+    return result.rows.map((row) => ({
+      id: row.id,
+      category: row.category,
+      eventType: row.event_type,
+      subject: row.subject,
+      recipient: row.recipient,
+      status: row.status,
+      provider: row.provider,
+      providerMessageId: row.provider_message_id,
+      error: row.error,
+      createdAt: row.created_at
+    }));
   },
 
   logAdminAction: async ({ adminId, targetUserId, action, details, ipAddress }) => {
