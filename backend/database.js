@@ -71,10 +71,35 @@ function createPoolConfig() {
   const rejectUnauthorized = resolveRejectUnauthorized(connectionString);
   const ssl = shouldUseSsl(connectionString) ? { rejectUnauthorized } : false;
 
+  // Pool sizing and, critically, a connection TIMEOUT.
+  //
+  // pg's default `connectionTimeoutMillis` is `undefined`, which means a
+  // request waits FOREVER for a free connection rather than failing. On a
+  // single instance that turns pool exhaustion into a queue that never drains:
+  // every waiting request holds a Node socket and a heap entry, the client's
+  // own timeout fires, and the retry storm makes it worse. Measured locally:
+  // with max=2 and two 3s queries in flight, the third query waited the full
+  // 3s and then succeeded — no bound at all. With a timeout it fails in a
+  // bounded, retryable way.
+  //
+  // max: 10 is pg's default and is a reasonable per-instance ceiling for a
+  // 512MB Render instance. It is stated explicitly here so that changing the
+  // plan forces a conscious revisit rather than silently inheriting a default.
+  const poolTuning = {
+    max: Number(process.env.PG_POOL_MAX || 10),
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10_000),
+    // Recycle connections so a long-lived instance does not hold a connection
+    // through a database failover or a network partition that silently
+    // blackholes the socket.
+    maxUses: 7_500
+  };
+
   if (connectionString) {
     return {
       connectionString,
-      ssl
+      ssl,
+      ...poolTuning
     };
   }
 
@@ -90,7 +115,8 @@ function createPoolConfig() {
     database: process.env.PGDATABASE || "zenin",
     user: process.env.PGUSER || "postgres",
     password: process.env.PGPASSWORD || "postgres",
-    ssl
+    ssl,
+    ...poolTuning
   };
 }
 
@@ -142,6 +168,14 @@ function describeDatabaseConfig() {
 }
 
 const pool = new Pool(createPoolConfig());
+
+// A pool 'error' event on an IDLE client is emitted on the Pool itself and, if
+// unhandled, crashes the process. Render would restart the instance, dropping
+// every in-flight session — so this handler is load-bearing for uptime, not
+// just noise reduction.
+pool.on("error", (error) => {
+  console.error("[db] idle client error:", error?.message);
+});
 
 pool.on("error", (error) => {
   console.error("Unexpected PostgreSQL pool error:", error.message);

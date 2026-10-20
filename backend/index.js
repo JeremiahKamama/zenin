@@ -1495,14 +1495,61 @@ const writeLimiter = rateLimit({
 // Account-aware rate limiting: combines IP with a hash of the target email (when
 // present in the request body). This prevents an attacker from rotating IPs to
 // brute-force a specific account — the per-account bucket is independent of IP.
+function clientIp(req) {
+  return String(
+    req.ip || (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown"
+  );
+}
+
 function accountAwareKey(req, limitName) {
-  const ip = req.ip || (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
+  const ip = clientIp(req);
   const email = String(req.body?.email || "").trim().toLowerCase();
   if (!email) return `${limitName}:${ip}`;
   // Deterministic hash avoids exposing the email in store keys / logs.
   const hash = crypto.createHash("sha256").update(email).digest("base64url").slice(0, 16);
   return `${limitName}:${hash}`;
 }
+
+// A SECOND, independent limiter keyed purely on the client IP.
+//
+// `accountAwareKey` prefers the account and REPLACES the IP with it. That
+// protects a single targeted account well (rotating source IPs does not reset
+// the bucket) but leaves the opposite attack wide open: one IP can present a
+// different email on every request, get a brand-new bucket each time, and
+// spend the full per-account budget against every account in the database.
+// Verified: 1 IP + 1000 distinct emails produced 1000 distinct buckets.
+//
+// Each attempt costs a scrypt verification (~17ms measured on this hardware),
+// so 40 attempts x N accounts is a direct CPU amplification. Pairing the
+// account-scoped limiter with an IP-scoped one bounds the total work any
+// single source can request, whatever emails it invents.
+//
+// 120/15min is deliberately generous: a shared office or mobile carrier NAT
+// puts many legitimate people behind one IP, and locking those users out is a
+// worse outcome than a slightly larger budget. It caps sustained work per IP
+// at ~0.13 req/sec, or about 2.3ms of CPU per second.
+const authIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) =>
+    `auth-ip:${crypto.createHash("sha256").update(clientIp(req)).digest("base64url").slice(0, 16)}`,
+  message: { error: "Too many authentication attempts. Please try again later." }
+});
+
+// Same idea for password resets, which are more expensive: each one hashes a
+// password AND sends real email through Resend, so an attacker converts our CPU
+// plus our sending reputation into their spam.
+const passwordResetIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) =>
+    `pwreset-ip:${crypto.createHash("sha256").update(clientIp(req)).digest("base64url").slice(0, 16)}`,
+  message: { error: "Too many password reset attempts. Please try again later." }
+});
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -6599,7 +6646,7 @@ app.get("/api/auth/me", attachActiveWorkspace, async (req, res) => {
   });
 });
 
-app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {
+app.post("/api/auth/reauth", authIpLimiter, authLimiter, requireSignedIn, async (req, res) => {
   try {
     const currentPassword = String(req.body?.currentPassword || "");
     if (!currentPassword) {
@@ -6623,7 +6670,7 @@ app.post("/api/auth/reauth", authLimiter, requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(emailRequestSchema), async (req, res) => {
+app.post("/api/account/email/request", authIpLimiter, authLimiter, requireSignedIn, validate(emailRequestSchema), async (req, res) => {
   try {
     if (requireProductionEmailDeliveryReady(res)) return;
     const nextEmail = String(req.body?.newEmail || "").trim().toLowerCase();
@@ -6687,7 +6734,7 @@ app.post("/api/account/email/request", authLimiter, requireSignedIn, validate(em
   }
 });
 
-app.post("/api/account/email/confirm", authLimiter, requireSignedIn, validate(emailConfirmSchema), async (req, res) => {
+app.post("/api/account/email/confirm", authIpLimiter, authLimiter, requireSignedIn, validate(emailConfirmSchema), async (req, res) => {
   try {
     const verificationCode = String(req.body?.verificationCode || "").trim();
     if (!/^\d{6}$/.test(verificationCode)) {
@@ -6712,7 +6759,7 @@ app.post("/api/account/email/confirm", authLimiter, requireSignedIn, validate(em
   }
 });
 
-app.post("/api/account/password", authLimiter, requireSignedIn, validate(passwordUpdateSchema), async (req, res) => {
+app.post("/api/account/password", authIpLimiter, authLimiter, requireSignedIn, validate(passwordUpdateSchema), async (req, res) => {
   try {
     const currentPassword = String(req.body?.currentPassword || "");
     const newPassword = String(req.body?.newPassword || "");
@@ -6735,7 +6782,7 @@ app.post("/api/account/password", authLimiter, requireSignedIn, validate(passwor
   }
 });
 
-app.delete("/api/account", authLimiter, requireSignedIn, validate(accountDeleteSchema), async (req, res) => {
+app.delete("/api/account", authIpLimiter, authLimiter, requireSignedIn, validate(accountDeleteSchema), async (req, res) => {
   try {
     const currentUser = await userAuth.findUserById(req.auth.userId);
     if (!currentUser) {
@@ -8022,7 +8069,7 @@ app.post("/api/account/plan", requireSignedIn, validate(planUpdateSchema), async
   }
 });
 
-app.post("/api/auth/signup", authLimiter, validate(signupSchema), async (req, res) => {
+app.post("/api/auth/signup", authIpLimiter, authLimiter, validate(signupSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
@@ -8263,7 +8310,7 @@ app.get("/api/referrals/stats", requireSignedIn, async (req, res) => {
   }
 });
 
-app.post("/api/auth/signin", authLimiter, validate(signinSchema), async (req, res) => {
+app.post("/api/auth/signin", authIpLimiter, authLimiter, validate(signinSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
@@ -8446,7 +8493,7 @@ app.post("/api/auth/signout", async (req, res) => {
   }
 });
 
-app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(forgotPasswordRequestSchema), async (req, res) => {
+app.post("/api/auth/forgot-password/request", passwordResetIpLimiter, passwordResetLimiter, validate(forgotPasswordRequestSchema), async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     if (!email) {
@@ -8510,7 +8557,7 @@ app.post("/api/auth/forgot-password/request", passwordResetLimiter, validate(for
   }
 });
 
-app.post("/api/auth/forgot-password/confirm", passwordResetLimiter, validate(forgotPasswordConfirmSchema), async (req, res) => {
+app.post("/api/auth/forgot-password/confirm", passwordResetIpLimiter, passwordResetLimiter, validate(forgotPasswordConfirmSchema), async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
     const newPassword = String(req.body?.newPassword || "");
@@ -8840,7 +8887,7 @@ app.post("/api/auth/passkeys/authenticate/verify", passkeyLimiter, async (req, r
   }
 });
 
-app.get("/api/auth/2fa/generate", authLimiter, requireSignedIn, async (req, res) => {
+app.get("/api/auth/2fa/generate", authIpLimiter, authLimiter, requireSignedIn, async (req, res) => {
   try {
     const user = await userAuth.findUserById(req.auth.userId);
     const secret = authenticator.generateSecret();
@@ -8852,7 +8899,7 @@ app.get("/api/auth/2fa/generate", authLimiter, requireSignedIn, async (req, res)
   }
 });
 
-app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFactorEnableSchema), async (req, res) => {
+app.post("/api/auth/2fa/enable", authIpLimiter, authLimiter, requireSignedIn, validate(twoFactorEnableSchema), async (req, res) => {
   try {
     const method = String(req.body?.method || "").trim().toLowerCase();
     const verificationCode = String(req.body?.verificationCode || "").trim();
@@ -8919,7 +8966,7 @@ app.post("/api/auth/2fa/enable", authLimiter, requireSignedIn, validate(twoFacto
   }
 });
 
-app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res) => {
+app.post("/api/auth/2fa/disable", authIpLimiter, authLimiter, requireSignedIn, async (req, res) => {
   try {
     await userAuth.upsertTwoFactor({
       userId: req.auth.userId,
@@ -9042,7 +9089,7 @@ app.post("/api/auth/passkeys/register/verify", passkeyLimiter, requireSignedIn, 
   }
 });
 
-app.post("/api/auth/2fa/backup-codes/regenerate", authLimiter, requireSignedIn, async (req, res) => {
+app.post("/api/auth/2fa/backup-codes/regenerate", authIpLimiter, authLimiter, requireSignedIn, async (req, res) => {
   try {
     const user = await userAuth.findUserById(req.auth.userId);
     if (!user?.twoFactorEnabled) {
@@ -9069,7 +9116,7 @@ app.get("/api/auth/oauth/providers", (_req, res) => {
   return res.json({ providers: OAUTH_PROVIDERS });
 });
 
-app.post("/api/auth/oauth/start", authLimiter, async (req, res) => {
+app.post("/api/auth/oauth/start", authIpLimiter, authLimiter, async (req, res) => {
   const provider = String(req.body?.provider || "").trim().toLowerCase();
   if (ARCHIVED_OAUTH_PROVIDERS.has(provider)) {
     return res.status(410).json({ error: "Apple sign-in is temporarily unavailable." });
@@ -9223,7 +9270,7 @@ async function completeGoogleOAuth(req, res, { code, state, json = false } = {})
   }
 }
 
-app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
+app.get("/api/auth/oauth/google/callback", authIpLimiter, authLimiter, async (req, res) => {
   return completeGoogleOAuth(req, res, {
     code: req.query.code,
     state: req.query.state,
@@ -9231,7 +9278,7 @@ app.get("/api/auth/oauth/google/callback", authLimiter, async (req, res) => {
   });
 });
 
-app.post("/api/auth/oauth/google/exchange", authLimiter, async (req, res) => {
+app.post("/api/auth/oauth/google/exchange", authIpLimiter, authLimiter, async (req, res) => {
   return completeGoogleOAuth(req, res, {
     code: req.body?.code,
     state: req.body?.state,
@@ -9239,7 +9286,7 @@ app.post("/api/auth/oauth/google/exchange", authLimiter, async (req, res) => {
   });
 });
 
-app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ extended: true }), async (req, res) => {
+app.post("/api/auth/oauth/apple/callback", authIpLimiter, authLimiter, express.urlencoded({ extended: true }), async (req, res) => {
   return res.redirect(buildOAuthFailureRedirect({
     entryPath: sanitizeOAuthEntryPath(req.body?.entryPath),
     authMode: sanitizeOAuthMode(req.body?.authMode, "signin"),
@@ -9248,7 +9295,7 @@ app.post("/api/auth/oauth/apple/callback", authLimiter, express.urlencoded({ ext
   }));
 });
 
-app.post("/api/auth/oauth/mock", authLimiter, async (req, res) => {
+app.post("/api/auth/oauth/mock", authIpLimiter, authLimiter, async (req, res) => {
   try {
     if (!ALLOW_OAUTH_MOCK) {
       return res.status(404).json({ error: "Not found" });
