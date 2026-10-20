@@ -296,16 +296,7 @@ const rpName = "Zenin Capital";
 const DEFAULT_PUBLIC_APP_ORIGIN = "https://www.zenin.capital";
 const rpID = process.env.RP_ID || "www.zenin.capital";
 const expectedOrigin = process.env.EXPECTED_ORIGIN || DEFAULT_PUBLIC_APP_ORIGIN;
-const webAuthnChallenges = new Map();
-const WEBAUTHN_CHALLENGE_TTL_MS = 120_000; // 2 minutes
 
-// Periodic cleanup of expired WebAuthn challenges (#7)
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of webAuthnChallenges) {
-    if (entry.expiresAt < now) webAuthnChallenges.delete(key);
-  }
-}, 60_000);
 const { watchlistData } = require("./data");
 const {
   pool,
@@ -330,6 +321,21 @@ const {
   CANONICAL_PLAN_VALUES
 } = require("./database");
 const db = pool;
+
+// WebAuthn challenges are persisted in Postgres, NOT in a module-level Map.
+//
+// An in-process Map only works on a single instance: the generate-options
+// request writes the challenge into one process's heap, and the verify request
+// is a SEPARATE HTTP call that a load balancer may route to a different
+// process, which has never seen the id. The result is an intermittent
+// "Authentication session expired or invalid" that looks like a flaky passkey
+// bug but is really a statelessness bug. It also cannot survive a deploy or a
+// restart mid-flow.
+const {
+  createWebAuthnChallengeStore,
+  CHALLENGE_TTL_MS: WEBAUTHN_CHALLENGE_TTL_MS
+} = require("./webauthnChallenges");
+const webAuthnChallenges = createWebAuthnChallengeStore(pool);
 const {
   getBrokerageRegistry
 } = require("./brokerage/infrastructure/bootstrap");
@@ -1591,6 +1597,31 @@ const adminReauthLimiter = rateLimit({
   message: { error: "Too many confirmation attempts. Please try again in a few minutes." }
 });
 
+// Passkeys get their own bucket.
+//
+// The passkey routes shared `authLimiter`, which is also spent by signup,
+// signin, 2fa, password reset and oauth across ~21 routes and is bucketed by
+// IP. During a single sign-in attempt the browser legitimately makes FOUR
+// passkey calls (generate-options + verify, sometimes retried after a
+// biometric prompt times out), so real users hit the shared ceiling long
+// before an attacker would. A dedicated, tighter bucket both protects the
+// endpoint better AND stops passkey use from starving ordinary sign-in.
+//
+// Keyed by IP because the caller is unauthenticated at this point — the whole
+// purpose of the flow is to establish who they are.
+const passkeyLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) =>
+    `passkey:${crypto.createHash("sha256").update(String(req.ip || "unknown")).digest("base64url").slice(0, 16)}`,
+  message: {
+    error: "Too many passkey attempts. Please wait a few minutes and try again.",
+    code: "PASSKEY_RATE_LIMITED"
+  }
+});
+
 const expensiveReadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 120,
@@ -2284,11 +2315,21 @@ function buildCsrfCookieOptions(req) {
 // both the signed state AND the cookie nonce.
 function buildOAuthStateCookieOptions(req, expiresAt) {
   const secure = shouldUseSecureCookies(req);
+  // SameSite must match the SESSION cookie's policy, not a fixed "lax".
+  //
+  // The frontend and API are different SITES (www.zenin.capital vs
+  // zenin-mx6w.onrender.com), so completing Google sign-in is a CROSS-SITE
+  // POST from /auth/oauth/google/callback back to /oauth/google/exchange.
+  // Browsers do not attach SameSite=Lax cookies to cross-site POSTs, so the
+  // nonce was always absent, the nonce check always failed, and every Google
+  // sign-in ended at "session was invalid or expired" — no matter how fast the
+  // user was. Reusing resolveSessionSameSite keeps the two cookies consistent:
+  // both None+Secure when configured cross-origin, both Lax when same-origin.
+  const sameSite = resolveSessionSameSite(req, secure);
   const options = {
     httpOnly: true,
     secure,
-    // Use lax so the cookie survives the top-level OAuth redirect back to us.
-    sameSite: "lax",
+    sameSite,
     path: "/"
   };
   const expiryDate = new Date(expiresAt);
@@ -2309,7 +2350,9 @@ function clearOAuthStateNonceCookie(res, req) {
   res.cookie(OAUTH_STATE_COOKIE_NAME, "", {
     httpOnly: true,
     secure,
-    sameSite: "lax",
+    // Must match the attributes it was SET with, otherwise the browser treats
+    // this as a different cookie and the original survives.
+    sameSite: resolveSessionSameSite(req, secure),
     path: "/",
     expires: new Date(0),
     maxAge: 0
@@ -8684,7 +8727,7 @@ app.post("/api/auth/resend-verification", resendVerificationLimiter, validate(re
   }
 });
 
-app.get("/api/auth/passkeys/authenticate/generate-options", authLimiter, async (req, res) => {
+app.get("/api/auth/passkeys/authenticate/generate-options", passkeyLimiter, async (req, res) => {
   try {
     const options = await generateAuthenticationOptions({
       rpID,
@@ -8697,7 +8740,7 @@ app.get("/api/auth/passkeys/authenticate/generate-options", authLimiter, async (
     // A passwordless flow usually requires email first OR discoverable credentials.
     // If discoverable credentials, we don't know the user ID. We'll key it by challenge id.
     const challengeId = crypto.randomUUID();
-    webAuthnChallenges.set(`auth_${challengeId}`, { challenge: options.challenge, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
+    await webAuthnChallenges.set(`auth_${challengeId}`, options.challenge);
     
     return res.json({ ...options, challengeId });
   } catch (error) {
@@ -8705,13 +8748,15 @@ app.get("/api/auth/passkeys/authenticate/generate-options", authLimiter, async (
   }
 });
 
-app.post("/api/auth/passkeys/authenticate/verify", authLimiter, async (req, res) => {
+app.post("/api/auth/passkeys/authenticate/verify", passkeyLimiter, async (req, res) => {
   try {
     const { response, challengeId, rememberMe } = req.body;
-    const challengeEntry = webAuthnChallenges.get(`auth_${challengeId}`);
+    // peek, not consume: a failed verification (wrong device, user retries on
+    // the same prompt) must be able to retry against the same challenge. The
+    // challenge is consumed only on success, below.
+    const challengeEntry = await webAuthnChallenges.peek(`auth_${challengeId}`);
     
-    if (!challengeEntry || challengeEntry.expiresAt < Date.now()) {
-      if (challengeEntry) webAuthnChallenges.delete(`auth_${challengeId}`);
+    if (!challengeEntry) {
       return apiError(res, 400, {
         error: "Authentication session expired or invalid.",
         message: "Start passkey sign-in again and retry.",
@@ -8765,7 +8810,9 @@ app.post("/api/auth/passkeys/authenticate/verify", authLimiter, async (req, res)
     });
     
     if (verification.verified) {
-      webAuthnChallenges.delete(`auth_${challengeId}`);
+      // Consume atomically so the same challenge cannot be replayed by two
+      // concurrent verify requests.
+      await webAuthnChallenges.remove(`auth_${challengeId}`);
       
       // Update the counter
       const updatedPasskeys = user.passkeys.map(p => {
@@ -8896,7 +8943,7 @@ app.post("/api/auth/2fa/disable", authLimiter, requireSignedIn, async (req, res)
   }
 });
 
-app.get("/api/auth/passkeys/register/generate-options", authLimiter, requireSignedIn, async (req, res) => {
+app.get("/api/auth/passkeys/register/generate-options", passkeyLimiter, requireSignedIn, async (req, res) => {
   try {
     const user = await userAuth.findUserById(req.auth.userId);
     const userPasskeys = Array.isArray(user.passkeys) ? user.passkeys : [];
@@ -8918,20 +8965,21 @@ app.get("/api/auth/passkeys/register/generate-options", authLimiter, requireSign
       },
     });
 
-    webAuthnChallenges.set(`reg_${user.id}`, { challenge: options.challenge, expiresAt: Date.now() + WEBAUTHN_CHALLENGE_TTL_MS });
+    await webAuthnChallenges.set(`reg_${user.id}`, options.challenge, { userId: user.id });
     return res.json(options);
   } catch (error) {
     return handleServerError(res, "Generate Passkey Options failed", error);
   }
 });
 
-app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, async (req, res) => {
+app.post("/api/auth/passkeys/register/verify", passkeyLimiter, requireSignedIn, async (req, res) => {
   try {
     const user = await userAuth.findUserById(req.auth.userId);
-    const challengeEntry = webAuthnChallenges.get(`reg_${user.id}`);
+    // Single-use: consuming here means a captured registration response cannot
+    // be replayed, and a failed attempt requires a fresh generate-options call.
+    const challengeEntry = await webAuthnChallenges.consume(`reg_${user.id}`);
     
-    if (!challengeEntry || challengeEntry.expiresAt < Date.now()) {
-      if (challengeEntry) webAuthnChallenges.delete(`reg_${user.id}`);
+    if (!challengeEntry) {
       return apiError(res, 400, {
         error: "Registration session expired or invalid.",
         message: "Start passkey registration again and retry.",
@@ -8949,7 +8997,6 @@ app.post("/api/auth/passkeys/register/verify", authLimiter, requireSignedIn, asy
     });
     
     if (verification.verified && verification.registrationInfo) {
-      webAuthnChallenges.delete(`reg_${user.id}`);
       const { credentialPublicKey, credentialID, counter } = verification.registrationInfo;
       
       const newPasskey = {
@@ -18529,6 +18576,17 @@ async function startServer() {
   } catch (err) {
     markBootFailed(err);
     throw err;
+  }
+  try {
+    // WebAuthn challenges live in Postgres so a passkey attempt survives a
+    // load-balanced hop between instances, a restart, and a rolling deploy.
+    await webAuthnChallenges.ensureTable();
+    webAuthnChallenges.startCleanup();
+    console.log("[webauthn] Challenge table ready.");
+  } catch (err) {
+    // Never block boot: passkey verification degrades to failing cleanly with
+    // PASSKEY_*_SESSION_INVALID, which is better than the whole API being down.
+    console.warn("[webauthn] Failed to initialize challenge table:", err.message);
   }
   try {
     await initializeMarketIntelTables(db);

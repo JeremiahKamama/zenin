@@ -5,7 +5,7 @@ import { applySeo } from "./utils/seo";
 import { clearPostAuthRedirect, getSignedInWorkspacePath, storePostAuthRedirect, getGuestWorkspacePath } from "./utils/authRedirect";
 import { zeninFetchJson, AUTH_TIMEOUT_MS, AUTH_SESSION_TIMEOUT_MS } from "./utils/zeninFetch";
 import { persistZeninAuth, startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication, isSupabaseConfigured } from "./utils/backendAuth";
-import { startAuthentication } from "@simplewebauthn/browser";
+import { startAuthentication, toBrowserAuthenticationOptions, describePasskeyError } from "./utils/webauthnOptions";
 import { PasswordRequirementsList } from "@/components/ui/async-state";
 
 function getModeFromLocation() {
@@ -220,7 +220,12 @@ export default function AuthPage() {
         const result = await zeninFetchJson("/api/auth/oauth/google/exchange", {
           method: "POST",
           body: JSON.stringify({ code: oauthCallback.code, state: oauthCallback.state }),
-          timeoutMs: 15000
+          // Use the app-wide auth budget, not a shorter ad-hoc one. This call
+          // exchanges the code with Google and issues a session; on a Render
+          // cold start it must wait for the instance to boot, which routinely
+          // exceeds 15s. A too-short timeout here failed the LAST step of a
+          // flow the user had already completed in Google.
+          timeoutMs: AUTH_SESSION_TIMEOUT_MS
         });
         if (!mounted) return;
         const target = result?.returnTo || getSignedInWorkspacePath();
@@ -368,7 +373,11 @@ export default function AuthPage() {
 
   const onPasskeySignIn = () => runAction(async () => {
     const opts = await startSupabasePasskeyAuthentication();
-    const attResp = await startAuthentication(opts);
+    // The server sends base64url strings; the browser library needs binary
+    // fields. Passing the payload through unchanged is what broke this flow.
+    const attResp = await startAuthentication({
+      optionsJSON: toBrowserAuthenticationOptions(opts)
+    });
     const verify = await verifySupabasePasskeyAuthentication({ response: attResp, challengeId: opts.challengeId, rememberMe });
     if (!verify?.success) {
       throw new Error(verify?.error || "Passkey sign-in failed.");

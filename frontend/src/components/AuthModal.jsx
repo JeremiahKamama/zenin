@@ -3,7 +3,7 @@ import { ZeninLogo } from "./Branding";
 import { clearPostAuthRedirect, getGuestWorkspacePath, getSignedInWorkspacePath, storePostAuthRedirect } from "../utils/authRedirect";
 import { zeninFetchJson, AUTH_TIMEOUT_MS, AUTH_SESSION_TIMEOUT_MS } from "../utils/zeninFetch";
 import { startSupabasePasskeyAuthentication, verifySupabasePasskeyAuthentication } from "../utils/backendAuth";
-import { startAuthentication } from "@simplewebauthn/browser";
+import { startAuthentication, toBrowserAuthenticationOptions, describePasskeyError } from "../utils/webauthnOptions";
 
 const ENABLE_APPLE_OAUTH = false;
 
@@ -347,7 +347,10 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
                   setError("");
                   try {
                     const opts = await startSupabasePasskeyAuthentication();
-                    const authResp = await startAuthentication(opts);
+                    // Server sends base64url; the browser library needs binary.
+                    const authResp = await startAuthentication({
+                      optionsJSON: toBrowserAuthenticationOptions(opts)
+                    });
                     const verify = await verifySupabasePasskeyAuthentication({ response: authResp, challengeId: opts.challengeId, rememberMe: true });
                     if (verify?.success) {
                       const me = await zeninFetchJson("/api/auth/me", { timeoutMs: AUTH_SESSION_TIMEOUT_MS });
@@ -357,7 +360,10 @@ export default function AuthModal({ isOpen, initialMode = "signup", initialError
                       setError(verify?.error || "Passkey sign-in failed.");
                     }
                   } catch (err) {
-                    setError(err?.message || "Passkey sign-in failed");
+                    // WebAuthn puts the actionable detail in err.name, not
+                    // err.message ("The operation either timed out or was not
+                    // allowed" tells the user nothing).
+                    setError(describePasskeyError(err));
                   } finally {
                     setLoading(false);
                   }

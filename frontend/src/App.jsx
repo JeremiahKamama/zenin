@@ -57,7 +57,7 @@ import { ProviderHealthDashboard } from "./components/ProviderHealthDashboard";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { useNotificationStream } from "./hooks/useNotificationStream";
 import { IndicatorActionsProvider } from "./utils/indicatorActions";
-import { startRegistration } from "@simplewebauthn/browser";
+import { startRegistration, toBrowserRegistrationOptions, describePasskeyError } from "./utils/webauthnOptions";
 import { hasWorkspaceSession, loadWorkspaceCollection, loadWorkspaceDoc, saveWorkspaceDoc, saveWorkspaceCollection, readLocalJson, writeLocalJson } from "./utils/workspacePersistence";
 import { ZENIN_API_BASE_URL } from "./constants/apiConfig";
 
@@ -7110,7 +7110,12 @@ const handleOptionTradeClosed = async (tradeId) => {
       setProfileMessage("twofa", "info", "Starting passkey registration...");
       const options = await zeninFetchJson("/api/auth/passkeys/register/generate-options");
 
-      const attestationResponse = await startRegistration(options);
+      // `user.id` is base64url in the server payload and MUST be converted:
+      // otherwise the authenticator stores the raw string as the user handle
+      // and the credential can never be matched back to the account.
+      const attestationResponse = await startRegistration({
+        optionsJSON: toBrowserRegistrationOptions(options)
+      });
 
       const verify = await zeninFetchJson("/api/auth/passkeys/register/verify", {
         method: "POST",
@@ -7149,7 +7154,7 @@ const handleOptionTradeClosed = async (tradeId) => {
         throw new Error(verify?.error || "Passkey registration failed.");
       }
     } catch (error) {
-      setProfileMessage("twofa", "error", error?.message || "Could not register passkey.");
+      setProfileMessage("twofa", "error", describePasskeyError(error));
     }
   };
 
