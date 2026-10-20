@@ -10279,6 +10279,19 @@ const handleOptionTradeClosed = async (tradeId) => {
         idleSince={idleSince}
         holdings={portfolioWithEntry || []}
         watchlist={watchlistAssets || []}
+        // Spot prices let the modal convert a percentage move into the dollars
+        // it actually cost or earned the user. Without them the modal could
+        // only say "NVDA +2.4%", which is trivia next to "+$840".
+        spotPrices={spotPrices}
+        onSelectAsset={(symbol) => {
+          setShowSinceYouLeft(false);
+          const asset = (portfolioWithEntry || []).find(
+            (h) => normalizeSymbolKey(h.symbol) === normalizeSymbolKey(symbol)
+          ) || (watchlistAssets || []).find(
+            (w) => normalizeSymbolKey(w.symbol) === normalizeSymbolKey(symbol)
+          );
+          setSelectedAsset(asset || { symbol, name: symbol });
+        }}
       />
       <LiveDataPausedToast
         paused={liveDataPaused}

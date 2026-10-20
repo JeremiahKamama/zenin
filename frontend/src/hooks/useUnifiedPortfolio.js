@@ -26,6 +26,32 @@ import {
 
 const REFRESH_MS = 60 * 1000;
 
+// Ten concurrent GETs hit a single 0.5-CPU instance. Production logs showed the
+// ten calls landing inside a 2.8s window, each taking 2.5-5.5s, because the last
+// arrival waited for the other nine to finish. The server now caches and
+// de-duplicates, but the client should not open ten sockets at once either:
+// firing in small groups spreads the load and lets the first results paint
+// instead of holding every panel blank until the slowest response lands.
+const REQUEST_GROUP_SIZE = 3;
+
+/**
+ * Run tasks in small sequential groups, preserving result order.
+ *
+ * A rejected task resolves to its fallback rather than failing the batch — one
+ * unavailable endpoint must not blank the whole portfolio.
+ */
+async function inGroups(tasks, groupSize) {
+  const results = new Array(tasks.length);
+  for (let i = 0; i < tasks.length; i += groupSize) {
+    const group = tasks.slice(i, i + groupSize);
+    const settled = await Promise.all(group.map((task) => task()));
+    settled.forEach((value, offset) => {
+      results[i + offset] = value;
+    });
+  }
+  return results;
+}
+
 export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
   const [summary, setSummary] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -49,18 +75,18 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
     inFlight.current = true;
     setLoading(true);
     try {
-      const [s, p, src, st, rec, fx, snaps, curve, txns, sh] = await Promise.all([
-        fetchUnifiedSummary().catch(() => null),
-        fetchUnifiedPositions().catch(() => []),
-        fetchUnifiedSources().catch(() => []),
-        fetchUnifiedSyncStatus().catch(() => null),
-        fetchUnifiedReconciliation().catch(() => null),
-        fetchUnifiedFxRates().catch(() => null),
-        fetchUnifiedSnapshots().catch(() => []),
-        fetchUnifiedEquityCurve().catch(() => []),
-        fetchUnifiedTransactions().catch(() => []),
-        fetchUnifiedShadowComparison().catch(() => null)
-      ]);
+      const [s, p, src, st, rec, fx, snaps, curve, txns, sh] = await inGroups([
+        () => fetchUnifiedSummary().catch(() => null),
+        () => fetchUnifiedPositions().catch(() => []),
+        () => fetchUnifiedSources().catch(() => []),
+        () => fetchUnifiedSyncStatus().catch(() => null),
+        () => fetchUnifiedReconciliation().catch(() => null),
+        () => fetchUnifiedFxRates().catch(() => null),
+        () => fetchUnifiedSnapshots().catch(() => []),
+        () => fetchUnifiedEquityCurve().catch(() => []),
+        () => fetchUnifiedTransactions().catch(() => []),
+        () => fetchUnifiedShadowComparison().catch(() => null)
+      ], REQUEST_GROUP_SIZE);
       if (!mountedRef.current) return;
       setSummary(s);
       setPositions(Array.isArray(p) ? p : []);
@@ -100,13 +126,41 @@ export function useUnifiedPortfolio({ autoRefresh = true } = {}) {
   useEffect(() => {
     mountedRef.current = true;
     refresh();
+
     let timer = null;
-    if (autoRefresh) {
+    const startTimer = () => {
+      if (timer) return;
       timer = setInterval(refresh, REFRESH_MS);
-    }
+    };
+    const stopTimer = () => {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    };
+
+    if (autoRefresh) startTimer();
+
+    // A backgrounded tab kept issuing the full ten-endpoint fan-out every
+    // minute, indefinitely, for a portfolio nobody was looking at. On a single
+    // 0.5-CPU instance those are the requests that starve the people who ARE
+    // looking. Pause while hidden and refresh once on return, so the user sees
+    // current data without the server paying for an invisible tab.
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stopTimer();
+        return;
+      }
+      if (autoRefresh) {
+        refresh();
+        startTimer();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       mountedRef.current = false;
-      if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      stopTimer();
     };
   }, [refresh, autoRefresh]);
 

@@ -3207,6 +3207,12 @@ async function writeServiceSnapshot(scope, params = {}, payload = {}) {
 
 const runtimeSnapshotCache = new Map();
 const inflightSnapshotRequests = new Map();
+// Route bodies currently executing, keyed like the snapshot cache. A route's
+// own de-duplication entry is a promise that resolves with the computed payload
+// (or null on failure), so followers can return the same bytes without touching
+// the database. Kept separate from inflightSnapshotRequests because a follower
+// must be able to distinguish "someone is computing" from "cache is empty".
+const pendingRoutePayloads = new Map();
 
 function readRuntimeSnapshot(scope, params = {}, ttlMs = 0) {
   if (!(ttlMs > 0)) return null;
@@ -3256,6 +3262,119 @@ async function withInflightDedup(scope, params = {}, factory) {
   return requestPromise;
 }
 
+/**
+ * Serve a signed-in GET route from the shared snapshot cache.
+ *
+ * Two problems this solves, both visible in production logs:
+ *
+ * 1. WASTED COMPUTE ON 304. Express computes the response and its ETag, THEN
+ *    decides to send 304. A conditional request therefore costs exactly as much
+ *    as a full one. Serving from cache means the work is skipped entirely.
+ *
+ * 2. FAN-OUT STAMPEDE. The portfolio view issues ten GETs simultaneously, on a
+ *    single instance with 0.5 CPU. Each endpoint is independently expensive, so
+ *    the tenth caller waits for the other nine. Caching plus in-flight
+ *    de-duplication collapses concurrent identical requests into one
+ *    computation, which is what actually removes the queue.
+ *
+ * The cache key includes the workspace, so one tenant can never be served
+ * another tenant's portfolio. Only GET is cached, and auth middleware still
+ * runs first — a cache hit is only ever reached by an authorised caller.
+ */
+function cachedRoute({ scope, ttlMs = PORTFOLIO_TTL_MS, keyFrom } = {}) {
+  return async (req, res, next) => {
+    // Any failure in the cache path must fall through to the real handler.
+    // A cache is an optimisation; it should never be able to break a route.
+    try {
+      const keyParts = typeof keyFrom === "function"
+        ? keyFrom(req)
+        : { workspaceId: req.workspace?.workspace?.id ?? req.auth?.user?.id ?? "anon" };
+      const params = { ...keyParts, query: req.query || {} };
+
+      const fresh = await readFreshSnapshot(scope, params, ttlMs);
+      if (fresh) {
+        res.set("x-zenin-cache", "hit");
+        // Let the client revalidate cheaply, and cap staleness so a shared
+        // proxy cannot serve a stale portfolio to a different session.
+        res.set("cache-control", "private, max-age=0, must-revalidate");
+        return res.json(fresh);
+      }
+
+      // The de-duplication must OWN the computation, not merely observe it.
+      // An earlier version ran a no-op factory here that re-read the snapshot
+      // and returned null, then called next() for every caller — so ten
+      // concurrent requests all missed, all fell through, and all computed.
+      // That collapsed nothing. Instead the first caller runs the route body
+      // to completion and publishes the result; the other nine await this same
+      // promise and then read the value it stored.
+      if (pendingRoutePayloads.has(buildSnapshotKey(scope, params))) {
+        const shared = await withInflightDedup(scope, params, async () => null);
+        if (shared) {
+          res.set("x-zenin-cache", "hit");
+          res.set("cache-control", "private, max-age=0, must-revalidate");
+          return res.json(shared);
+        }
+        // The leader failed and published nothing; fall through and compute.
+      }
+
+      res.set("x-zenin-cache", "miss");
+      // Register intent BEFORE calling next(), so a request arriving while this
+      // route body is still running joins the wait instead of recomputing.
+      const dedupKey = buildSnapshotKey(scope, params);
+      let publish;
+      const published = new Promise((resolve) => { publish = resolve; });
+      inflightSnapshotRequests.set(dedupKey, published);
+      pendingRoutePayloads.set(dedupKey, true);
+
+      // Hand control to the route. It computes, responds, then calls
+      // cacheRouteResult(), which publishes to the waiters and clears state.
+      res.locals.cacheScope = scope;
+      res.locals.cacheParams = params;
+      res.locals.cacheTtlMs = ttlMs;
+      res.locals.cacheDedupKey = dedupKey;
+
+      // Settle the followers from the response itself rather than trusting the
+      // route to call cacheRouteResult on every exit. These routes have sixteen
+      // error paths between them, and a missed publish means followers wait on
+      // a promise that never resolves — a hang, which is far worse than the
+      // slow request this cache exists to prevent.
+      const json = res.json.bind(res);
+      let settled = false;
+      const settle = (payload) => {
+        if (settled) return;
+        settled = true;
+        pendingRoutePayloads.delete(dedupKey);
+        inflightSnapshotRequests.delete(dedupKey);
+        publish(payload || null);
+      };
+
+      res.json = (body) => {
+        // Only cache successful payloads. Caching an error object would serve
+        // that failure to every caller for the next 30 seconds.
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        settle(ok && body && typeof body === "object" ? body : null);
+        if (ok && body && typeof body === "object") {
+          void writeAllSnapshots(scope, params, body).catch((error) => {
+            console.error(`[cache] ${scope} write failed:`, error?.message || error);
+          });
+        }
+        res.set("x-zenin-cache", "miss");
+        return json(body);
+      };
+
+      // A response that ends without res.json (a stream, a redirect, a send)
+      // must still release the followers.
+      res.once("finish", () => settle(null));
+      res.once("close", () => settle(null));
+
+      return next();
+    } catch (error) {
+      console.error(`[cache] ${scope} lookup failed, serving live:`, error?.message || error);
+      return next();
+    }
+  };
+}
+
 function invalidateRuntimeSnapshotsByPrefix(scopePrefix) {
   const prefix = `${String(scopePrefix || "").trim()}:`;
   if (!prefix) return;
@@ -3266,6 +3385,13 @@ function invalidateRuntimeSnapshotsByPrefix(scopePrefix) {
     if (key.startsWith(prefix)) inflightSnapshotRequests.delete(key);
   });
 }
+
+// Portfolio aggregate endpoints. Every one of these recomputes from the
+// canonical layer on each call, and the client fans out all ten at once.
+// Production telemetry showed 12 concurrent calls taking 2.5-5.5s each, 76% of
+// them returning 304 — meaning the server did the full computation only to have
+// Express compare an ETag and tell the client nothing changed.
+const PORTFOLIO_TTL_MS = 30 * 1000;
 
 const ROUTE_CACHE_TTLS_MS = {
   "app-bootstrap": 15 * 1000,
@@ -14857,7 +14983,16 @@ app.get("/api/db/portfolio/symbol/:symbol", requireSignedIn, attachActiveWorkspa
 // Aggregates existing brokerage_*/portfolio_holdings today; canonical layer is
 // populated when ZENIN_UNIFIED_PORTFOLIO is enabled (dual-write, Phase B wiring).
 // ---------------------------------------------------------------------------
-app.get("/api/portfolio/unified/summary", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/summary", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-summary",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const summary = await unifiedPortfolio.getUnifiedSummary(pool, workspaceId);
@@ -14867,7 +15002,16 @@ app.get("/api/portfolio/unified/summary", requireSignedIn, attachActiveWorkspace
   }
 });
 
-app.get("/api/portfolio/unified/positions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/positions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-positions",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const positions = await unifiedPortfolio.getUnifiedPositions(pool, workspaceId);
@@ -14877,7 +15021,16 @@ app.get("/api/portfolio/unified/positions", requireSignedIn, attachActiveWorkspa
   }
 });
 
-app.get("/api/portfolio/unified/sources", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/sources", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-sources",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const sources = await unifiedPortfolio.getUnifiedSources(pool, workspaceId);
@@ -14938,7 +15091,16 @@ app.delete("/api/portfolio/unified/sources/:id", requireSignedIn, attachActiveWo
 });
 
 // Per-source sync status + health (freshness, errors, last run).
-app.get("/api/portfolio/unified/sync-status", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/sync-status", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-sync-status",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const status = await unifiedPortfolio.getUnifiedSyncStatus(pool, workspaceId);
@@ -15044,7 +15206,16 @@ app.delete("/api/portfolio/prediction-wallet/:connectionId", requireSignedIn, at
 });
 
 // Unified transactions across all connected sources.
-app.get("/api/portfolio/unified/transactions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/transactions", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-transactions",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const limit = Math.min(Number(req.query.limit) || 100, 500);
@@ -15056,7 +15227,16 @@ app.get("/api/portfolio/unified/transactions", requireSignedIn, attachActiveWork
 });
 
 // Reconciliation: duplicate instruments across sources (warning-only).
-app.get("/api/portfolio/unified/reconciliation", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/reconciliation", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-reconciliation",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const reconciliation = await unifiedPortfolio.getUnifiedReconciliation(pool, workspaceId);
@@ -15067,7 +15247,16 @@ app.get("/api/portfolio/unified/reconciliation", requireSignedIn, attachActiveWo
 });
 
 // Persisted FX rates for the workspace base currency (read view).
-app.get("/api/portfolio/unified/fx-rates", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/fx-rates", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-fx-rates",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const fx = await unifiedPortfolio.getUnifiedFxRates(pool, workspaceId);
@@ -15095,7 +15284,16 @@ app.post("/api/portfolio/unified/fx-rates", requireSignedIn, attachActiveWorkspa
 });
 
 // Immutable end-of-day unified snapshots (EOD history with source breakdown).
-app.get("/api/portfolio/unified/snapshots", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/snapshots", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-snapshots",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const limit = Math.min(Number(req.query.limit) || 30, 90);
@@ -15136,7 +15334,16 @@ app.post("/api/portfolio/unified/backfill", requireSignedIn, attachActiveWorkspa
 // Equity curve: PRIMARY source is immutable daily snapshots (TWR/cash-flow-aware
 // dailyReturn from the snapshot engine). The fill-reconstructed curve is
 // included only as a supplementary "approximate" overlay for gaps.
-app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-equity-curve",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const limit = Math.min(Number(req.query.limit) || 180, 365);
@@ -15226,7 +15433,16 @@ app.get("/api/history/daily", requireSignedIn, attachActiveWorkspace, requireWor
 
 // Shadow-compare (staged rollout validation): unified-vs-legacy headline
 // divergence report. Read-only, owner/mod scoped. Never affects production reads.
-app.get("/api/portfolio/unified/shadow-compare", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember, async (req, res) => {
+// Cached: this endpoint is one of ten the client requests simultaneously,
+// and it recomputes from the canonical layer on every call.
+app.get("/api/portfolio/unified/shadow-compare", requireSignedIn, attachActiveWorkspace, requireWorkspaceMember,
+  cachedRoute({
+    scope: "unified-shadow-compare",
+    ttlMs: PORTFOLIO_TTL_MS,
+    // Key by workspace so one tenant can never receive another's portfolio.
+    keyFrom: (req) => ({ workspaceId: req.workspace.workspace.id })
+  }),
+  async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
     const comparison = await unifiedPortfolio.getUnifiedShadowComparison(pool, workspaceId);
