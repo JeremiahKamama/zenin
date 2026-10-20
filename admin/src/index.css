@@ -61,11 +61,27 @@
   --ease-out:         cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out:      cubic-bezier(0.77, 0, 0.175, 1);
   --ease-drawer:      cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ── Charts ──────────────────────────────────────────────────────
+     Chart.js needs concrete colors, so it cannot read var() for a value
+     it paints to canvas. The gridline was hardcoded as
+     rgba(255,255,255,0.05) — a WHITE line at 5% alpha. That is only
+     faintly visible on the dark canvas and completely invisible on the
+     light one, so the User Growth & Engagement plot lost its gridlines
+     (and its vertical scale) in light mode.
+
+     These tokens hold the resolved value per theme so the canvas gets a
+     contrast that works on both. */
+  --chart-grid:       rgba(255, 255, 255, 0.06);
+  --chart-axis-text:  #9CA3AF;
 }
 
 /* Light mode — same geometry/hierarchy, only tokens change (Brand.md v2). */
 html.light-theme-active {
   color-scheme: light;
+  /* Dark gridlines for the light canvas — see --chart-grid above. */
+  --chart-grid:      rgba(0, 0, 0, 0.08);
+  --chart-axis-text: #6B7280;
   --bg-app: #FFFFFF;
   --bg-sidebar: #FAFAFA;
   --bg-card: #FFFFFF;
@@ -230,6 +246,68 @@ body {
   flex-shrink: 0;
   z-index: 50;
 }
+
+/* ── Responsive navigation chrome ────────────────────────────────────────────
+   Hidden by default; the 1180px block below turns the sidebar into a drawer
+   and reveals the toggle. Both controls are 44px so they meet the minimum
+   touch target. */
+
+.nav-toggle,
+.sidebar-close,
+.sidebar-scrim {
+  display: none;
+}
+
+.nav-toggle,
+.sidebar-close {
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  /* Kill the grey flash and double-tap delay on touch devices. */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-toggle:hover,
+  .sidebar-close:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.nav-toggle:active,
+.sidebar-close:active {
+  background: var(--bg-tertiary);
+}
+
+.sidebar-close {
+  margin-left: auto;
+}
+
+@media (max-width: 1180px) {
+  .nav-toggle,
+  .sidebar-close {
+    display: inline-flex;
+  }
+  .sidebar-scrim {
+    display: block;
+  }
+}
+
+/* ── Charts need a resolved colour, not var() ───────────────────────────────
+   Chart.js paints to canvas and cannot read CSS custom properties, so the
+   gridline is set from a token that is already resolved per theme. The
+   light-mode override lives with the rest of the light theme above. */
 
 .main-wrapper {
   flex: 1;
@@ -439,6 +517,10 @@ body {
 /* Tables */
 .table-container {
   overflow-x: auto;
+  /* Momentum scrolling and a contained overscroll so a horizontal swipe on a
+     wide table does not trigger the browser's back gesture. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
 }
 
 .admin-table {
@@ -1607,20 +1689,56 @@ body {
 
 @media (max-width: 1180px) {
   .admin-container {
-    flex-direction: column;
-    /* dvh, not vh — same URL-bar overflow as the desktop shell, and this
-       is the layout phones actually get. */
+    /* Keep the row layout: the sidebar becomes an overlay drawer rather than
+       a full-width stack. Previously it was `flex-direction: column` with
+       `width: 100%`, which put all nine nav items, the status card and the
+       logout button above the content — so the first row of real data sat
+       below the fold and every tab change meant scrolling past the menu. */
     min-height: 100dvh;
   }
 
   .sidebar {
-    width: 100%;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(280px, 82vw);
+    border-right: 1px solid var(--border);
+    /* transform, not `left` — the drawer runs on the compositor and does not
+       trigger layout on every frame. */
+    transform: translateX(-100%);
+    transition: transform var(--duration-base) var(--ease-drawer);
+    z-index: 60;
+    /* Respect the notch/home indicator when the drawer is edge-to-edge. */
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .sidebar[data-open="true"] {
+    transform: translateX(0);
   }
 
   .content-area {
     padding: 20px;
+  }
+
+  /* Scrim: dims the page behind the drawer and gives a large tap target to
+     dismiss it, which is the expected way out on a phone. */
+  .sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-base) var(--ease-standard);
+    z-index: 55;
+  }
+
+  .sidebar-scrim.is-open {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .top-nav {
@@ -1648,6 +1766,49 @@ body {
 @media (max-width: 720px) {
   .content-area {
     padding: 16px;
+    /* Content must not sit under the notch or the home indicator. */
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Cards and headers are laid out with inline grids tuned for desktop
+     widths. Force a single column so nothing is clipped or squeezed. */
+  .settings-grid,
+  .device-info-grid,
+  .db-grid,
+  .integrations-main-grid,
+  .integration-card-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* A grid that still asks for minmax(320px, 1fr) inside a 360px viewport
+     overflows horizontally. Collapse any such track to the available width. */
+  .content-area [style*="gridTemplateColumns"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Tables keep their scroll, but tighten the cell padding so more columns
+     are reachable before the user has to swipe. */
+  .admin-table th,
+  .admin-table td {
+    padding: 10px 12px;
+    white-space: nowrap;
+  }
+
+  /* Section headers and toolbars wrap instead of overflowing. */
+  .section-header,
+  .top-nav-actions {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  /* Inputs at 16px prevent iOS Safari from zooming the viewport on focus. */
+  input,
+  select,
+  textarea,
+  .search-input {
+    font-size: 16px !important;
   }
 
   .pagination {

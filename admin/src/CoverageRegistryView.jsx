@@ -83,15 +83,26 @@ export default function CoverageRegistryView({ data = COVERAGE_SEED, onExport })
   const [tab, setTab] = useState('markets');
   const [regionFilter, setRegionFilter] = useState('All');
 
+  // A default parameter only applies for `undefined`, so an explicit
+  // `data={null}` used to reach the property reads below and throw
+  // "Cannot read properties of null (reading 'markets')" — which crashed the
+  // whole view to a blank screen. The caller passed `coverageData`, which is
+  // null until (and unless) a loader sets it, and there was no loader at all.
+  // Fall back per-field so a partial or missing payload still renders.
   const seed = COVERAGE_SEED;
-  const markets = data.markets || seed.markets;
-  const providers = data.providers || seed.providers;
-  const exchanges = data.exchanges || seed.exchanges;
-  const datasets = data.datasets || seed.datasets;
-  const mappings = data.mappings || seed.mappings;
-  const apiHealth = data.apiHealth || seed.apiHealth;
-  const syncJobs = data.syncJobs || seed.syncJobs;
-  const auditLog = data.auditLog || seed.auditLog;
+  const source = data && typeof data === "object" ? data : {};
+  // Coerce to arrays. A payload that is present but the wrong shape (an object
+  // where a list belongs, or a field the API has not shipped yet) must not take
+  // the view down — the tab is directly reachable from the sidebar.
+  const list = (value, fallback) => (Array.isArray(value) ? value : Array.isArray(fallback) ? fallback : []);
+  const markets = list(source.markets, seed.markets);
+  const providers = list(source.providers, seed.providers);
+  const exchanges = list(source.exchanges, seed.exchanges);
+  const datasets = list(source.datasets, seed.datasets);
+  const mappings = list(source.mappings, seed.mappings);
+  const apiHealth = list(source.apiHealth, seed.apiHealth);
+  const syncJobs = list(source.syncJobs, seed.syncJobs);
+  const auditLog = list(source.auditLog, seed.auditLog);
 
   const africaCount = useMemo(() => markets.filter((m) => m.region === 'Africa').length, [markets]);
   const activeProviders = useMemo(() => providers.filter((p) => p.status === 'active').length, [providers]);

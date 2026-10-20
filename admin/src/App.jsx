@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Users from 'lucide-react/dist/esm/icons/users.mjs';
+import Menu from 'lucide-react/dist/esm/icons/menu.mjs';
 import SettingsIcon from 'lucide-react/dist/esm/icons/settings.mjs';
 import Database from 'lucide-react/dist/esm/icons/database.mjs';
 import Activity from 'lucide-react/dist/esm/icons/activity.mjs';
@@ -343,7 +344,9 @@ const SidebarItem = ({ icon, label, active, onClick }) => (
     type="button"
     className={`nav-item nav-button ${active ? 'active' : ''}`}
     onClick={onClick}
-    aria-pressed={active}
+    // The nav turns into a drawer on small screens. Marking the current
+    // destination lets a screen reader announce it without colour alone.
+    aria-current={active ? 'page' : undefined}
   >
     {icon}
     <span>{label}</span>
@@ -1132,7 +1135,7 @@ const LogoutModal = ({ onClose, onLogout }) => (
       </div>
 
       <div style={{ display: 'flex', gap: '12px' }}>
-        <button onClick={onClose} className="btn" style={{ flex: 1, height: '48px', fontSize: '15px', fontWeight: 600, background: 'transparent', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>Cancel</button>
+        <button onClick={onClose} className="btn" style={{ flex: 1, height: '48px', fontSize: '15px', fontWeight: 600, background: 'transparent', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>Cancel</button>
         <button onClick={onLogout} className="btn" style={{ flex: 1, height: '48px', fontSize: '15px', fontWeight: 600, background: 'var(--danger)', borderColor: 'var(--danger)', color: 'white' }}>Sign Out</button>
       </div>
     </div>
@@ -1241,8 +1244,8 @@ const OverviewView = ({ stats, onOpenAudit }) => (
               maintainAspectRatio: false, 
               plugins: { legend: { display: false } }, 
               scales: { 
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'var(--text-muted)' } },
-                x: { grid: { display: false }, ticks: { color: 'var(--text-muted)' } }
+                y: { grid: { color: 'var(--chart-grid)' }, ticks: { color: 'var(--chart-axis-text, var(--text-muted))' } },
+                x: { grid: { display: false }, ticks: { color: 'var(--chart-axis-text, var(--text-muted))' } }
               } 
             }}
           />
@@ -2475,7 +2478,7 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
                   tension: 0.4
                 }]
               }}
-              options={{ maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' } } } }}
+              options={{ maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'var(--chart-grid)' } } } }}
             />
           </div>
           {(logsData?.deployMarkers || []).length ? (
@@ -3072,6 +3075,9 @@ export default function App() {
   const [billingStats, setBillingStats] = useState(null);
   const [integrationsData, setIntegrationsData] = useState(null);
   const [coverageData, setCoverageData] = useState(null);
+  // Off-canvas navigation for small screens. Closed by default so the content
+  // starts at the top of the viewport on a phone.
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [users, setUsers] = useState([]);
   const [logsData, setLogsData] = useState({ rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
   const [auditData, setAuditData] = useState({ rows: [], total: 0 });
@@ -3920,22 +3926,39 @@ export default function App() {
   return (
     <AdminUiContext.Provider value={adminUi}>
     <div className="admin-container">
-      <aside className="sidebar">
-        <div style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+      {/* On small screens this becomes an off-canvas drawer. Previously it
+          stacked all nine nav items at full width above the content, so the
+          first row of actual data sat below the fold and every tab change
+          required scrolling past the whole menu. */}
+      <div
+        className={`sidebar-scrim${isSidebarOpen ? ' is-open' : ''}`}
+        onClick={() => setIsSidebarOpen(false)}
+        aria-hidden="true"
+      />
+      <aside className="sidebar" id="admin-sidebar" data-open={isSidebarOpen ? 'true' : 'false'}>
+        <div className="sidebar-brand" style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
           <Shield size={32} color="var(--accent)" />
           <h2 style={{ fontSize: '20px', fontWeight: 700 }}>Zenin <span style={{ color: 'var(--accent)' }}>Admin</span></h2>
+          <button
+            type="button"
+            className="sidebar-close"
+            onClick={() => setIsSidebarOpen(false)}
+            aria-label="Close navigation"
+          >
+            <X size={18} />
+          </button>
         </div>
-        
+
         <nav style={{ flex: 1 }}>
-          <SidebarItem icon={<BarChart3 size={18} />} label="Overview" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
-          <SidebarItem icon={<Users size={18} />} label="Users" active={activeTab === 'users'} onClick={() => setActiveTab('users')} />
-          <SidebarItem icon={<Database size={18} />} label="Database" active={activeTab === 'database'} onClick={() => setActiveTab('database')} />
-          <SidebarItem icon={<LogsIcon size={18} />} label="System Logs" active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
-          <SidebarItem icon={<BillingIcon size={18} />} label="Billing" active={activeTab === 'billing'} onClick={() => setActiveTab('billing')} />
-          <SidebarItem icon={<AuditIcon size={18} />} label="Audit Trail" active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} />
-          <SidebarItem icon={<IntegrationsIcon size={18} />} label="Integrations" active={activeTab === 'integrations'} onClick={() => setActiveTab('integrations')} />
-          <SidebarItem icon={<Layers size={18} />} label="Coverage Registry" active={activeTab === 'coverage'} onClick={() => setActiveTab('coverage')} />
-          <SidebarItem icon={<SettingsIcon size={18} />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          <SidebarItem icon={<BarChart3 size={18} />} label="Overview" active={activeTab === 'overview'} onClick={() => { setActiveTab('overview'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<Users size={18} />} label="Users" active={activeTab === 'users'} onClick={() => { setActiveTab('users'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<Database size={18} />} label="Database" active={activeTab === 'database'} onClick={() => { setActiveTab('database'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<LogsIcon size={18} />} label="System Logs" active={activeTab === 'logs'} onClick={() => { setActiveTab('logs'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<BillingIcon size={18} />} label="Billing" active={activeTab === 'billing'} onClick={() => { setActiveTab('billing'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<AuditIcon size={18} />} label="Audit Trail" active={activeTab === 'audit'} onClick={() => { setActiveTab('audit'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<IntegrationsIcon size={18} />} label="Integrations" active={activeTab === 'integrations'} onClick={() => { setActiveTab('integrations'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<Layers size={18} />} label="Coverage Registry" active={activeTab === 'coverage'} onClick={() => { setActiveTab('coverage'); setIsSidebarOpen(false); }} />
+          <SidebarItem icon={<SettingsIcon size={18} />} label="Settings" active={activeTab === 'settings'} onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false); }} />
         </nav>
 
         <div className="sidebar-footer">
@@ -3958,6 +3981,18 @@ export default function App() {
 
       <main className="main-wrapper">
         <header className="top-nav">
+          {/* Reveals the nav drawer below 1180px; hidden on desktop where the
+              sidebar is always visible. */}
+          <button
+            type="button"
+            className="nav-toggle"
+            onClick={() => setIsSidebarOpen((open) => !open)}
+            aria-label={isSidebarOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={isSidebarOpen}
+            aria-controls="admin-sidebar"
+          >
+            {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
           <div className="search-input-wrapper">
             <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} size={16} />
             <input
