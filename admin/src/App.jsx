@@ -18,6 +18,8 @@ import Trash2 from 'lucide-react/dist/esm/icons/trash-2.mjs';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/circle-check.mjs';
 import AlertCircle from 'lucide-react/dist/esm/icons/circle-alert.mjs';
 import Clock from 'lucide-react/dist/esm/icons/clock.mjs';
+import { avatarInitials } from './utils/initials';
+import { pluralize } from './utils/pluralize';
 import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right.mjs';
 import ArrowDownRight from 'lucide-react/dist/esm/icons/arrow-down-right.mjs';
 import Download from 'lucide-react/dist/esm/icons/download.mjs';
@@ -315,7 +317,7 @@ const CommandPalette = ({ open, query, onQueryChange, results, onClose, onNaviga
                             {section.key === 'users' && `${row.email} • ${formatAdminRoleLabel(row.adminRole)}`}
                             {section.key === 'audit' && `${row.actor || row.adminEmail || 'System'} • ${row.target || row.targetEmail || 'workspace'}`}
                             {section.key === 'logs' && `${row.service || 'Service'} • ${row.endpoint || 'Endpoint'}`}
-                            {section.key === 'tables' && `${formatMetricNumber(row.rows)} rows`}
+                            {section.key === 'tables' && pluralize(row.rows, 'row')}
                           </div>
                         </div>
                       </button>
@@ -568,11 +570,11 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
     <div className="detail-panel-overlay" onClick={onClose}>
       <div className="detail-panel" onClick={e => e.stopPropagation()}>
         <div className="detail-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 700, color: 'var(--accent)' }}>
-              {resolvedUser.name?.charAt(0) || resolvedUser.email?.charAt(0)}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+            <div style={{ width: '48px', height: '48px', flexShrink: 0, borderRadius: '12px', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 700, color: 'var(--accent)' }}>
+              {avatarInitials(resolvedUser)}
             </div>
-            <div>
+            <div style={{ minWidth: 0, flex: '1 1 auto' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <h2 style={{ fontSize: '18px', fontWeight: 600 }}>{resolvedUser.name || 'No Name'}</h2>
                 {resolvedUser.adminRole !== 'user' && <span className="badge badge-pro" style={{ fontSize: '10px' }}>{formatAdminRoleLabel(resolvedUser.adminRole)}</span>}
@@ -1483,13 +1485,20 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
                       <input type="checkbox" checked={selectedIds.includes(entry.id)} onChange={() => toggleSelection(entry.id)} />
                     </td>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'var(--accent)' }}>
-                          {entry.name?.charAt(0) || entry.email?.charAt(0)}
+                      {/* flex-start, not center: once the name can wrap to two
+                          lines, a vertically-centred avatar floats between them.
+                          flexShrink: 0 keeps the avatar square — without it a
+                          long email shrinks it into a 32x20 pill. The text
+                          column takes minWidth: 0 so it yields instead. */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                        <div style={{ width: '32px', height: '32px', flexShrink: 0, borderRadius: '8px', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'var(--accent)' }}>
+                          {avatarInitials(entry)}
                         </div>
-                        <div>
-                          <p style={{ fontWeight: 600, fontSize: '14px' }}>{entry.name || 'No Name'}</p>
-                          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{entry.email}</p>
+                        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+                          {/* Title attribute: the name is clamped to two lines, so
+                              the full value must stay reachable. */}
+                          <p className="cell-name" style={{ fontWeight: 600, fontSize: '14px' }} title={entry.name || undefined}>{entry.name || 'No Name'}</p>
+                          <p className="cell-email" title={entry.email || undefined}>{entry.email}</p>
                         </div>
                       </div>
                     </td>
@@ -1517,7 +1526,7 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
         </div>
 
         <div className="pagination">
-          <div>Showing 1 to {filteredUsers.length} of {users.length} users</div>
+          <div>Showing 1 to {filteredUsers.length} of {pluralize(users.length, 'user')}</div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button className="pagination-btn" disabled><ChevronLeft size={16} /></button>
             <button className="pagination-btn active">1</button>
@@ -1577,7 +1586,7 @@ const DatabaseView = ({ stats, onRunMigration, onSelectTable, onChangePage }) =>
           <div style={{ padding: '20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <h3 style={{ fontSize: '16px', fontWeight: 600 }}>{selectedTable?.name || 'Select a table'}</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{selectedTable ? `${formatMetricNumber(selectedTable.rows)} rows • ${selectedTable.schemaSummary?.tableSize || 'Unknown size'}` : 'Choose a table from the list to inspect schema and rows.'}</p>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{selectedTable ? `${pluralize(selectedTable.rows, 'row')} • ${selectedTable.schemaSummary?.tableSize || 'Unknown size'}` : 'Choose a table from the list to inspect schema and rows.'}</p>
             </div>
             {selectedTable ? (
               <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={() => navigator.clipboard?.writeText(selectedTable.queryPreview || '')}>
@@ -3439,7 +3448,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({ action, userIds, value, reason })
       }));
-      notify('success', 'Bulk action completed.', `${action.replace(/_/g, ' ')} ran for ${userIds.length} users.`);
+      notify('success', 'Bulk action completed.', `${action.replace(/_/g, ' ')} ran for ${pluralize(userIds.length, 'user')}.`);
       await fetchData('users');
     } catch (err) {
       notify('error', 'Bulk action failed.', err.message);
@@ -3533,7 +3542,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({ reason, excludeCurrentAdmin })
       }));
-      notify('success', 'Sessions revoked.', `${formatMetricNumber(result.revokedCount || 0)} sessions were revoked.`);
+      notify('success', 'Sessions revoked.', `${pluralize(result.revokedCount || 0, 'session')} ${Number(result.revokedCount) === 1 ? 'was' : 'were'} revoked.`);
       await fetchData('users');
       await fetchData('logs');
     } catch (err) {
@@ -3940,7 +3949,7 @@ export default function App() {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '16px', borderLeft: '1px solid var(--border)' }}>
               <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'var(--accent-contrast)' }}>
-                {user?.displayName ? user.displayName.substring(0, 2).toUpperCase() : 'AD'}
+                {avatarInitials({ name: user?.displayName, email: user?.email }, 'AD')}
               </div>
               <div style={{ textAlign: 'left' }}>
                 <p style={{ fontSize: '13px', fontWeight: 600 }}>{user?.displayName || 'Administrator'}</p>
