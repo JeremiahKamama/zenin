@@ -141,22 +141,32 @@ export function SnapTradeConnectionFlow({ open, onClose, onConnected, onError })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const [portalUrl, setPortalUrl] = useState(null);
+  const [popupBlocked, setPopupBlocked] = useState(false);
+
   const startConnection = useCallback(async () => {
     setPhase(PHASE.CREATING);
     setError(null);
+    setPopupBlocked(false);
     try {
       const created = await createBrokerageConnection({ providerKey: "snaptrade" });
       const connectionId = created?.connectionId || created?.id;
       if (!connectionId) throw new Error("No connection id returned from brokerage service.");
-      const portalUrl = created?.authorizationUrl || created?.connectionUrl || created?.redirectUrl;
+      const url = created?.authorizationUrl || created?.connectionUrl || created?.redirectUrl;
       setConnection(created);
+      setPortalUrl(url || null);
       savePendingBrokerageFlow({ connectionId });
-      if (portalUrl) {
-        setPhase(PHASE.OPENING);
-        window.open(portalUrl, "snaptrade_portal", "noopener,noreferrer,width=960,height=760");
-      } else {
-        // No portal URL (e.g. sandbox): simulate pending state.
-        setPhase(PHASE.PENDING);
+      setPhase(PHASE.OPENING);
+
+      if (url) {
+        // window.open() called AFTER an await is blocked by Safari and Firefox:
+        // the click's user-activation has already expired, so no tab opens and
+        // the user is left staring at "Waiting for authorization" forever.
+        // We cannot open before the await (the URL does not exist yet), so we
+        // attempt it and treat a null return as "blocked" — then provide a real
+        // link the user can click, which is always allowed.
+        const opened = window.open(url, "snaptrade_portal", "noopener,noreferrer,width=960,height=760");
+        if (!opened) setPopupBlocked(true);
       }
     } catch (createErr) {
       setPhase(PHASE.ERROR);
@@ -164,6 +174,112 @@ export function SnapTradeConnectionFlow({ open, onClose, onConnected, onError })
       onError?.(createErr);
     }
   }, [onError]);
+
+  // Re-check the connection and advance the flow if the portal has completed.
+  //
+  // This is the fix for the stuck modal. Previously OPENING and PENDING were
+  // TERMINAL states: the only affordance was "I've authorized — continue",
+  // which merely moved OPENING to PENDING and rendered the same message with no
+  // button at all. Nothing ever asked the server whether authorization had
+  // actually finished, so the modal waited forever unless the user happened to
+  // close it during the redirect callback.
+  const checkAuthorization = useCallback(async ({ silent = false } = {}) => {
+    const connectionId = connection?.connectionId || connection?.id;
+    if (!connectionId) return false;
+    if (!silent) setSyncing(true);
+    try {
+      const refreshed = await refreshBrokerageConnectionStatus(connectionId);
+      setConnection(refreshed);
+      const status = String(refreshed?.status || "pending").toLowerCase();
+
+      if (status === "connected" || status === "active" || status === "verified") {
+        clearPendingBrokerageFlow();
+        setPhase(PHASE.SYNCING);
+        setError(null);
+        try {
+          await syncBrokerageConnection(connectionId, { mode: "full" });
+        } catch (syncErr) {
+          // A sync failure must not hide the fact that the authorization
+          // SUCCEEDED; the connection exists and can be refreshed later.
+          setError({ message: syncErr?.message || "Connected, but the first sync failed. Use Refresh now.", retryable: true });
+        }
+        setPhase(PHASE.SUCCESS);
+        onConnected?.(refreshed);
+        return true;
+      }
+
+      if (status === "expired" || status === "revoked" || status === "disconnected" || status === "failed") {
+        clearPendingBrokerageFlow();
+        setPhase(PHASE.ERROR);
+        setError({ message: "Authorization was not completed. Reconnect to try again.", code: "BROKERAGE_RECONNECT" });
+        return true;
+      }
+
+      // Still pending — stay put, but tell the user we checked.
+      if (!silent) setError(null);
+      setPhase(PHASE.PENDING);
+      return false;
+    } catch (err) {
+      if (!silent) {
+        setError({ message: err?.message || "Could not check the authorization status.", retryable: true });
+      }
+      return false;
+    } finally {
+      if (!silent) setSyncing(false);
+    }
+  }, [connection, onConnected]);
+
+  // Poll while waiting, so returning from the portal completes the flow on its
+  // own. Backs off from 3s to 15s and gives up after ~4 minutes rather than
+  // polling forever on a modal the user has walked away from.
+  useEffect(() => {
+    if (!open) return undefined;
+    if (phase !== PHASE.OPENING && phase !== PHASE.PENDING) return undefined;
+    if (!(connection?.connectionId || connection?.id)) return undefined;
+
+    let cancelled = false;
+    let attempt = 0;
+    let timer = null;
+    const MAX_ATTEMPTS = 20;
+
+    const tick = async () => {
+      if (cancelled) return;
+      attempt += 1;
+      const done = await checkAuthorization({ silent: true });
+      if (cancelled || done) return;
+      if (attempt >= MAX_ATTEMPTS) {
+        // Stop polling but DO NOT strand the user: surface a clear state with
+        // actions, rather than an indefinite "Waiting for authorization".
+        setPhase(PHASE.PENDING);
+        setError({
+          message: "Still waiting on the brokerage portal. Finish authorizing there, then check again.",
+          retryable: true
+        });
+        return;
+      }
+      const delay = Math.min(3000 * Math.pow(1.25, attempt - 1), 15000);
+      timer = setTimeout(tick, delay);
+    };
+
+    timer = setTimeout(tick, 3000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [open, phase, connection, checkAuthorization]);
+
+  // Re-check when the tab regains focus: the user comes back from the portal
+  // tab, and this is the moment authorization has most likely just completed.
+  useEffect(() => {
+    if (!open) return undefined;
+    if (phase !== PHASE.OPENING && phase !== PHASE.PENDING) return undefined;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") checkAuthorization({ silent: true });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [open, phase, checkAuthorization]);
 
   const refreshNow = useCallback(async () => {
     if (!connection) return;
@@ -286,17 +402,84 @@ export function SnapTradeConnectionFlow({ open, onClose, onConnected, onError })
           {[PHASE.CREATING, PHASE.OPENING, PHASE.PENDING].includes(phase) && (
             <div className="snaptrade-flow-state snaptrade-flow-state--pending">
               <p className="snaptrade-flow-title">
-                {phase === PHASE.OPENING ? "Authorize in the SnapTrade portal" : "Waiting for authorization"}
+                {phase === PHASE.CREATING ? "Preparing a secure connection" : "Waiting for authorization"}
               </p>
-              <p className="snaptrade-flow-copy">
-                {phase === PHASE.OPENING
-                  ? "A secure SnapTrade tab opened. Authorize there, then return to Zenin — we'll finish the connection and run the first sync."
-                  : "Complete authorization in the SnapTrade portal, then return here."}
-              </p>
-              {phase === PHASE.OPENING && (
-                <button type="button" className="btn btn--ghost" onClick={() => setPhase(PHASE.PENDING)}>
-                  I've authorized — continue
-                </button>
+
+              {/* Show the handoff as steps. The old version was one sentence,
+                  so nothing indicated whether anything was still happening —
+                  which is what made this feel stuck. */}
+              <ol className="snaptrade-flow-steps">
+                <li className="snaptrade-flow-step is-done">
+                  <span className="snaptrade-flow-step-marker" aria-hidden="true">✓</span>
+                  <span className="snaptrade-flow-step-body">
+                    <span className="snaptrade-flow-step-label">Connection created</span>
+                    <span className="snaptrade-flow-step-detail">Zenin opened a read-only request with SnapTrade.</span>
+                  </span>
+                </li>
+                <li className={`snaptrade-flow-step ${phase === PHASE.CREATING ? "is-active" : popupBlocked ? "" : "is-active"}`}>
+                  <span className="snaptrade-flow-step-marker" aria-hidden="true">
+                    {popupBlocked ? "!" : phase === PHASE.CREATING ? "2" : "→"}
+                  </span>
+                  <span className="snaptrade-flow-step-body">
+                    <span className="snaptrade-flow-step-label">Authorize at your brokerage</span>
+                    <span className="snaptrade-flow-step-detail">
+                      {popupBlocked
+                        ? "Your browser blocked the pop-up — use the button below to open the portal."
+                        : "In the SnapTrade tab, sign in to your brokerage and grant read-only access."}
+                    </span>
+                  </span>
+                </li>
+                <li className={`snaptrade-flow-step ${syncing ? "is-active" : ""}`}>
+                  <span className="snaptrade-flow-step-marker" aria-hidden="true">{syncing ? "…" : "3"}</span>
+                  <span className="snaptrade-flow-step-body">
+                    <span className="snaptrade-flow-step-label">Zenin finishes automatically</span>
+                    <span className="snaptrade-flow-step-detail">
+                      Once you approve, this updates on its own and runs the first sync — no need to come back and confirm.
+                    </span>
+                  </span>
+                </li>
+              </ol>
+              {popupBlocked && portalUrl && (
+                <div className="snaptrade-flow-blocked" role="alert">
+                  <p className="snaptrade-flow-copy">
+                    Your browser blocked the SnapTrade pop-up. Open the portal with the button below.
+                  </p>
+                  <a
+                    className="btn btn--primary"
+                    href={portalUrl}
+                    target="snaptrade_portal"
+                    rel="noopener noreferrer"
+                  >
+                    Open SnapTrade portal
+                  </a>
+                </div>
+              )}
+
+              {syncing ? (
+                <p className="snaptrade-flow-checking" role="status">
+                  <span className="snaptrade-flow-spinner" aria-hidden="true" />
+                  Checking with SnapTrade…
+                </p>
+              ) : (
+                <>
+                  {error?.retryable && <p className="snaptrade-flow-error">{error.message}</p>}
+                  <div className="snaptrade-flow-actions">
+                    {/* A real action, not a state toggle. The old button only
+                        moved OPENING to PENDING, which rendered this same
+                        message with NO button — an unrecoverable dead end. */}
+                    <button type="button" className="btn btn--primary" onClick={() => checkAuthorization()}>
+                      I've authorized — check now
+                    </button>
+                    {portalUrl && (
+                      <a className="btn btn--ghost" href={portalUrl} target="snaptrade_portal" rel="noopener noreferrer">
+                        Reopen portal
+                      </a>
+                    )}
+                    <button type="button" className="btn btn--ghost" onClick={reconnect} disabled={syncing}>
+                      Start over
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           )}

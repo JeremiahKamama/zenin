@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import OptionsStrategySimulator from "./OptionsStrategySimulator";
 import { TradingViewChart } from "./TradingViewChart";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { hasWorkspaceSession } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 
@@ -447,7 +447,7 @@ export function OptionsCalculator({   spotPrice = 0,
 
     return () => {
       ignore = true;
-      controller.abort();
+      abortWithReason(controller, "options-calculator-cleanup");
     };
   }, [normalizedSymbol, canUseSavedCalculations]);
 

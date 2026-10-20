@@ -13,7 +13,7 @@ import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, res
 import { classifyPortfolioInstrument, PORTFOLIO_BUCKETS } from "../utils/portfolioInstrumentClassifier.js";
 import { isStable } from "../utils/stablecoins";
 import { formatPercent } from "../utils/format";
-import { isAbortError } from "../utils/zeninFetch";
+import { abortWithReason, isAbortError } from "../utils/zeninFetch";
 import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWorkspaceDoc } from "../utils/workspacePersistence";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { buildConnectionRegistry } from "../utils/tradePerformance.js";
@@ -783,7 +783,7 @@ const isProfitable = currentAccountEquity >= initialBalance;
       });
     return () => {
       cancelled = true;
-      controller?.abort();
+      abortWithReason(controller, "portfolio-history-cleanup");
     };
   }, [chartInterval, benchmarkSymbol, selectedAccounts, selectedSources, displayCurrency, currentWorkspaceId, unifiedPortfolio?.snapshots, unifiedPortfolio?.fillEquityCurve]);
 

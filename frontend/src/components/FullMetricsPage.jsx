@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { calculateOptionPnL } from "../utils/optionsPnL";
 import { INITIAL_ACCOUNT_BALANCE } from "../utils/accountMetrics";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { formatCurrency, getCurrencySymbol, convertToUSD } from "../utils/currencyUtils";
 
 /**
@@ -129,7 +129,7 @@ export function FullMetricsPage({
       }
     })();
 
-    return () => controller.abort();
+    return () => abortWithReason(controller, "full-metrics-page-cleanup");
   }, []);
 
   useEffect(() => {
@@ -194,7 +194,7 @@ export function FullMetricsPage({
       }
     })();
 
-    return () => controller.abort();
+    return () => abortWithReason(controller, "full-metrics-page-cleanup");
   }, [benchmark]);
 
   // Filter portfolio and trades based on selected Asset Class

@@ -75,7 +75,135 @@
 .snaptrade-flow-title { font-size: 16px; font-weight: 700; margin: 0 0 6px; }
 .snaptrade-flow-copy { font-size: 13px; line-height: 1.5; color: var(--color-text-secondary, #9ca3af); margin: 0 0 14px; }
 .snaptrade-flow-readonly { font-style: italic; }
-.snaptrade-flow-error { color: var(--color-text-primary, #f5f5f5); font-size: 12px; margin: 8px 0 0; }
+.snaptrade-flow-error {
+  color: var(--color-text-primary, #f5f5f5);
+  font-size: 12px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-medium, #2a2a2a);
+  border-radius: 8px;
+  /* A URL or error code can be long and unbreakable. */
+  overflow-wrap: anywhere;
+}
+
+/* ── Waiting-for-authorization redesign ───────────────────────────────────
+   The previous state was a title, one paragraph and (sometimes) a single
+   button that merely toggled a phase, so it read as stuck. This renders the
+   handoff as explicit steps so the user always knows where they are, what is
+   happening automatically, and what to do if nothing happens.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.snaptrade-flow-steps {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.snaptrade-flow-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  position: relative;
+}
+
+/* Connector line between step markers. */
+.snaptrade-flow-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 30px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--color-border-medium, #2a2a2a);
+}
+
+.snaptrade-flow-step-marker {
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--color-border-medium, #2a2a2a);
+  color: var(--color-text-secondary, #9ca3af);
+  background: transparent;
+  position: relative;
+  z-index: 1;
+}
+
+.snaptrade-flow-step.is-done .snaptrade-flow-step-marker {
+  background: var(--color-text-primary, #f5f5f5);
+  border-color: var(--color-text-primary, #f5f5f5);
+  color: var(--color-surface, #0a0a0a);
+}
+
+.snaptrade-flow-step.is-active .snaptrade-flow-step-marker {
+  border-color: var(--color-text-primary, #f5f5f5);
+  color: var(--color-text-primary, #f5f5f5);
+}
+
+.snaptrade-flow-step-body { min-width: 0; padding-top: 1px; }
+.snaptrade-flow-step-label { font-size: 13px; font-weight: 600; display: block; }
+.snaptrade-flow-step-detail { font-size: 12px; color: var(--color-text-secondary, #9ca3af); margin-top: 1px; display: block; }
+.snaptrade-flow-step.is-active .snaptrade-flow-step-label { color: var(--color-text-primary, #f5f5f5); }
+.snaptrade-flow-step:not(.is-done):not(.is-active) .snaptrade-flow-step-label { color: var(--color-text-secondary, #9ca3af); }
+
+.snaptrade-flow-checking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #9ca3af);
+  margin: 10px 0 0;
+}
+
+.snaptrade-flow-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-medium, #2a2a2a);
+  border-top-color: var(--color-text-primary, #f5f5f5);
+  animation: snaptrade-flow-spin 700ms linear infinite;
+}
+
+@keyframes snaptrade-flow-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Respect a stated preference for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .snaptrade-flow-spinner { animation-duration: 2400ms; }
+}
+
+.snaptrade-flow-blocked {
+  padding: 12px;
+  border: 1px solid var(--color-border-medium, #2a2a2a);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.snaptrade-flow-blocked .snaptrade-flow-copy { margin-bottom: 10px; }
+
+/* The reopen link must look and behave like the button beside it. */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  min-height: 40px;
+}
+
+@media (max-width: 480px) {
+  .snaptrade-flow-actions a.btn,
+  .snaptrade-flow-actions button.btn { min-height: 44px; }
+}
 .snaptrade-flow-providers { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 8px; }
 .snaptrade-flow-providers li {
   display: flex; justify-content: space-between; align-items: center;

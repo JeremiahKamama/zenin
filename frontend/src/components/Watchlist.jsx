@@ -5,7 +5,7 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetchJson } from "../utils/zeninFetch";
 import { getCurrencySymbol, inferAssetCurrency } from "../utils/currencyUtils";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { normalizeInstrumentSymbol, resolveCurrencyInstrument } from "../utils/currencyInstruments.js";
@@ -417,7 +417,7 @@ useEffect(() => {
         setMacroLoading(false);
         return () => {
           isMounted = false;
-          controller.abort();
+          abortWithReason(controller, "watchlist-cleanup");
         };
       }
     }
@@ -456,7 +456,7 @@ useEffect(() => {
     fetchMacro();
     return () => {
       isMounted = false;
-      controller.abort();
+      abortWithReason(controller, "watchlist-cleanup");
     };
   }, [activeCategory, indicatorCountry, localRefreshNonce]);
 
@@ -484,7 +484,7 @@ useEffect(() => {
         setEarningsLoading(false);
         return () => {
           isMounted = false;
-          controller.abort();
+          abortWithReason(controller, "watchlist-cleanup");
         };
       }
     }
@@ -520,7 +520,7 @@ useEffect(() => {
 
     return () => {
       isMounted = false;
-      controller.abort();
+      abortWithReason(controller, "watchlist-cleanup");
     };
   }, [activeCategory, earningsSymbols.join(","), localRefreshNonce]);
 

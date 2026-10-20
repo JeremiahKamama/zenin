@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { normalizeAssetData } from "../utils/normalizeAssetData";
 
@@ -66,7 +66,7 @@ export function useAssetReference(symbol, type = "equity") {
     };
 
     load();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "use-asset-reference-cleanup");
   }, [symbol, type]);
 
   return state;

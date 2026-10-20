@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import {
   getAppRuntimeConfig,
   getPublicRuntimeConfig,
@@ -54,7 +54,7 @@ export function useRuntimeConfig({ enabled = true } = {}) {
 
     return () => {
       cancelled = true;
-      controller.abort();
+      abortWithReason(controller, "runtime-config-cleanup");
     };
   }, [enabled]);
 

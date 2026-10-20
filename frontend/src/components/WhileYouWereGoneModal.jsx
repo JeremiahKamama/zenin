@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Overlay } from "./Overlay";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetchJson } from "../utils/zeninFetch";
 
 const normalizeSymbol = (v) => String(v || "").trim().toUpperCase();
 
@@ -138,7 +138,7 @@ export function WhileYouWereGoneModal({
 
     return () => {
       cancelled = true;
-      controller?.abort();
+      abortWithReason(controller, "while-you-were-gone-cleanup");
     };
   }, [open, universe]);
 

@@ -10,7 +10,7 @@
 //  - Every route is optional; callers pass the subset they need.
 
 import { useEffect, useState } from "react";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 
 const ENDPOINTS = {
@@ -78,7 +78,7 @@ export function useMarketIntel(symbol, sources = [], { cacheNs = "market-intel" 
     };
 
     load();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "use-market-intel-cleanup");
   }, [sym, JSON.stringify(sources), cacheNs]);
 
   return state;

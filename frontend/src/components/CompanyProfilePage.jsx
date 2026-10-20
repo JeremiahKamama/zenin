@@ -5,7 +5,7 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { CompanyMacroDependencies } from "../transmission/TransmissionSurfaces";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { getCurrencySymbol } from "../utils/currencyUtils";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { getCompanyCommodities } from "../utils/assetGraph";
 import { CommodityProfilePage } from "./CommodityProfilePage";
 import { EtfProfilePage } from "./EtfProfilePage";
@@ -1027,7 +1027,7 @@ export function CompanyProfilePage({ symbol, asset, kind = "stock", onBack, onOp
     loadProfile();
     return () => {
       cancelled = true;
-      controller.abort();
+      abortWithReason(controller, "company-profile-page-cleanup");
     };
   }, [normalizedSymbol, preferredTheme, preferredCategory]);
 

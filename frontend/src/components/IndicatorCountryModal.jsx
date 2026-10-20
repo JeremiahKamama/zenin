@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataHealthBadge } from "@/components/ui/async-state";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { IndicatorMetricsTable } from "./IndicatorMetricsTable";
 import { IndicatorMetricModal } from "./IndicatorMetricModal";
@@ -93,7 +93,7 @@ export function IndicatorCountryModal({ asset, onClose, isInWatchlist, onToggleS
     fetchSnapshot();
     return () => {
       isMounted = false;
-      controller.abort();
+      abortWithReason(controller, "indicator-country-modal-cleanup");
     };
   }, [countryCode]);
 

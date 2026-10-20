@@ -4,7 +4,7 @@ import { readResilientCache, writeResilientCache } from "../utils/resilientData"
 import { getCurrencySymbol, formatCurrency, convertToUSD, inferAssetCurrency } from "../utils/currencyUtils";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { ZENIN_API_BASE_URL } from "../constants/apiConfig";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { getMarketStatus } from "../utils/marketHours";
 
 import { AssetHeader } from "./assetModal/AssetHeader";
@@ -187,7 +187,7 @@ export function AssetModal({
       }
     };
     fetchHistory();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "asset-modal-cleanup");
   }, [activeInterval, assetSymbol, assetType]);
 
   useEffect(() => {
@@ -223,7 +223,7 @@ export function AssetModal({
       }
     };
     fetchQuote();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "asset-modal-cleanup");
   }, [asset?.price, asset?.priceChangePercent, assetSymbol, assetType]);
 
   useEffect(() => {
@@ -250,7 +250,7 @@ export function AssetModal({
       }
     };
     fetchPerformance();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "asset-modal-cleanup");
   }, [assetSymbol, assetType]);
 
   useEffect(() => {
@@ -301,7 +301,7 @@ export function AssetModal({
       }
     };
     fetchEarnings();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "asset-modal-cleanup");
   }, [isTradFi, assetSymbol, isForexAsset]);
 
   useEffect(() => {
@@ -323,7 +323,7 @@ export function AssetModal({
       }
     };
     fetchFinviz();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "asset-modal-cleanup");
   }, [isTradFi, assetSymbol, isForexAsset]);
 
   // ── Derived display values (preserved) ──────────────────────────────────

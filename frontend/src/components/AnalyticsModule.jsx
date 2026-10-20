@@ -13,7 +13,7 @@ import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { CompactPageHeader, DensePanelHeader, InlineControlGroup } from "./CompactWorkspaceUI";
 import { ResearchWorkspacePanel } from "./InstitutionalPanels";
 import { HOSTED_BACKEND_URL } from "../constants/apiConfig";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetchJson } from "../utils/zeninFetch";
 import { deriveMacroExecutive, deriveCommoditiesExecutive, buildMarketSignal, buildCommodityAllocation } from "../utils/deskIntelligence";
 import { getGroupSymbols } from "../utils/commodityGroups";
 import { COMMODITY_GROUP_DEFS, COMMODITY_GROUP_ORDER, getGroupDef } from "../utils/commodityGroups";
@@ -1702,7 +1702,7 @@ export function AnalyticsModule({
     const timer = window.setInterval(loadProviderStatus, 120_000);
     return () => {
       cancelled = true;
-      controller.abort();
+      abortWithReason(controller, "analytics-module-cleanup");
       window.clearInterval(timer);
     };
   }, [backendUrl, retryNonce]);

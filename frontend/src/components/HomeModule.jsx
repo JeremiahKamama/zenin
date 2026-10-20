@@ -9,7 +9,7 @@ import { hasWorkspaceSession, loadWorkspaceDoc, saveWorkspaceCollection, saveWor
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { resolveHeadlineValue, hasConnectedSources, resolveDisplayPositions, resolvePerformanceTimeline } from "../utils/portfolioHeadline";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
-import { zeninFetchJson, isAbortError } from "../utils/zeninFetch";
+import { abortWithReason, isAbortError, zeninFetchJson } from "../utils/zeninFetch";
 import MarketSignals2 from "./market/MarketSignals2";
 import { useWorkspaceRouter } from "../utils/useWorkspaceRouter";
 import MacroContextEnhanced from "./market/MacroContextEnhanced";
@@ -503,7 +503,7 @@ export function HomeModule({
         setMoversLoading(false);
       });
 
-    return () => controller.abort();
+    return () => abortWithReason(controller, "home-module-cleanup");
   }, [moversUniverseKey, marketRefreshNonce]);
 
   const getMoverChange = (asset) => {
@@ -597,7 +597,7 @@ export function HomeModule({
       }
     };
     hydrateTodayView();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "home-module-cleanup");
   }, []);
 
   const gainers = [...moversWithChange]
@@ -1089,7 +1089,7 @@ export function HomeModule({
     };
 
     fetchData();
-    return () => controller.abort();
+    return () => abortWithReason(controller, "home-module-cleanup");
   }, [marketDetailOpen, marketRefreshNonce]);
 
   useEffect(() => {

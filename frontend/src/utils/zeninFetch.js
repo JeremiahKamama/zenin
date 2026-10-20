@@ -272,6 +272,43 @@ export function isAbortError(error) {
   return false;
 }
 
+/**
+ * Abort a controller with an explicit, recognisable reason.
+ *
+ * A bare `controller.abort()` aborts with no reason, and the browser reports
+ * that as:
+ *
+ *   Uncaught (in promise) AbortError: signal is aborted without reason
+ *
+ * That message is unactionable in a console and, worse, indistinguishable from
+ * a real fault. Passing a reason makes every teardown self-describing, so
+ * console noise from ordinary effect cleanup can be filtered and genuine
+ * aborts can be told apart from timeouts.
+ *
+ * Prefer this over `controller.abort()` in effect cleanup:
+ *
+ *   const controller = new AbortController();
+ *   // ...
+ *   return () => abortWithReason(controller, "effect-cleanup");
+ *
+ * @param {AbortController|null|undefined} controller
+ * @param {string} reason e.g. "effect-cleanup", "modal-closed", "symbol-changed"
+ */
+export function abortWithReason(controller, reason = "cancelled") {
+  if (!controller || typeof controller.abort !== "function") return;
+  // Already aborted: calling abort() again is a no-op, but constructing a
+  // redundant DOMException on every dependency change is wasted work on a hot
+  // path (these run on every keystroke in some filters).
+  if (controller.signal?.aborted) return;
+  try {
+    controller.abort(new DOMException(reason, "AbortError"));
+  } catch {
+    // Older engines reject a non-string reason. The abort itself still matters
+    // more than its label, so fall back rather than letting cleanup throw.
+    try { controller.abort(reason); } catch { /* already aborted */ }
+  }
+}
+
 const circuit = { failures: 0, openedAt: 0 };
 function circuitAllow() {
   if (circuit.failures < CIRCUIT_FAILURE_THRESHOLD) return true;

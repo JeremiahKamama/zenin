@@ -7,7 +7,7 @@ import { OptionsInstitutionalPanel } from "./InstitutionalPanels";
 import { readResilientCache, writeResilientCache } from "../utils/resilientData";
 import { getSnapshotFallbackMessage } from "../utils/staleNotice";
 import { calculateOptionPnL } from "../utils/optionsPnL";
-import { zeninFetchJson } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetchJson } from "../utils/zeninFetch";
 import { canUseWebSocket, resolveZeninWsUrl } from "../utils/livePriceStream";
 import { getAppRuntimeConfig } from "../config/runtimeConfigStore";
 import { GuidedEmptyState } from "./CompactWorkspaceUI";
@@ -878,7 +878,7 @@ useEffect(() => {
 
   return () => {
     isMounted = false;
-    controller.abort();
+    abortWithReason(controller, "options-module-cleanup");
     clearInterval(interval);
   };
 

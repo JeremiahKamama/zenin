@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useRef, useState } from "react";
-import { zeninFetch } from "../utils/zeninFetch";
+import { abortWithReason, zeninFetch } from "../utils/zeninFetch";
 import { hydrateProviderHealth } from "../utils/DataCoverageRegistry";
 
 export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
@@ -76,7 +76,7 @@ export function useAppBootstrap({ enabled = true, tradeLimit = 1000 } = {}) {
 
     return () => {
       cancelled = true;
-      controller.abort();
+      abortWithReason(controller, "app-bootstrap-cleanup");
       clearTimeout(hardTimeout);
     };
   }, [enabled, tradeLimit, refreshKey]);

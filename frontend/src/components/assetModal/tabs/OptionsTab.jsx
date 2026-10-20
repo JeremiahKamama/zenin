@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { abortWithReason } from "../../../utils/zeninFetch.js";
 
 function formatIv(iv) {
   const n = Number(iv);
@@ -44,7 +45,7 @@ export function OptionsTab({ assetSymbol, isStockResearchEligible }) {
     })();
     return () => {
       ignore = true;
-      controller.abort();
+      abortWithReason(controller, "options-tab-cleanup");
     };
   }, [assetSymbol, isStockResearchEligible]);
 
