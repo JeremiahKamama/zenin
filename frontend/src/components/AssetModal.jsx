@@ -44,7 +44,7 @@ export function AssetModal({
 }) {
   const intervals = Array.isArray(getAppRuntimeConfig()?.ui?.assetModalIntervals)
     ? getAppRuntimeConfig().ui.assetModalIntervals
-    : ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
+    : ["4H", "1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "MAX"];
 
   // ── Data state (preserved) ───────────────────────────────────────────────
   const [history, setHistory] = useState([]);

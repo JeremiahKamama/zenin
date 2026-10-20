@@ -376,7 +376,7 @@ export function PortfolioModule({
     : ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF"];
   const intervals = Array.isArray(getAppRuntimeConfig()?.ui?.portfolioIntervals)
     ? getAppRuntimeConfig().ui.portfolioIntervals
-    : ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
+    : ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "ALL"];
   const [chartMode, setChartMode] = useState("equity");
   const [performanceView, setPerformanceView] = useState("chart");
   const [chartInterval, setChartInterval] = useState("1D");

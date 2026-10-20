@@ -2769,3 +2769,558 @@ textarea.modal-input {
     min-height: 44px;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Account menu
+   ─────────────────────────────────────────────────────────────────────────
+   Replaces a static chip whose ChevronDown implied a menu and opened nothing.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.account-menu {
+  position: relative;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
+.account-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px 5px 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .account-trigger:hover {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+}
+
+.account-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.account-avatar {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 650;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.account-avatar--lg { width: 40px; height: 40px; font-size: 14px; }
+.account-avatar--sm { width: 28px; height: 28px; font-size: 11px; }
+
+.account-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  text-align: left;
+}
+
+.account-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-email {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.3;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-chevron {
+  color: var(--text-muted);
+  transition: transform var(--duration-base) var(--ease-standard);
+}
+
+.account-chevron.is-open { transform: rotate(180deg); }
+
+.account-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(340px, calc(100vw - 32px));
+  max-height: min(560px, calc(100dvh - 96px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  z-index: 80;
+  padding: 8px;
+  animation: account-popover-in var(--duration-fast) var(--ease-out);
+}
+
+@keyframes account-popover-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-popover { animation: none; }
+  .account-chevron { transition: none; }
+}
+
+.account-popover-head {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.account-popover-identity { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.account-popover-name { font-size: 13.5px; font-weight: 650; margin: 0; }
+.account-popover-email {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 3px 9px;
+  align-self: flex-start;
+}
+
+.account-section { padding: 0 4px 8px; }
+
+.account-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 6px 8px;
+}
+
+.account-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .account-refresh:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+}
+
+.account-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.is-spinning { animation: account-spin 900ms linear infinite; }
+
+@keyframes account-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-spinning { animation: none; }
+}
+
+.account-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+
+.account-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 8px;
+  min-height: 48px;
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .account-option:hover:not(:disabled) { background: var(--bg-hover); }
+}
+
+.account-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.account-option:disabled { cursor: not-allowed; opacity: 0.7; }
+
+.account-option-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.account-option-name { font-size: 12.5px; font-weight: 600; }
+
+.account-option-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.account-hint,
+.account-note,
+.account-error {
+  font-size: 11.5px;
+  line-height: 1.5;
+  margin: 4px 0 0;
+  padding: 0 8px;
+}
+
+.account-hint { color: var(--text-muted); }
+.account-note { color: var(--text-muted); padding-top: 8px; }
+.account-error { color: var(--danger, #EF4444); }
+
+.account-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 11px 12px;
+  min-height: 44px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .account-action:hover { background: var(--bg-hover); color: var(--text-primary); }
+}
+
+.account-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* On narrow screens the identity text competes with the search field. */
+@media (max-width: 900px) {
+  .account-email { display: none; }
+  .account-name { max-width: 110px; }
+}
+
+@media (max-width: 560px) {
+  .account-identity { display: none; }
+  .account-menu { padding-left: 10px; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Alert rule form
+   ───────────────────────────────────────────────────────────────────────── */
+
+.alert-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 14px;
+  margin: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.alert-fieldset legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 0 6px;
+}
+
+.alert-scope-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.alert-scope-grid--two {
+  grid-template-columns: 1fr 1fr;
+}
+
+.modal-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.alert-severity-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.alert-severity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 9px 11px;
+  min-height: 52px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: var(--text-secondary);
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+              background-color var(--duration-fast) var(--ease-standard);
+}
+
+.alert-severity-label { font-size: 12.5px; font-weight: 650; }
+.alert-severity-hint { font-size: 10.5px; color: var(--text-muted); }
+
+@media (hover: hover) and (pointer: fine) {
+  .alert-severity:hover:not(:disabled) { border-color: var(--text-muted); }
+}
+
+.alert-severity:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.alert-severity:disabled { cursor: not-allowed; opacity: 0.65; }
+
+/* Severity carries meaning, so the active state is coloured per level rather
+   than uniformly accented — "Critical" should not look like "Info". */
+.alert-severity--info.is-active {
+  border-color: var(--text-secondary);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.alert-severity--warning.is-active {
+  border-color: var(--warning, #F59E0B);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning, #F59E0B);
+}
+.alert-severity--error.is-active {
+  border-color: var(--danger, #EF4444);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger, #EF4444);
+}
+.alert-severity--critical.is-active {
+  border-color: var(--danger, #EF4444);
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger, #EF4444);
+}
+.alert-severity--critical.is-active .alert-severity-label { font-weight: 750; }
+
+.alert-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.alert-summary svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
+
+@media (max-width: 640px) {
+  .alert-scope-grid,
+  .alert-scope-grid--two {
+    grid-template-columns: 1fr;
+  }
+  .alert-severity-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Sidebar health indicator. "unknown" is a real state: the probe has not
+   answered, so we must not paint a confident green. */
+.status-dot--ok { background: var(--success); }
+.status-dot--warn { background: var(--warning, #F59E0B); }
+.status-dot--down { background: var(--danger, #EF4444); }
+.status-dot--unknown { background: var(--text-muted); }
+
+/* Real live-refresh switch (was a permanently-on static affordance). */
+.live-toggle.is-live { color: var(--accent); }
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.live-dot.is-on {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot.is-on { animation: none; }
+}
+
+.live-switch {
+  width: 32px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  position: relative;
+  margin-left: 4px;
+  flex-shrink: 0;
+  transition: background-color var(--duration-base) var(--ease-standard),
+              border-color var(--duration-base) var(--ease-standard);
+}
+
+.live-switch.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.live-switch-knob {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  position: absolute;
+  left: 1px;
+  top: 1px;
+  transition: transform var(--duration-base) var(--ease-standard),
+              background-color var(--duration-base) var(--ease-standard);
+}
+
+.live-switch.is-on .live-switch-knob {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+/* Shown in place of a chart when there is genuinely nothing to plot. */
+.chart-empty {
+  height: 100%;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.chart-empty-hint {
+  font-size: 11.5px;
+  max-width: 380px;
+  line-height: 1.55;
+  opacity: 0.85;
+}
+
+/* Coverage registry provenance notice. Shown whenever any section fell back to
+   sample data, so the page never reads as authoritative when it is not. */
+.registry-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  margin-bottom: 20px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.registry-notice svg { flex-shrink: 0; margin-top: 2px; }
+
+.registry-notice--sample {
+  background: rgba(239, 68, 68, 0.09);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  color: var(--text-secondary);
+}
+
+.registry-notice--sample svg { color: var(--danger, #EF4444); }
+
+.registry-notice--partial {
+  background: rgba(245, 158, 11, 0.09);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: var(--text-secondary);
+}
+
+.registry-notice--partial svg { color: var(--warning, #F59E0B); }
+
+.registry-notice-title {
+  font-weight: 650;
+  margin: 0 0 2px;
+  color: var(--text-primary);
+}
+
+.registry-notice-body { margin: 0; }

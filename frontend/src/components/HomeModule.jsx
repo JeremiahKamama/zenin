@@ -193,7 +193,7 @@ export function HomeModule({
   };
   const displayIntervals = Array.isArray(getAppRuntimeConfig()?.ui?.homeDisplayIntervals)
     ? getAppRuntimeConfig().ui.homeDisplayIntervals
-    : ["1D", "1W", "1M", "3M", "1Y", "ALL"];
+    : ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "ALL"];
   const [chartMode, setChartMode] = useState("equity"); // equity | percentage | pnl
   const [chartInterval, setChartInterval] = useState("1D");
   const [moversHorizon, setMoversHorizon] = useState("daily");
@@ -1348,7 +1348,10 @@ export function HomeModule({
   const chartData = useMemo(() => {
     const timeline = unifiedTimeline.length ? unifiedTimeline : effectiveTimeline;
     const baseValue = unifiedTimeline.length ? historyBaseValue : initialBalance;
-    const pointCountMap = { "1D": 24, "1W": 7, "1M": 30, "3M": 90, "1Y": 52, "ALL": 120, "YTD": 52, "5Y": 60, "MAX": 120 };
+    const pointCountMap = {
+      "4H": 16, "1D": 24, "1W": 28, "1M": 30, "3M": 45, "6M": 60,
+      YTD: 52, "1Y": 52, "3Y": 72, "5Y": 78, MAX: 120, ALL: 120
+    };
     const points = pointCountMap[chartInterval] || 24;
     const now = Date.now();
     const start = (() => {
@@ -1356,7 +1359,9 @@ export function HomeModule({
       if (chartInterval === "1W") return now - 7 * 24 * 60 * 60 * 1000;
       if (chartInterval === "1M") return now - 30 * 24 * 60 * 60 * 1000;
       if (chartInterval === "3M") return now - 90 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "6M") return now - 182 * 24 * 60 * 60 * 1000;
       if (chartInterval === "1Y") return now - 365 * 24 * 60 * 60 * 1000;
+      if (chartInterval === "3Y") return now - 3 * 365 * 24 * 60 * 60 * 1000;
        if (chartInterval === "ALL") {
         const firstTradeTs = timeline[0]?.t;
         return Number.isFinite(firstTradeTs) ? firstTradeTs : now - 365 * 24 * 60 * 60 * 1000;
@@ -2027,7 +2032,11 @@ export function HomeModule({
   const totalReturnPct = initialBalance > 0 ? (totalGainLoss / initialBalance) * 100 : 0;
   const dailyChangePct = initialBalance > 0 ? (dailyChange / initialBalance) * 100 : 0;
   const chartModeButtons = [["equity", "Chart"], ["percentage", "Return"], ["pnl", "P&L"]];
-  const heroIntervals = ["Today", "1W", "1M", "YTD", "1Y"];
+  // Derived from the same list as the performance panel below, which shares
+  // `chartInterval`. A hardcoded hero list meant the two pickers could hold a
+  // value the other could not display. "1D" is labelled "Today" here for
+  // continuity with the hero's own copy.
+  const heroIntervals = displayIntervals.map((item) => (item === "1D" ? "Today" : item));
   const chartValues = chartData.map((point) => Number(point?.[1])).filter(Number.isFinite);
   const bestDay = chartValues.length > 1 ? Math.max(...chartValues.slice(1).map((value, idx) => value - chartValues[idx])) : 0;
   const worstDay = chartValues.length > 1 ? Math.min(...chartValues.slice(1).map((value, idx) => value - chartValues[idx])) : 0;

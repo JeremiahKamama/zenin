@@ -21,10 +21,13 @@ import CheckCircle2 from 'lucide-react/dist/esm/icons/circle-check.mjs';
 import AlertCircle from 'lucide-react/dist/esm/icons/circle-alert.mjs';
 import Clock from 'lucide-react/dist/esm/icons/clock.mjs';
 import { avatarInitials } from './utils/initials';
-import { normalizePlanId, planLabel, planOptionLabel, PLANS } from './utils/plans';
+import { normalizePlanId, planLabel, planOptionLabel, PLANS, PLAN_BREAKDOWN_ORDER } from './utils/plans';
 import PlanChangeModal from './components/PlanChangeModal';
 import RecipientManagerModal from './components/RecipientManagerModal';
 import ActionPromptModal from './components/ActionPromptModal';
+import AdminAccountMenu from './components/AdminAccountMenu';
+import AlertRuleModal from './components/AlertRuleModal';
+import { WORST_CASE_MODES } from './dev/worstCaseUsers';
 import { pluralize } from './utils/pluralize';
 import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right.mjs';
 import ArrowDownRight from 'lucide-react/dist/esm/icons/arrow-down-right.mjs';
@@ -98,7 +101,7 @@ import {
   Filler
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
-import { adminFetch, authApiFetch } from './utils/adminFetch';
+import { adminFetch, authApiFetch, SERVICE_ORIGIN } from './utils/adminFetch';
 import AdminMfaEnrollment from './components/AdminMfaEnrollment';
 import { copyTextToClipboard, downloadCsvFile, downloadJsonFile } from './utils/adminUi';
 import CoverageRegistryView from './CoverageRegistryView';
@@ -161,17 +164,24 @@ const formatRelativeTime = (value, fallback = 'N/A') => {
   return `${Math.max(1, Math.round(diffMs / day))}d ago`;
 };
 
-const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency,
-  maximumFractionDigits: 0,
-}).format(Number(value || 0));
-
 const formatMoneyAmount = (value, currency = 'USD') => new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency,
+  minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 }).format(Number(value || 0));
+
+/**
+ * Money in a billing console must show cents.
+ *
+ * The previous `formatCurrency` set `maximumFractionDigits: 0`, so a real
+ * $29.99 invoice rendered as "$30" and a $0.99 transaction as "$1". That is not
+ * a formatting preference: an operator reconciling the ledger against the
+ * payment provider sees figures that do not agree, and a sub-dollar charge
+ * appears free. Kept as a named alias because it is the label most call sites
+ * already use.
+ */
+const formatCurrency = (value, currency = 'USD') => formatMoneyAmount(value, currency);
 
 const formatMetricNumber = (value) => Number(value || 0).toLocaleString();
 
@@ -515,40 +525,98 @@ const SectionHeader = ({ title, description, breadcrumbs, onAction }) => (
   </div>
 );
 
-const SummaryCard = ({ icon: Icon, label, value, trend, trendUp, sparklineColor }) => (
+/**
+ * Build an SVG path from a numeric series, normalised into a 100x40 box.
+ * Returns null when there is nothing real to draw.
+ */
+function buildSparklinePath(series) {
+  const values = Array.isArray(series)
+    ? series.map(Number).filter((n) => Number.isFinite(n))
+    : [];
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  // A flat series is a legitimate observation, so draw it as a level line
+  // rather than dividing by zero.
+  const span = max - min || 1;
+  const stepX = 100 / (values.length - 1);
+  return values
+    .map((value, index) => {
+      const x = index * stepX;
+      const y = 34 - ((value - min) / span) * 28;
+      return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(' ');
+}
+
+const SummaryCard = ({ icon: Icon, label, value, trend, trendUp, trendTone, trendDirection, sparklineColor, series }) => {
+  const sparklinePoints = buildSparklinePath(series);
+  const trendDirectionLabel = sparklinePoints ? 'data available' : 'no data';
+  return (
   <div className="card" style={{ padding: '24px', position: 'relative', overflow: 'hidden' }}>
     <div style={{ position: 'absolute', top: 0, right: 0, width: '64px', height: '64px', background: 'var(--accent-soft)', opacity: 0.4, pointerEvents: 'none' }} />
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
       <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border-light)' }}>
         <Icon size={20} color={sparklineColor} />
       </div>
-      {trend && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: trendUp ? 'var(--success)' : 'var(--danger)', fontWeight: 600, padding: '4px 8px', background: trendUp ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: '6px' }}>
-          {trendUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-          {trend}
-        </div>
-      )}
+      {trend && (() => {
+        // `trendTone` decouples meaning from movement. Most of these captions
+        // are descriptive rather than directional ("Live directory", "Catalog
+        // size", "28 suspended"), so they must read neutral; only a genuine
+        // good/bad signal is coloured, and only a real direction gets an arrow.
+        const tone = trendTone || (trendUp === true ? 'good' : trendUp === false ? 'bad' : 'neutral');
+        const palette = {
+          good: { fg: 'var(--success)', bg: 'rgba(16, 185, 129, 0.1)' },
+          bad: { fg: 'var(--danger)', bg: 'rgba(239, 68, 68, 0.1)' },
+          warn: { fg: 'var(--warning, #F59E0B)', bg: 'rgba(245, 158, 11, 0.12)' },
+          neutral: { fg: 'var(--text-muted)', bg: 'rgba(255, 255, 255, 0.04)' }
+        }[tone] || { fg: 'var(--text-muted)', bg: 'rgba(255, 255, 255, 0.04)' };
+        const Arrow = tone === 'good' ? ArrowUpRight : tone === 'bad' ? ArrowDownRight : trendDirection === 'up' ? ArrowUpRight : trendDirection === 'down' ? ArrowDownRight : null;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: palette.fg, fontWeight: 600, padding: '4px 8px', background: palette.bg, borderRadius: '6px' }}>
+            {Arrow ? <Arrow size={14} aria-hidden="true" /> : null}
+            {trend}
+          </div>
+        );
+      })()}
     </div>
     <div>
       <p style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 500, marginBottom: '6px' }}>{label}</p>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
         <h3 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.03em' }}>{value}</h3>
-        <div style={{ width: '80px', height: '32px' }}>
-          <svg viewBox="0 0 100 40" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-            <path 
-              d={`M0 ${30 + Math.random() * 10} L20 ${20 + Math.random() * 15} L40 ${25 + Math.random() * 10} L60 ${10 + Math.random() * 20} L80 ${15 + Math.random() * 10} L100 ${5 + Math.random() * 10}`} 
-              fill="none" 
-              stroke={sparklineColor} 
-              strokeWidth="2.5" 
-              strokeLinecap="round" 
-              strokeLinejoin="round" 
-            />
-          </svg>
-        </div>
+        {/* A real sparkline, or nothing.
+            This previously drew a path built from Math.random() on every
+            render — 28 cards of invented wiggle that changed each time React
+            re-rendered, including on every keystroke in the search box. A card
+            with no series now shows no sparkline rather than a fabricated one. */}
+        {sparklinePoints ? (
+          <div style={{ width: '80px', height: '32px' }}>
+            <svg
+              viewBox="0 0 100 40"
+              preserveAspectRatio="none"
+              style={{ width: '100%', height: '100%', overflow: 'visible' }}
+              role="img"
+              aria-label={`Trend: ${trendDirectionLabel}`}
+            >
+              <path
+                d={sparklinePoints}
+                fill="none"
+                stroke={sparklineColor || 'var(--accent)'}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+        ) : (
+          <div style={{ width: '80px', height: '32px' }} aria-hidden="true" />
+        )}
       </div>
     </div>
   </div>
-);
+  );
+};
 
 const Toggle = ({ active, onClick }) => (
   <button
@@ -844,7 +912,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                     confirmLabel: 'Send reset link',
                     context: [
                       { label: 'Account', value: resolvedUser.email },
-                      { label: 'Plan', value: formatPlanLabel(resolvedUser.plan) },
+                      { label: 'Plan', value: planLabel(resolvedUser.plan) },
                       { label: 'Active sessions', value: String(resolvedUser.activeSessionCount ?? 0) }
                     ]
                   });
@@ -898,7 +966,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                     tone: resolvedUser.suspendedAt ? 'neutral' : 'danger',
                     context: [
                       { label: 'Account', value: resolvedUser.email },
-                      { label: 'Plan', value: formatPlanLabel(resolvedUser.plan) },
+                      { label: 'Plan', value: planLabel(resolvedUser.plan) },
                       {
                         label: 'Suspended since',
                         value: resolvedUser.suspendedAt ? formatRelativeTime(resolvedUser.suspendedAt) : 'Not suspended'
@@ -923,7 +991,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                     tone: 'danger',
                     context: [
                       { label: 'Account', value: resolvedUser.email },
-                      { label: 'Plan', value: formatPlanLabel(resolvedUser.plan) },
+                      { label: 'Plan', value: planLabel(resolvedUser.plan) },
                       { label: 'Joined', value: formatRelativeTime(resolvedUser.joined || resolvedUser.createdAt) }
                     ]
                   });
@@ -1166,9 +1234,59 @@ const LogDetailPanel = ({ log, onClose, onCreateIncident }) => {
   );
 };
 
-const LogoutModal = ({ onClose, onLogout }) => (
+/**
+ * Describe the current session from what the browser actually reports.
+ *
+ * Every value here is derived, and anything undeterminable says so. The prior
+ * implementation hardcoded a device, OS, browser version, city, and IP.
+ */
+function describeSession(user) {
+  const ua = typeof navigator !== 'undefined' ? String(navigator.userAgent || '') : '';
+
+  const platform = /Mac/i.test(ua) ? 'macOS'
+    : /Windows/i.test(ua) ? 'Windows'
+    : /Android/i.test(ua) ? 'Android'
+    : /iPhone|iPad|iPod/i.test(ua) ? 'iOS'
+    : /Linux/i.test(ua) ? 'Linux'
+    : 'Unknown platform';
+
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /OPR\//.test(ua) ? 'Opera'
+    : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome'
+    : /Safari\//.test(ua) ? 'Safari'
+    : 'Unknown browser';
+
+  // We can detect the platform family but not the marketing model, so we do not
+  // claim one.
+  const deviceLabel = platform === 'Unknown platform' ? 'Unrecognised device' : `${platform} device`;
+
+  const versionMatch = ua.match(/(?:Edg|OPR|Firefox|Chrome|Version)\/([\d.]+)/);
+  const browserNote = versionMatch ? `v${versionMatch[1]}` : 'version not reported';
+
+  let timezone = 'Unknown';
+  try {
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown';
+  } catch {
+    timezone = 'Unknown';
+  }
+
+  return {
+    platform,
+    deviceLabel,
+    browser,
+    browserNote,
+    timezone,
+    signedInAs: user?.email || 'unknown account'
+  };
+}
+
+const LogoutModal = ({ onClose, onLogout, user }) => {
+  const sessionInfo = describeSession(user);
+  return (
   <div className="modal-overlay" onClick={onClose} style={{ backdropFilter: 'blur(12px)', background: 'rgba(0,0,0,0.85)' }}>
     <div className="modal-container" onClick={e => e.stopPropagation()} style={{ width: '420px', borderRadius: '24px', background: 'var(--bg-card)', border: '1px solid rgba(255,255,255,0.08)', padding: '32px' }}>
+
       <div style={{ textAlign: 'center', marginBottom: '24px' }}>
         <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px auto' }}>
           <LogOut size={32} color="var(--danger)" />
@@ -1177,6 +1295,15 @@ const LogoutModal = ({ onClose, onLogout }) => (
         <p style={{ fontSize: '15px', color: 'var(--text-muted)', lineHeight: 1.5 }}>Are you sure you want to log out? You will be signed out of your current session on this device.</p>
       </div>
 
+      {/* This block used to name a fabricated device, OS, browser version, city,
+          and IP address ("MacBook Pro", "macOS Sonoma", "Chrome v125.0.6422",
+          "San Francisco, US", "203.0.113.42") under the heading "Detected IP".
+          None of it was measured. On a security dialog that is worse than
+          nothing: an operator checking an unexpected sign-out is told a device
+          and location that were invented for them.
+
+          Every value below is real, and anything we genuinely do not know says
+          so rather than inventing a plausible answer. */}
       <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '20px', marginBottom: '32px' }}>
         <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>Current Session</p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -1185,8 +1312,8 @@ const LogoutModal = ({ onClose, onLogout }) => (
               <Laptop size={16} color="var(--text-muted)" />
             </div>
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>MacBook Pro</p>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>macOS Sonoma</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>{sessionInfo.platform}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{sessionInfo.deviceLabel}</p>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1194,8 +1321,8 @@ const LogoutModal = ({ onClose, onLogout }) => (
               <Globe size={16} color="var(--text-muted)" />
             </div>
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>Chrome</p>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>v125.0.6422</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>{sessionInfo.browser}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{sessionInfo.browserNote}</p>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1203,8 +1330,8 @@ const LogoutModal = ({ onClose, onLogout }) => (
               <MapPin size={16} color="var(--text-muted)" />
             </div>
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>San Francisco, US</p>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Detected IP</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>{sessionInfo.timezone}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Device time zone</p>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1212,11 +1339,14 @@ const LogoutModal = ({ onClose, onLogout }) => (
               <Activity size={16} color="var(--text-muted)" />
             </div>
             <div>
-              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>203.0.113.42</p>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Static IP</p>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'white' }}>{sessionInfo.signedInAs}</p>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Signed in as</p>
             </div>
           </div>
         </div>
+        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '14px', lineHeight: 1.5 }}>
+          IP and location are recorded server-side against each action in the audit trail.
+        </p>
       </div>
 
       <div style={{ display: 'flex', gap: '12px' }}>
@@ -1225,7 +1355,8 @@ const LogoutModal = ({ onClose, onLogout }) => (
       </div>
     </div>
   </div>
-);
+  );
+};
 
 const ServiceStatusGrid = ({ health }) => (
   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginTop: '12px' }}>
@@ -1248,7 +1379,71 @@ const ServiceStatusGrid = ({ health }) => (
   </div>
 );
 
-const OverviewView = ({ stats, onOpenAudit }) => (
+// Rendered periods for the growth chart, in days. 90 is the server's cap.
+const TREND_RANGES = [7, 30, 90];
+
+/** "Jun 4" — short axis label for a YYYY-MM-DD day string. */
+function trendLabel(day, rangeDays) {
+  const parsed = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return String(day || '');
+  return parsed.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC'
+  });
+}
+
+const TREND_SERIES_META = [
+  { key: 'signups', label: 'Sign-ups', color: 'var(--accent)' },
+  { key: 'sessions', label: 'Sessions', color: 'var(--success)' },
+  { key: 'trades', label: 'Trades', color: 'var(--warning, #F59E0B)' },
+  { key: 'adminActions', label: 'Admin actions', color: 'var(--text-muted)' }
+];
+
+const OverviewView = ({ stats, onOpenAudit }) => {
+  const [trendRange, setTrendRange] = useState(30);
+  const [trendSeries, setTrendSeries] = useState([]);
+  const [trendsLoading, setTrendsLoading] = useState(true);
+
+  // Real daily counts. This chart previously plotted `totalUsers * 0.8 … 1.02`
+  // against hardcoded 'May 1'…'Jun 4' labels — a fabricated upward curve that
+  // looked like history and could never disagree with itself.
+  useEffect(() => {
+    let cancelled = false;
+    setTrendsLoading(true);
+    adminFetch(`/stats/trends?days=${trendRange}`)
+      .then((data) => {
+        if (cancelled) return;
+        const series = Array.isArray(data?.series) ? data.series : [];
+        setTrendSeries(data?.unavailable ? [] : series);
+      })
+      .catch(() => {
+        if (!cancelled) setTrendSeries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTrendsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [trendRange]);
+
+  // Only plot series that carry at least one non-zero value: a flat line pinned
+  // at zero reads as a broken chart rather than as "no trades yet".
+  const trendDatasets = useMemo(() => TREND_SERIES_META
+    .filter((meta) => trendSeries.some((point) => Number(point?.[meta.key] || 0) > 0))
+    .map((meta) => ({
+      label: meta.label,
+      data: trendSeries.map((point) => Number(point?.[meta.key] || 0)),
+      borderColor: meta.color,
+      backgroundColor: meta.color,
+      fill: false,
+      tension: 0.35,
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointBackgroundColor: meta.color
+    })), [trendSeries]);
+
+  return (
   <div className="fade-in">
     <SectionHeader 
       title="System Overview" 
@@ -1257,36 +1452,40 @@ const OverviewView = ({ stats, onOpenAudit }) => (
     />
     
     <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-      <SummaryCard 
-        icon={Users} 
-        label="Total Users" 
-        value={stats?.totalUsers?.toLocaleString() || '0'} 
-        trend="Active Growth" 
-        trendUp={true} 
-        sparklineColor="var(--accent)" 
+      <SummaryCard
+        icon={Users}
+        label="Total Users"
+        value={stats?.totalUsers?.toLocaleString() || '0'}
+        trend={`${trendSeries.reduce((sum, point) => sum + Number(point?.signups || 0), 0)} new in ${trendRange}d`}
+        trendTone="neutral"
+        sparklineColor="var(--accent)"
+        // Real sign-ups per day from /api/admin/stats/trends. Absent data means
+        // no sparkline is drawn at all.
+        series={trendSeries.map((point) => Number(point?.signups || 0))}
       />
-      <SummaryCard 
-        icon={Activity} 
-        label="Active Sessions" 
-        value={stats?.activeSessions?.toLocaleString() || '0'} 
-        trend="Real-time" 
-        trendUp={true} 
-        sparklineColor="var(--success)" 
+      <SummaryCard
+        icon={Activity}
+        label="Active Sessions"
+        value={stats?.activeSessions?.toLocaleString() || '0'}
+        trend="Real-time"
+        trendTone="neutral"
+        sparklineColor="var(--success)"
+        series={trendSeries.map((point) => Number(point?.sessions || 0))}
       />
-      <SummaryCard 
-        icon={Zap} 
-        label="Total Trades" 
-        value={stats?.totalTrades?.toLocaleString() || '0'} 
-        trend="Across All Workspaces" 
-        trendUp={true} 
-        sparklineColor="var(--text-secondary)" 
+      <SummaryCard
+        icon={Zap}
+        label="Total Trades"
+        value={stats?.totalTrades?.toLocaleString() || '0'}
+        trend="Across all workspaces"
+        trendTone="neutral"
+        sparklineColor="var(--text-secondary)"
+        series={trendSeries.map((point) => Number(point?.trades || 0))}
       />
       <SummaryCard 
         icon={BillingIcon} 
         label="Current MRR" 
         value={`$${stats?.mrr?.toLocaleString() || '0'}`} 
-        trend="Projected Revenue" 
-        trendUp={true} 
+        trend="Projected Revenue" trendTone="neutral" 
         sparklineColor="var(--warning)" 
       />
     </div>
@@ -1296,44 +1495,59 @@ const OverviewView = ({ stats, onOpenAudit }) => (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <div>
             <h3 style={{ fontSize: '16px', fontWeight: 600 }}>User Growth & Engagement</h3>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Historical trends over the last 30 days</p>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              Daily counts from live platform data · last {trendRange} days
+            </p>
           </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }}>7D</button>
-          <button className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>30D</button>
+          {[['7D', 7], ['30D', 30], ['90D', 90]].map(([label, days]) => (
+            <button
+              key={label}
+              type="button"
+              className={`btn ${trendRange === days ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ padding: '6px 12px', fontSize: '12px' }}
+              onClick={() => setTrendRange(days)}
+              aria-pressed={trendRange === days}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         </div>
         <div style={{ height: '350px' }}>
-          <Line 
-            data={{
-              labels: ['May 1', 'May 7', 'May 14', 'May 21', 'May 28', 'Jun 4'],
-              datasets: [{
-                label: 'Total Users',
-                data: [
-                  Math.floor((stats?.totalUsers || 100) * 0.8), 
-                  Math.floor((stats?.totalUsers || 100) * 0.85), 
-                  Math.floor((stats?.totalUsers || 100) * 0.9), 
-                  Math.floor((stats?.totalUsers || 100) * 0.95), 
-                  stats?.totalUsers || 100, 
-                  Math.floor((stats?.totalUsers || 100) * 1.02)
-                ],
-                borderColor: 'var(--accent)',
-                backgroundColor: 'var(--accent-soft)',
-                fill: true,
-                tension: 0.4,
-                pointRadius: 4,
-                pointBackgroundColor: 'var(--accent)'
-              }]
-            }}
-            options={{ 
-              maintainAspectRatio: false, 
-              plugins: { legend: { display: false } }, 
-              scales: { 
-                y: { grid: { color: 'var(--chart-grid)' }, ticks: { color: 'var(--chart-axis-text, var(--text-muted))' } },
-                x: { grid: { display: false }, ticks: { color: 'var(--chart-axis-text, var(--text-muted))' } }
-              } 
-            }}
-          />
+          {trendSeries.length === 0 ? (
+            <div className="chart-empty">
+              <p>{trendsLoading ? 'Loading activity…' : 'No activity recorded in this window.'}</p>
+              {!trendsLoading && (
+                <p className="chart-empty-hint">
+                  Trends come from real sign-ups, sessions, trades, and admin actions. There is
+                  nothing to plot until the platform records some.
+                </p>
+              )}
+            </div>
+          ) : (
+            <Line
+              data={{
+                labels: trendSeries.map((point) => trendLabel(point.day, trendRange)),
+                datasets: trendDatasets
+              }}
+              options={{
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                  legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: { color: 'var(--chart-axis-text, var(--text-muted))', boxWidth: 10, usePointStyle: true }
+                  }
+                },
+                scales: {
+                  y: { beginAtZero: true, grid: { color: 'var(--chart-grid)' }, ticks: { color: 'var(--chart-axis-text, var(--text-muted))', precision: 0 } },
+                  x: { grid: { display: false }, ticks: { color: 'var(--chart-axis-text, var(--text-muted))', maxTicksLimit: 8 } }
+                }
+              }}
+            />
+          )}
         </div>
       </div>
 
@@ -1343,15 +1557,21 @@ const OverviewView = ({ stats, onOpenAudit }) => (
           <div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>Subscription Breakdown</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {['Starter', 'Pro', 'Desk'].map(plan => {
-                const count = stats?.planBreakdown?.[plan.toLowerCase()] || 0;
-                const total = stats?.totalUsers || 1;
-                const percentage = Math.round((count / total) * 100);
-                const color = 'var(--color-text-secondary, var(--text-secondary))';
+              {/* The canonical plan ids are starter/plus/premium ("pro" and
+                  "desk" are retired aliases). Reading planBreakdown['pro'] and
+                  ['desk'] therefore returned undefined for every user, so this
+                  panel reported 0 (0%) for all three rows no matter what the
+                  real distribution was. */}
+              {PLAN_BREAKDOWN_ORDER.map(({ id, label, color }) => {
+                const count = Number(stats?.planBreakdown?.[id] || 0);
+                const total = Number(stats?.totalUsers || 0);
+                // No users means no meaningful percentage — say 0%, and do not
+                // divide by a fudged 1 to manufacture one.
+                const percentage = total > 0 ? Math.round((count / total) * 100) : 0;
                 return (
-                  <div key={plan}>
+                  <div key={id}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
-                      <span style={{ fontWeight: 500 }}>{plan}</span>
+                      <span style={{ fontWeight: 500 }}>{label}</span>
                       <span style={{ color: 'var(--text-muted)' }}>{count} ({percentage}%)</span>
                     </div>
                     <div style={{ height: '6px', background: 'var(--bg-app)', borderRadius: '3px', overflow: 'hidden' }}>
@@ -1443,9 +1663,13 @@ const OverviewView = ({ stats, onOpenAudit }) => (
       </div>
     </div>
   </div>
-);
+  );
+};
 
 const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, onAddUser, onExportUsers, onBulkAction }) => {
+  // adminUi is required for the save-view dialog; without this the
+  // "Save View" button threw ReferenceError instead of prompting.
+  const adminUi = useAdminUi();
   const savedViewsKey = 'zenin_admin_user_views';
   const [planFilter, setPlanFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -1547,10 +1771,10 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={Users} label="Total Users" value={formatMetricNumber(users.length)} trend="Live directory" trendUp={true} sparklineColor="var(--accent)" />
-        <SummaryCard icon={Activity} label="Active Users" value={formatMetricNumber(activeUsers)} trend={`${Math.max(users.length - activeUsers, 0)} suspended`} trendUp={true} sparklineColor="var(--success)" />
-        <SummaryCard icon={UserPlus} label="New This Week" value={formatMetricNumber(newThisWeek)} trend="Recent signups" trendUp={true} sparklineColor="var(--text-secondary)" />
-        <SummaryCard icon={ShieldCheck} label="Admins" value={formatMetricNumber(adminCount)} trend="Role-separated access" trendUp={true} sparklineColor="var(--warning)" />
+        <SummaryCard icon={Users} label="Total Users" value={formatMetricNumber(users.length)} trend="Live directory" trendTone="neutral" sparklineColor="var(--accent)" />
+        <SummaryCard icon={Activity} label="Active Users" value={formatMetricNumber(activeUsers)} trend={`${Math.max(users.length - activeUsers, 0)} suspended`} trendTone={users.length - activeUsers > 0 ? 'warn' : 'neutral'} sparklineColor="var(--success)" />
+        <SummaryCard icon={UserPlus} label="New This Week" value={formatMetricNumber(newThisWeek)} trend="Recent signups" trendTone="neutral" sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={ShieldCheck} label="Admins" value={formatMetricNumber(adminCount)} trend="Role-separated access" trendTone="neutral" sparklineColor="var(--warning)" />
       </div>
 
       <div className="card">
@@ -1711,10 +1935,10 @@ const DatabaseView = ({ stats, onRunMigration, onSelectTable, onChangePage }) =>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={Database} label="Tables" value={formatMetricNumber(stats?.summary?.totalTables || 0)} trend="Catalog size" trendUp={true} sparklineColor="var(--accent)" />
-        <SummaryCard icon={HardDrive} label="Storage Used" value={stats?.summary?.totalSize || '0 B'} trend="Current database size" trendUp={true} sparklineColor="var(--success)" />
-        <SummaryCard icon={ActivityIcon} label="Avg Query Latency" value={`${formatMetricNumber(stats?.summary?.avgQueryLatencyMs || 0)} ms`} trend="Recent request profile" trendUp={true} sparklineColor="var(--text-secondary)" />
-        <SummaryCard icon={Server} label="Connections" value={formatMetricNumber(stats?.summary?.activeConnections || 0)} trend="Current sessions" trendUp={true} sparklineColor="var(--warning)" />
+        <SummaryCard icon={Database} label="Tables" value={formatMetricNumber(stats?.summary?.totalTables || 0)} trend="Catalog size" trendTone="neutral" sparklineColor="var(--accent)" />
+        <SummaryCard icon={HardDrive} label="Storage Used" value={stats?.summary?.totalSize || '0 B'} trend="Current database size" trendTone="neutral" sparklineColor="var(--success)" />
+        <SummaryCard icon={ActivityIcon} label="Avg Query Latency" value={`${formatMetricNumber(stats?.summary?.avgQueryLatencyMs || 0)} ms`} trend="Recent request profile" trendTone="neutral" sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={Server} label="Connections" value={formatMetricNumber(stats?.summary?.activeConnections || 0)} trend="Current sessions" trendTone="neutral" sparklineColor="var(--warning)" />
       </div>
 
       <div className="db-grid">
@@ -1955,10 +2179,10 @@ const AuditTrailView = ({ auditData, onSelectEvent, onOpenUser, seedQuery = '' }
       <SectionHeader title="Audit Trail" description="Reasoned, request-correlated history for sensitive admin actions." breadcrumbs={['Audit Trail']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={History} label="Loaded Events" value={formatMetricNumber(auditData?.total || filteredRows.length)} trend="Current audit window" trendUp={true} sparklineColor="var(--accent)" />
-        <SummaryCard icon={ShieldAlert} label="Critical Events" value={formatMetricNumber(filteredRows.filter((entry) => entry.severity === 'critical').length)} trend="Suspensions and deletions" trendUp={true} sparklineColor="var(--danger)" />
-        <SummaryCard icon={UserCheck} label="Role Changes" value={formatMetricNumber(filteredRows.filter((entry) => /ROLE/.test(entry.action)).length)} trend="Governance changes" trendUp={true} sparklineColor="var(--text-secondary)" />
-        <SummaryCard icon={Download} label="Reasoned Actions" value={formatMetricNumber(filteredRows.filter((entry) => entry.reason).length)} trend="Captured intent" trendUp={true} sparklineColor="var(--success)" />
+        <SummaryCard icon={History} label="Loaded Events" value={formatMetricNumber(auditData?.total || filteredRows.length)} trend="Current audit window" trendTone="neutral" sparklineColor="var(--accent)" />
+        <SummaryCard icon={ShieldAlert} label="Critical Events" value={formatMetricNumber(filteredRows.filter((entry) => entry.severity === 'critical').length)} trend="Suspensions and deletions" trendTone={filteredRows.some((entry) => entry.severity === 'critical') ? 'bad' : 'neutral'} sparklineColor="var(--danger)" />
+        <SummaryCard icon={UserCheck} label="Role Changes" value={formatMetricNumber(filteredRows.filter((entry) => /ROLE/.test(entry.action)).length)} trend="Governance changes" trendTone="neutral" sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={Download} label="Reasoned Actions" value={formatMetricNumber(filteredRows.filter((entry) => entry.reason).length)} trend="Captured intent" trendTone="neutral" sparklineColor="var(--success)" />
       </div>
 
       <div className="card">
@@ -2196,10 +2420,10 @@ const BillingView = ({ stats }) => {
       <SectionHeader title="Billing & Subscriptions" description="Derived revenue, invoice, and provider health from the current production workspace." breadcrumbs={['Billing']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={BillingIcon} label="MRR" value={formatCurrency(summary.mrr || 0)} trend="Current plan revenue" trendUp={true} sparklineColor="var(--accent)" />
-        <SummaryCard icon={Calendar} label="Active Subscriptions" value={formatMetricNumber(summary.activeSubscriptions || 0)} trend="Paid workspaces" trendUp={true} sparklineColor="var(--text-secondary)" />
-        <SummaryCard icon={AlertCircle} label="Failed Payments" value={formatMetricNumber(summary.failedPayments || 0)} trend="Needs follow-up" trendUp={false} sparklineColor="var(--danger)" />
-        <SummaryCard icon={BillingIcon} label="Outstanding" value={formatCurrency(summary.outstandingAmount || 0)} trend="Open invoice balance" trendUp={true} sparklineColor="var(--warning)" />
+        <SummaryCard icon={BillingIcon} label="MRR" value={formatCurrency(summary.mrr || 0)} trend="Current plan revenue" trendTone="neutral" sparklineColor="var(--accent)" />
+        <SummaryCard icon={Calendar} label="Active Subscriptions" value={formatMetricNumber(summary.activeSubscriptions || 0)} trend="Paid workspaces" trendTone="neutral" sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={AlertCircle} label="Failed Payments" value={formatMetricNumber(summary.failedPayments || 0)} trend="Needs follow-up" trendTone={Number(summary.failedPayments || 0) > 0 ? 'bad' : 'neutral'} sparklineColor="var(--danger)" />
+        <SummaryCard icon={BillingIcon} label="Outstanding" value={formatCurrency(summary.outstandingAmount || 0)} trend="Open invoice balance" trendTone="neutral" sparklineColor="var(--warning)" />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(320), gap: '24px', marginBottom: '24px' }}>
@@ -2444,6 +2668,40 @@ const BillingView = ({ stats }) => {
 };
 
 const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAlert, onResolveAlert, seedQuery = '' }) => {
+  const [liveRefresh, setLiveRefresh] = useState(false);
+  // Real window state for the two log charts. These were single-option selects
+  // with no onChange — they looked like filters and filtered nothing.
+  const [errorTrendRange, setErrorTrendRange] = useState('7d');
+  const [slowEndpointRange, setSlowEndpointRange] = useState('24h');
+
+  // Genuine polling. Paused while the tab is hidden so a backgrounded console
+  // does not keep pulling the log feed from a 0.5-CPU instance.
+  useEffect(() => {
+    if (!liveRefresh) return undefined;
+    let timer = null;
+    const start = () => {
+      if (timer) return;
+      timer = window.setInterval(() => onRefresh?.(), 15000);
+    };
+    const stop = () => {
+      if (!timer) return;
+      window.clearInterval(timer);
+      timer = null;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') stop();
+      else { onRefresh?.(); start(); }
+    };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
+  }, [liveRefresh, onRefresh]);
+  // adminUi is required for the save-view dialog; without this the
+  // "Save View" button threw ReferenceError instead of prompting.
+  const adminUi = useAdminUi();
   const savedViewsKey = 'zenin_admin_log_views';
   const [query, setQuery] = useState('');
   const [levelFilter, setLevelFilter] = useState('all');
@@ -2512,10 +2770,10 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
       />
       
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '20px', marginBottom: '32px' }}>
-        <SummaryCard icon={AlertCircle} label="Error Rate" value={`${logsData?.metrics?.errorRate || 0}%`} trend="Last 7 days" trendUp={false} sparklineColor="var(--danger)" />
-        <SummaryCard icon={ZapOff} label="Failed Requests" value={formatMetricNumber(logsData?.metrics?.failedRequests || 0)} trend="Status >= 400" trendUp={false} sparklineColor="var(--warning)" />
-        <SummaryCard icon={Lock} label="Auth Failures" value={formatMetricNumber(logsData?.metrics?.authFailures || 0)} trend="Auth service failures" trendUp={false} sparklineColor="var(--severity-high)" />
-        <SummaryCard icon={ActivityIcon} label="p95 Latency" value={`${formatMetricNumber(logsData?.metrics?.p95LatencyMs || 0)} ms`} trend="Observed requests" trendUp={true} sparklineColor="var(--accent)" />
+        <SummaryCard icon={AlertCircle} label="Error Rate" value={`${logsData?.metrics?.errorRate || 0}%`} trend="Last 7 days" trendTone="bad" sparklineColor="var(--danger)" />
+        <SummaryCard icon={ZapOff} label="Failed Requests" value={formatMetricNumber(logsData?.metrics?.failedRequests || 0)} trend="Status >= 400" trendTone="bad" sparklineColor="var(--warning)" />
+        <SummaryCard icon={Lock} label="Auth Failures" value={formatMetricNumber(logsData?.metrics?.authFailures || 0)} trend="Auth service failures" trendTone="bad" sparklineColor="var(--severity-high)" />
+        <SummaryCard icon={ActivityIcon} label="p95 Latency" value={`${formatMetricNumber(logsData?.metrics?.p95LatencyMs || 0)} ms`} trend="Observed requests" trendTone="neutral" sparklineColor="var(--accent)" />
       </div>
 
       <div className="card">
@@ -2536,12 +2794,26 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
             {(logsData?.services || []).map((service) => <option key={service} value={service}>{service}</option>)}
           </select>
           <button className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={saveCurrentView}>Save View</button>
-          <button type="button" className="live-toggle" onClick={onRefresh}>
-            <div className="live-dot" />
-            <span>Live</span>
-            <div style={{ width: '32px', height: '16px', background: 'var(--accent)', borderRadius: '8px', position: 'relative', cursor: 'pointer', marginLeft: '4px' }}>
-              <div style={{ width: '12px', height: '12px', background: 'white', borderRadius: '50%', position: 'absolute', right: '2px', top: '2px' }} />
+          {/* This was a switch painted permanently ON whose click fetched once:
+              it implied continuous polling that never happened. It now toggles a
+              real 15s refresh, and states which mode it is in. */}
+          <button
+            type="button"
+            className={`live-toggle${liveRefresh ? ' is-live' : ''}`}
+            onClick={() => setLiveRefresh((value) => !value)}
+            aria-pressed={liveRefresh}
+            title={liveRefresh
+              ? 'Live refresh is on — logs reload every 15 seconds. Click to pause.'
+              : 'Live refresh is paused. Click to reload logs every 15 seconds.'}
+          >
+            <div className={`live-dot${liveRefresh ? ' is-on' : ''}`} />
+            <span>{liveRefresh ? 'Live' : 'Paused'}</span>
+            <div className={`live-switch${liveRefresh ? ' is-on' : ''}`} aria-hidden="true">
+              <div className="live-switch-knob" />
             </div>
+          </button>
+          <button type="button" className="btn btn-secondary" style={{ fontSize: '12px' }} onClick={onRefresh}>
+            Refresh now
           </button>
         </div>
 
@@ -2603,7 +2875,17 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Error Trend</h3>
-            <select className="search-input" style={{ width: '120px', padding: '4px' }}><option>Last 7 days</option></select>
+            <select
+              className="search-input"
+              style={{ width: '120px', padding: '4px' }}
+              value={errorTrendRange}
+              onChange={(event) => setErrorTrendRange(event.target.value)}
+              aria-label="Error trend window"
+            >
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
           </div>
           <div style={{ height: '280px' }}>
             <Line 
@@ -2635,7 +2917,17 @@ const LogsView = ({ logsData, onRefresh, onSelectLog, onExportLogs, onCreateAler
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: 600 }}>Slow Endpoints</h3>
-            <select className="search-input" style={{ width: '120px', padding: '4px' }}><option>Last 24 hours</option></select>
+            <select
+              className="search-input"
+              style={{ width: '120px', padding: '4px' }}
+              value={slowEndpointRange}
+              onChange={(event) => setSlowEndpointRange(event.target.value)}
+              aria-label="Slow endpoint window"
+            >
+              <option value="1h">Last hour</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+            </select>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {(logsData?.slowEndpoints || []).map((item) => (
@@ -2723,6 +3015,23 @@ const ADMIN_SETTINGS_FALLBACK = {
   failedLoginAlerts: true,
   billingNotices: true,
   weeklySummary: false,
+  // Organisation identity. These fields previously rendered as uncontrolled
+  // inputs with `defaultValue="Zenin Inc."` / "support@zenin.com" /
+  // "admin@zenin.com" — invented values that looked like saved configuration
+  // and could not be changed. They are real, persisted, editable settings now.
+  companyName: '',
+  supportEmail: '',
+  adminContact: '',
+  // Stored so the "Session timeout" control is real rather than decorative.
+  sessionTimeoutMinutes: 60,
+  // Reads of these values are what make them more than decoration.
+  dateFormat: 'MMM DD, YYYY',
+  timeZone: 'device',
+  displayCurrency: 'USD',
+  landingView: 'overview',
+  language: 'en-US',
+  auditRetentionDays: 180,
+  backupCadence: 'daily',
 };
 
 const SettingsView = ({ onRevokeAllSessions }) => {
@@ -2742,6 +3051,12 @@ const SettingsView = ({ onRevokeAllSessions }) => {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState('');
   const [settingsNotice, setSettingsNotice] = useState('');
+  // Server-reported security posture. Null until loaded — and the UI says so
+  // rather than assuming a restriction is in place.
+  const [posture, setPosture] = useState(null);
+  // Real last-saved time. The footer previously printed a fixed
+  // "May 29, 2025 02:15 AM" that never changed, whoever saved what.
+  const [settingsUpdatedAt, setSettingsUpdatedAt] = useState(null);
   const [recipients, setRecipients] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
@@ -2757,6 +3072,8 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       const next = { ...ADMIN_SETTINGS_FALLBACK, ...(payload?.settings || {}) };
       setSettingsDraft(next);
       setSavedSettings(next);
+      setPosture(payload?.posture || null);
+      setSettingsUpdatedAt(payload?.updatedAt || null);
     } catch (error) {
       setSettingsError(error?.message || 'Could not load settings.');
     } finally {
@@ -2788,6 +3105,12 @@ const SettingsView = ({ onRevokeAllSessions }) => {
     setSettingsNotice('');
   };
 
+  /** Set a settings key to a value. Counterpart to toggleSetting for text inputs. */
+  const setSetting = useCallback((key, value) => {
+    setSettingsDraft((prev) => ({ ...prev, [key]: value }));
+    setSettingsNotice('');
+  }, []);
+
   const dirtyKeys = useMemo(
     () => Object.keys(settingsDraft).filter((key) => settingsDraft[key] !== savedSettings[key]),
     [settingsDraft, savedSettings]
@@ -2812,6 +3135,7 @@ const SettingsView = ({ onRevokeAllSessions }) => {
       const next = { ...ADMIN_SETTINGS_FALLBACK, ...(result?.settings || {}) };
       setSettingsDraft(next);
       setSavedSettings(next);
+      setSettingsUpdatedAt(result?.updatedAt || new Date().toISOString());
       setSettingsNotice(
         `Saved ${dirtyKeys.length} ${dirtyKeys.length === 1 ? 'change' : 'changes'}. These now affect live delivery.`
       );
@@ -2923,16 +3247,48 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Company Name</p>
-              <input type="text" className="search-input" defaultValue="Zenin Inc." style={{ height: '38px' }} />
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }} htmlFor="org-company-name">Company Name</label>
+              <input
+                id="org-company-name"
+                type="text"
+                className="search-input"
+                style={{ height: '38px' }}
+                value={settingsDraft.companyName || ''}
+                placeholder="Not set"
+                maxLength={120}
+                onChange={(event) => setSetting('companyName', event.target.value)}
+              />
             </div>
             <div>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Support Email</p>
-              <input type="text" className="search-input" defaultValue="support@zenin.com" style={{ height: '38px' }} />
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }} htmlFor="org-support-email">Support Email</label>
+              <input
+                id="org-support-email"
+                type="text"
+                className="search-input"
+                style={{ height: '38px' }}
+                value={settingsDraft.supportEmail || ''}
+                placeholder="Not set"
+                maxLength={160}
+                onChange={(event) => setSetting('supportEmail', event.target.value)}
+              />
+              {settingsDraft.supportEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(settingsDraft.supportEmail) && (
+                <p style={{ fontSize: '10.5px', color: 'var(--danger, #EF4444)', marginTop: '4px' }}>
+                  That does not look like an email address.
+                </p>
+              )}
             </div>
             <div>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Admin Contact</p>
-              <input type="text" className="search-input" defaultValue="admin@zenin.com" style={{ height: '38px' }} />
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }} htmlFor="org-admin-contact">Admin Contact</label>
+              <input
+                id="org-admin-contact"
+                type="text"
+                className="search-input"
+                style={{ height: '38px' }}
+                value={settingsDraft.adminContact || ''}
+                placeholder="Not set"
+                maxLength={160}
+                onChange={(event) => setSetting('adminContact', event.target.value)}
+              />
             </div>
           </div>
         </div>
@@ -2940,8 +3296,21 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           <div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Timezone</p>
             <div style={{ position: 'relative' }}>
-              <select className="search-input" style={{ fontSize: '12px', height: '38px', width: '100%' }}>
-                <option>(UTC-07:00) Pacific Time (US & Canada)</option>
+              <select
+                className="search-input"
+                style={{ fontSize: '12px', height: '38px', width: '100%' }}
+                value={settingsDraft.timeZone || 'device'}
+                onChange={(event) => setSetting('timeZone', event.target.value)}
+                aria-label="Console time zone"
+              >
+                <option value="device">Use this device's time zone</option>
+                <option value="UTC">UTC</option>
+                <option value="Africa/Nairobi">(UTC+03:00) Nairobi</option>
+                <option value="Europe/London">(UTC+00:00) London</option>
+                <option value="America/New_York">(UTC-05:00) New York</option>
+                <option value="America/Los_Angeles">(UTC-08:00) Los Angeles</option>
+                <option value="Asia/Dubai">(UTC+04:00) Dubai</option>
+                <option value="Asia/Singapore">(UTC+08:00) Singapore</option>
               </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
@@ -2949,8 +3318,19 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           <div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>Default Currency</p>
             <div style={{ position: 'relative' }}>
-              <select className="search-input" style={{ fontSize: '12px', height: '38px', width: '100%' }}>
-                <option>USD \u2014 US Dollar</option>
+              <select
+                className="search-input"
+                style={{ fontSize: '12px', height: '38px', width: '100%' }}
+                value={settingsDraft.displayCurrency || 'USD'}
+                onChange={(event) => setSetting('displayCurrency', event.target.value)}
+                aria-label="Display currency"
+              >
+                <option value="USD">USD — US Dollar</option>
+                <option value="EUR">EUR — Euro</option>
+                <option value="GBP">GBP — British Pound</option>
+                <option value="KES">KES — Kenyan Shilling</option>
+                <option value="JPY">JPY — Japanese Yen</option>
+                <option value="ZAR">ZAR — South African Rand</option>
               </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
@@ -2968,7 +3348,19 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Default Landing Page</span>
             <div style={{ position: 'relative', width: '160px' }}>
-              <select className="search-input" style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}><option>Overview</option></select>
+              <select
+                className="search-input"
+                style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}
+                value={settingsDraft.landingView || 'overview'}
+                onChange={(event) => setSetting('landingView', event.target.value)}
+                aria-label="Default landing view"
+              >
+                <option value="overview">Overview</option>
+                <option value="users">Users</option>
+                <option value="logs">System Logs</option>
+                <option value="billing">Billing</option>
+                <option value="audit">Audit Trail</option>
+              </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
@@ -2986,14 +3378,37 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Date Format</span>
             <div style={{ position: 'relative', width: '160px' }}>
-              <select className="search-input" style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}><option>May 29, 2025 (MMM DD, YYYY)</option></select>
+              <select
+                className="search-input"
+                style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}
+                value={settingsDraft.dateFormat || 'MMM DD, YYYY'}
+                onChange={(event) => setSetting('dateFormat', event.target.value)}
+                aria-label="Date format"
+              >
+                <option value="MMM DD, YYYY">Jan 1, 2025 (MMM DD, YYYY)</option>
+                <option value="DD MMM YYYY">1 Jan 2025 (DD MMM YYYY)</option>
+                <option value="YYYY-MM-DD">2025-01-01 (YYYY-MM-DD)</option>
+                <option value="MM/DD/YYYY">01/01/2025 (MM/DD/YYYY)</option>
+                <option value="DD/MM/YYYY">01/01/2025 (DD/MM/YYYY)</option>
+              </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Language</span>
             <div style={{ position: 'relative', width: '160px' }}>
-              <select className="search-input" style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}><option>English (US)</option></select>
+              <select
+                className="search-input"
+                style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}
+                value={settingsDraft.language || 'en-US'}
+                onChange={(event) => setSetting('language', event.target.value)}
+                aria-label="Console language"
+              >
+                <option value="en-US">English (US)</option>
+                <option value="en-GB">English (UK)</option>
+                <option value="fr-FR">Français</option>
+                <option value="sw-KE">Kiswahili</option>
+              </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
@@ -3029,7 +3444,19 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <span style={{ fontSize: '13px' }}>Session Timeout</span>
             </div>
             <div style={{ position: 'relative', width: '120px' }}>
-              <select className="search-input" style={{ width: '100%', padding: '4px 10px', height: '28px', fontSize: '12px' }}><option>30 minutes</option></select>
+              <select
+                className="search-input"
+                style={{ width: '100%', padding: '4px 10px', height: '28px', fontSize: '12px' }}
+                value={String(settingsDraft.sessionTimeoutMinutes ?? 60)}
+                onChange={(event) => setSetting('sessionTimeoutMinutes', Number(event.target.value))}
+                aria-label="Session timeout"
+              >
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="480">8 hours</option>
+                <option value="1440">24 hours</option>
+              </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
@@ -3038,8 +3465,21 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <Globe size={16} color="var(--text-muted)" />
               <span style={{ fontSize: '13px' }}>Allowed IP Addresses</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
-              3 IPs configured <ChevronRight size={16} />
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', color: posture?.adminIpRestrictionEnforced ? 'var(--success)' : 'var(--text-muted)', fontSize: '13px' }}
+              title={posture
+                ? (posture.adminIpRestrictionEnforced
+                    ? `${posture.allowedIpCount} address(es) allowed; enforced in production.`
+                    : posture.allowedIpCount > 0
+                      ? `${posture.allowedIpCount} address(es) configured but not enforced outside production.`
+                      : 'No IP restriction is configured — admin access is not IP-limited.')
+                : 'Loading configuration…'}
+            >
+              {posture
+                ? (posture.allowedIpCount > 0
+                    ? `${posture.allowedIpCount} IP${posture.allowedIpCount === 1 ? '' : 's'} ${posture.adminIpRestrictionEnforced ? 'enforced' : 'configured, not enforced'}`
+                    : 'Not configured')
+                : 'Loading…'}
             </div>
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', cursor: 'pointer' }}>
@@ -3047,8 +3487,17 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               <UserCheck size={16} color="var(--text-muted)" />
               <span style={{ fontSize: '13px' }}>Single Sign-On (SSO)</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)', fontSize: '12px', fontWeight: 600 }}>
-              Enabled <ChevronRight size={16} color="var(--text-muted)" />
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', color: posture?.ssoEnabled ? 'var(--success)' : 'var(--text-muted)', fontSize: '12px', fontWeight: 600 }}
+              title={posture
+                ? (posture.ssoEnabled
+                    ? `Configured providers: ${posture.ssoProviders.join(', ')}`
+                    : 'No SSO provider credentials are configured on the server.')
+                : 'Loading configuration…'}
+            >
+              {posture
+                ? (posture.ssoEnabled ? `Enabled · ${posture.ssoProviders.join(', ')}` : 'Not configured')
+                : 'Loading…'}
             </div>
           </div>
           <div className="settings-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
@@ -3161,7 +3610,19 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               </div>
             </div>
             <div style={{ position: 'relative', width: '120px' }}>
-              <select className="search-input" style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}><option>180 days</option></select>
+              <select
+                className="search-input"
+                style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}
+                value={String(settingsDraft.auditRetentionDays ?? 180)}
+                onChange={(event) => setSetting('auditRetentionDays', Number(event.target.value))}
+                aria-label="Audit log retention"
+              >
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="180">180 days</option>
+                <option value="365">1 year</option>
+                <option value="0">Indefinite</option>
+              </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
@@ -3195,7 +3656,17 @@ const SettingsView = ({ onRevokeAllSessions }) => {
               </div>
             </div>
             <div style={{ position: 'relative', width: '120px' }}>
-              <select className="search-input" style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}><option>Daily</option></select>
+              <select
+                className="search-input"
+                style={{ width: '100%', padding: '6px 12px', height: '32px', fontSize: '12px' }}
+                value={settingsDraft.backupCadence || 'daily'}
+                onChange={(event) => setSetting('backupCadence', event.target.value)}
+                aria-label="Backup cadence"
+              >
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
               <ChevronDown size={14} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
             </div>
           </div>
@@ -3253,7 +3724,13 @@ const SettingsView = ({ onRevokeAllSessions }) => {
           <Lock size={14} /> Your settings are encrypted and securely stored.
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
-          <Clock size={14} /> Last updated: May 29, 2025 02:15 AM
+          <Clock size={14} />
+          {settingsUpdatedAt
+            ? `Last updated: ${new Date(settingsUpdatedAt).toLocaleString('en-US', {
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+              })}`
+            : 'Never saved — using defaults.'}
         </div>
       </div>
       <div style={{ display: 'flex', gap: '16px' }}>
@@ -3299,10 +3776,10 @@ const IntegrationsView = ({ data, onRetryIntegration }) => {
       <SectionHeader title="Integrations" description="Live provider configuration and health across billing, auth, messaging, and data systems." breadcrumbs={['Integrations']} />
 
       <div style={{ display: 'grid', gridTemplateColumns: createAutoFitColumns(220), gap: '16px', marginBottom: '32px' }}>
-        <SummaryCard icon={LayoutGrid} label="Connected Apps" value={formatMetricNumber(summary.connectedApps || 0)} trend="Configured providers" trendUp={true} sparklineColor="var(--accent)" />
-        <SummaryCard icon={Activity} label="Sync Health" value={`${summary.syncHealth || 0}%`} trend="Configuration health" trendUp={true} sparklineColor="var(--success)" />
-        <SummaryCard icon={Webhook} label="Webhooks Active" value={formatMetricNumber(summary.webhooksActive || 0)} trend="Developer surfaces" trendUp={true} sparklineColor="var(--text-secondary)" />
-        <SummaryCard icon={AlertTriangle} label="Needs Attention" value={formatMetricNumber(summary.failedSyncs || 0)} trend="Missing or degraded" trendUp={false} sparklineColor="var(--danger)" />
+        <SummaryCard icon={LayoutGrid} label="Connected Apps" value={formatMetricNumber(summary.connectedApps || 0)} trend="Configured providers" trendTone="neutral" sparklineColor="var(--accent)" />
+        <SummaryCard icon={Activity} label="Sync Health" value={`${summary.syncHealth || 0}%`} trend="Configuration health" trendTone="neutral" sparklineColor="var(--success)" />
+        <SummaryCard icon={Webhook} label="Webhooks Active" value={formatMetricNumber(summary.webhooksActive || 0)} trend="Developer surfaces" trendTone="neutral" sparklineColor="var(--text-secondary)" />
+        <SummaryCard icon={AlertTriangle} label="Needs Attention" value={formatMetricNumber(summary.failedSyncs || 0)} trend="Missing or degraded" trendTone="bad" sparklineColor="var(--danger)" />
       </div>
 
       <div className="integrations-main-grid">
@@ -3389,6 +3866,13 @@ const IntegrationsView = ({ data, onRetryIntegration }) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminAccounts, setAdminAccounts] = useState([]);
+  const [adminAccountsLoading, setAdminAccountsLoading] = useState(false);
+  const [adminAccountsError, setAdminAccountsError] = useState('');
+  const [alertModalOpen, setAlertModalOpen] = useState(false);
+  const [alertModalBusy, setAlertModalBusy] = useState(false);
+  const [alertModalError, setAlertModalError] = useState('');
+  const [switchingToAdminId, setSwitchingToAdminId] = useState(null);
   const [loading, setLoading] = useState(false);
   // ── Email-code sign-in state ────────────────────────────────────────────
   // step: 'idle' -> button shown; 'code' -> awaiting the 6-digit code.
@@ -3425,6 +3909,24 @@ export default function App() {
   // Off-canvas navigation for small screens. Closed by default so the content
   // starts at the top of the viewport on a phone.
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // Real health state for the sidebar indicator. "unknown" until a probe
+  // succeeds, so the UI never asserts health it has not verified.
+  const [healthState, setHealthState] = useState({ tone: 'unknown', label: 'Checking…', color: 'var(--text-muted)' });
+  // ── Worst-case data switch (development only) ──────────────────────────
+  //
+  // admin/src/dev/worstCaseUsers.js documented a `?data=worst-case` switch that
+  // was never actually wired, so the fixture could not be reached and its
+  // contract was untestable. Honouring it here makes the promised switch real.
+  //
+  // Guarded by import.meta.env.DEV, so a production build cannot be coerced
+  // into rendering fabricated users by a query string.
+  const worstCaseMode = useMemo(() => {
+    if (!import.meta.env.DEV || typeof window === 'undefined') return null;
+    const requested = new URLSearchParams(window.location.search).get('data');
+    if (!requested) return null;
+    return requested in WORST_CASE_MODES ? requested : null;
+  }, []);
+
   const [users, setUsers] = useState([]);
   const [logsData, setLogsData] = useState({ rows: [], total: 0, metrics: {}, slowEndpoints: [], services: [] });
   const [auditData, setAuditData] = useState({ rows: [], total: 0 });
@@ -3501,9 +4003,13 @@ export default function App() {
     if (resolve) resolve(result);
   }, []);
 
-  const showPlaceholder = (title, message) => {
+  // Kept as a real (if rarely used) capability: some controls legitimately need
+  // to explain that a feature is not built. Wrapped in useCallback so it can be
+  // a stable dependency of the context memo below — a bare function would be
+  // recreated every render and invalidate the memo on every keystroke.
+  const showPlaceholder = useCallback((title, message) => {
     notify('info', title, message);
-  };
+  }, [notify]);
 
   const adminUi = useMemo(() => ({
     notify,
@@ -3513,6 +4019,113 @@ export default function App() {
     showPlaceholder,
     promptAction,
   }), [notify, copyText, downloadJson, downloadCsv]);
+
+  const loadAdminAccounts = useCallback(async () => {
+    setAdminAccountsLoading(true);
+    setAdminAccountsError('');
+    try {
+      const data = await adminFetch('/accounts');
+      setAdminAccounts(Array.isArray(data?.accounts) ? data.accounts : []);
+      // The server knows which account the session belongs to; if the local
+      // user object is missing (e.g. restored from a stale render) adopt it.
+      if (data?.currentUserId && !user?.id) {
+        const active = (data.accounts || []).find((a) => Number(a.id) === Number(data.currentUserId));
+        if (active) setUser((prev) => prev || active);
+      }
+    } catch (err) {
+      setAdminAccountsError(err?.message || 'Could not load admin accounts.');
+    } finally {
+      setAdminAccountsLoading(false);
+    }
+  }, [user?.id]);
+
+  /**
+   * Switch the acting admin identity.
+   *
+   * The server requires a recent re-authentication for this, because adopting a
+   * different account is a privilege change. A 428 is not an error to show and
+   * abandon — it is a request for the password, so we collect it and retry once.
+   */
+  const switchAdminAccount = useCallback(async (account) => {
+    if (!account?.id) return;
+    setSwitchingToAdminId(account.id);
+    setAdminAccountsError('');
+    try {
+      await adminFetch('/accounts/switch', {
+        method: 'POST',
+        body: JSON.stringify({ userId: account.id })
+      });
+      notify('success', 'Account switched.', `You are now acting as ${account.email}.`);
+      // Re-read auth so the header, role badge, and every guard reflect the new
+      // identity. A full reload is deliberate: cached per-user data from the
+      // previous account must not survive the switch.
+      window.location.reload();
+    } catch (err) {
+      if (err?.code === 'ADMIN_REAUTH_REQUIRED' || Number(err?.status) === 428) {
+        const values = await adminUi.promptAction({
+          title: 'Confirm your password to switch',
+          description: 'Switching accounts is a privilege change, so it needs a fresh confirmation.',
+          confirmLabel: 'Switch account',
+          context: [
+            { label: 'From', value: user?.email || 'current account' },
+            { label: 'To', value: account.email },
+            { label: 'Role', value: account.adminRole || 'admin' }
+          ],
+          fields: [{
+            name: 'password',
+            label: 'Your current password',
+            type: 'password',
+            autoComplete: 'current-password',
+            required: true
+          }]
+        });
+        const password = values?.password?.trim();
+        if (!password) return;
+        try {
+          await adminFetch('/reauth', { method: 'POST', body: JSON.stringify({ password }) });
+          await adminFetch('/accounts/switch', {
+            method: 'POST',
+            body: JSON.stringify({ userId: account.id })
+          });
+          notify('success', 'Account switched.', `You are now acting as ${account.email}.`);
+          window.location.reload();
+        } catch (retryError) {
+          setAdminAccountsError(retryError?.message || 'Could not switch accounts.');
+          notify('error', 'Switch failed.', retryError?.message || 'Could not switch accounts.');
+        }
+        return;
+      }
+      setAdminAccountsError(err?.message || 'Could not switch accounts.');
+      notify('error', 'Switch failed.', err?.message || 'Could not switch accounts.');
+    } finally {
+      setSwitchingToAdminId(null);
+    }
+  }, [adminUi, notify, user?.email]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const res = await fetch(`${SERVICE_ORIGIN}/health`, { credentials: 'include' });
+        if (cancelled) return;
+        if (res.ok) {
+          setHealthState({ tone: 'ok', label: 'All systems operational', color: 'var(--success)' });
+        } else {
+          setHealthState({ tone: 'warn', label: `Degraded (HTTP ${res.status})`, color: 'var(--warning, #F59E0B)' });
+        }
+      } catch {
+        if (cancelled) return;
+        // Unreachable is not the same as healthy.
+        setHealthState({ tone: 'down', label: 'Status unavailable', color: 'var(--danger, #EF4444)' });
+      }
+    };
+    probe();
+    const timer = window.setInterval(probe, 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const checkAuth = async () => {
     try {
@@ -3613,7 +4226,7 @@ export default function App() {
         setStats(data);
       } else if (tab === 'users') {
         const data = await adminFetch('/users');
-        setUsers(data);
+        setUsers(worstCaseMode ? WORST_CASE_MODES[worstCaseMode] : data);
       } else if (tab === 'database') {
         const params = new URLSearchParams();
         if (databaseParams.table) params.set('table', databaseParams.table);
@@ -3886,7 +4499,7 @@ export default function App() {
       context: [
         { label: 'Email', value: userData.email },
         { label: 'Name', value: userData.name || '—' },
-        { label: 'Plan', value: formatPlanLabel(userData.plan) },
+        { label: 'Plan', value: planLabel(userData.plan) },
         { label: 'Role', value: formatAdminRoleLabel(userData.adminRole || 'user') }
       ],
       fields: [{
@@ -3950,30 +4563,31 @@ export default function App() {
     }
   };
 
-  const handleCreateAlert = async () => {
-    const alertValues = await adminUi.promptAction({
-      title: 'Create an alert rule',
-      description: 'Alerts surface on the Overview and can be assigned to an operator.',
-      confirmLabel: 'Create alert',
-      fields: [{
-        name: 'title',
-        label: 'Alert title',
-        placeholder: 'e.g. Webhook failures above 5%',
-        maxLength: 140,
-        required: true
-      }]
-    });
-    const title = alertValues?.title?.trim();
-    if (!title) return;
+  // Opens the alert form. The previous version was a single-field prompt that
+  // hardcoded severity to "warning" and silently folded the search box into the
+  // rule's query, so an alert created from the Logs tab could be scoped to a
+  // string the operator typed minutes earlier and never chose.
+  const handleCreateAlert = () => {
+    setAlertModalOpen(true);
+  };
+
+  const submitAlertRule = async ({ title, query, service, severity, threshold, window: ruleWindow, notes }) => {
+    setAlertModalBusy(true);
+    setAlertModalError('');
     try {
       await adminFetch('/alerts', {
         method: 'POST',
-        body: JSON.stringify({ title, query: commandQuery || searchQuery || '', severity: 'warning' })
+        body: JSON.stringify({ title, query, service, severity, threshold, window: ruleWindow, notes })
       });
-      notify('success', 'Alert draft created.', 'The alert definition was recorded in the audit trail.');
+      setAlertModalOpen(false);
+      notify('success', 'Alert created.', 'The rule is active and recorded in the audit trail.');
       await fetchData('logs');
     } catch (err) {
-      notify('error', 'Alert creation failed.', err.message);
+      // Keep the form open with the typed values so a transient failure does not
+      // cost the operator a rewrite.
+      setAlertModalError(err?.message || 'Could not create the alert.');
+    } finally {
+      setAlertModalBusy(false);
     }
   };
 
@@ -4175,7 +4789,7 @@ export default function App() {
 
   const jumpToUser = async (userId) => {
     setActiveTab('users');
-    const directory = await adminFetch('/users');
+    const directory = worstCaseMode ? WORST_CASE_MODES[worstCaseMode] : await adminFetch('/users');
     setUsers(directory);
     const userRecord = directory.find((entry) => Number(entry.id) === Number(userId));
     if (userRecord) {
@@ -4533,11 +5147,14 @@ export default function App() {
         </nav>
 
         <div className="sidebar-footer">
+          {/* The dot and the label were both static, so this claimed health
+              unconditionally — including while an error banner was on screen.
+              It now reflects a real /health probe and admits when it has none. */}
           <div className="status-indicator">
-            <div className="status-dot" />
+            <div className={`status-dot status-dot--${healthState.tone}`} />
             <div style={{ flex: 1 }}>
               <p style={{ fontWeight: 600 }}>System Status</p>
-              <p style={{ color: 'var(--success)', fontSize: '11px' }}>All Systems Operational</p>
+              <p style={{ color: healthState.color, fontSize: '11px' }}>{healthState.label}</p>
             </div>
           </div>
           <button type="button" className="status-link-btn" style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }} disabled title="Not yet available: no public status page is published.">
@@ -4586,7 +5203,8 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             <button type="button" style={{ position: 'relative', background: 'none', border: 'none', color: 'var(--text-secondary)' }} onClick={() => setActiveTab('logs')} title="Opens System Logs — the notification tray is not built yet.">
               <Bell size={20} />
-              <div style={{ position: 'absolute', top: '-4px', right: '-4px', background: 'var(--accent)', width: '14px', height: '14px', borderRadius: '50%', fontSize: '10px', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-header)' }}>7</div>
+              {/* No badge: there is no notification tray, so there is no unread
+                  count. A hardcoded "7" claimed seven unread items forever. */}
             </button>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: '99px', border: '1px solid var(--border)' }}>
@@ -4594,16 +5212,16 @@ export default function App() {
               <span style={{ fontSize: '12px', fontWeight: 600 }}>Production</span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '16px', borderLeft: '1px solid var(--border)' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: '12px', color: 'var(--accent-contrast)' }}>
-                {avatarInitials({ name: user?.displayName, email: user?.email }, 'AD')}
-              </div>
-              <div style={{ textAlign: 'left' }}>
-                <p style={{ fontSize: '13px', fontWeight: 600 }}>{user?.displayName || 'Administrator'}</p>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{user?.email || 'admin@zenin.com'}</p>
-              </div>
-              <ChevronDown size={14} color="var(--text-muted)" />
-            </div>
+            <AdminAccountMenu
+              user={user}
+              accounts={adminAccounts}
+              loading={adminAccountsLoading}
+              switchingTo={switchingToAdminId}
+              error={adminAccountsError}
+              onSwitch={switchAdminAccount}
+              onRefresh={loadAdminAccounts}
+              onSignOut={() => setIsLogoutModalOpen(true)}
+            />
           </div>
         </header>
 
@@ -4664,7 +5282,8 @@ export default function App() {
             } catch (logoutError) {
               notify('error', 'Sign out failed.', logoutError.message);
             }
-          }} 
+          }}
+          user={user}
         />
       )}
       <CommandPalette
@@ -4677,6 +5296,21 @@ export default function App() {
         onClose={() => setIsCommandPaletteOpen(false)}
       />
       <ToastViewport toasts={toasts} onDismiss={dismissToast} />
+
+      <AlertRuleModal
+        open={alertModalOpen}
+        onClose={() => {
+          if (alertModalBusy) return;
+          setAlertModalError('');
+          setAlertModalOpen(false);
+        }}
+        onSubmit={submitAlertRule}
+        busy={alertModalBusy}
+        error={alertModalError}
+        // Pre-fill from the current view, but visibly and editably — the old
+        // prompt absorbed this context without showing it.
+        seedQuery={commandQuery}
+      />
 
       {/* Imperative dialog host. Mounted once at the root so any handler can
           await adminUi.promptAction(spec) without threading modal state through

@@ -32,7 +32,14 @@ test('a null data prop cannot reach a property read', () => {
   assert.match(view, /const source = data && typeof data === "object" \? data : \{\}/);
 });
 
-test('every destructured field reads from the sanitised source', () => {
+test('every field is resolved through a sanitiser that reads the live source', () => {
+  // The guarantee is unchanged: each field is resolved from the sanitised
+  // `source`, never read off raw `data`. The mechanism moved from a per-field
+  // `list()` call to a `pick()` helper — because the old one silently MIXED
+  // live and seed values per field while the header claimed the view was the
+  // "authoritative source of truth". This asserts the invariant, not the syntax.
+  assert.match(view, /const pick = \(key\) => \{/, 'fields must go through a single resolver');
+  assert.match(view, /source\[key\]/, 'the resolver must read from the sanitised source');
   for (const field of [
     'markets',
     'providers',
@@ -44,8 +51,8 @@ test('every destructured field reads from the sanitised source', () => {
     'auditLog',
   ]) {
     assert.ok(
-      view.includes(`source.${field}`),
-      `${field} must be read from the sanitised source`
+      view.includes(`pick('${field}')`),
+      `${field} must be resolved through the sanitiser`
     );
   }
 });
@@ -53,8 +60,42 @@ test('every destructured field reads from the sanitised source', () => {
 test('a wrong-shaped field falls back to an array, not a crash', () => {
   // A payload that is present but malformed must not take the view down; the
   // tab is directly reachable from the sidebar.
-  assert.match(view, /const list = \(value, fallback\)/);
-  assert.match(view, /Array\.isArray\(value\) \? value : Array\.isArray\(fallback\) \? fallback : \[\]/);
+  assert.match(view, /Array\.isArray\(live\)/);
+  assert.match(view, /Array\.isArray\(seed\[key\]\) \? seed\[key\] : \[\]/);
+});
+
+test('provenance is tracked, so seed data is never presented as live', () => {
+  // The regression this guards: a page showing live markets beside invented
+  // apiHealth rows, with nothing telling the reader which was which.
+  assert.match(view, /resolved\[key\] = 'live'/, 'live fields must be marked live');
+  assert.match(
+    view,
+    /resolved\[key\] = Array\.isArray\(seed\[key\]\)\s*\?\s*['"]sample['"]/,
+    'fallbacks must be marked sample'
+  );
+  assert.match(view, /isFullyLive/, 'the view must know whether anything is live');
+  // Scoped to non-comment source: the file legitimately QUOTES the old claim
+  // when explaining why the mixing was a bug.
+  const viewCode = view
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n');
+  assert.equal(
+    viewCode.includes('Authoritative source of truth'),
+    false,
+    'the unconditional "authoritative" claim is back in live markup'
+  );
+});
+
+test('the export ships what is displayed, not the raw seed', () => {
+  assert.equal(
+    /onExport && onExport\(COVERAGE_SEED/.test(view),
+    false,
+    'exporting COVERAGE_SEED ships invented rows even when the screen shows live data'
+  );
+  assert.match(view, /_provenance/, 'the export must record whether the payload is live or sample');
 });
 
 test('the seed still provides every field the view expects', () => {

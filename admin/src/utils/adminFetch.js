@@ -15,6 +15,10 @@ function resolveAdminApiUrl() {
 
 const ADMIN_API_BASE_URL = resolveAdminApiUrl();
 const AUTH_API_BASE_URL = ADMIN_API_BASE_URL.replace(/\/admin$/, "");
+
+// The origin that serves /health, which Render probes. Exported so the sidebar
+// status indicator can report real health instead of a static green dot.
+export const SERVICE_ORIGIN = AUTH_API_BASE_URL.replace(/\/api\/?$/, "");
 let adminCsrfTokenCache = null;
 
 /**

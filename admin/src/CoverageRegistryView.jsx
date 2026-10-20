@@ -94,15 +94,50 @@ export default function CoverageRegistryView({ data = COVERAGE_SEED, onExport })
   // Coerce to arrays. A payload that is present but the wrong shape (an object
   // where a list belongs, or a field the API has not shipped yet) must not take
   // the view down — the tab is directly reachable from the sidebar.
-  const list = (value, fallback) => (Array.isArray(value) ? value : Array.isArray(fallback) ? fallback : []);
-  const markets = list(source.markets, seed.markets);
-  const providers = list(source.providers, seed.providers);
-  const exchanges = list(source.exchanges, seed.exchanges);
-  const datasets = list(source.datasets, seed.datasets);
-  const mappings = list(source.mappings, seed.mappings);
-  const apiHealth = list(source.apiHealth, seed.apiHealth);
-  const syncJobs = list(source.syncJobs, seed.syncJobs);
-  const auditLog = list(source.auditLog, seed.auditLog);
+  // A field is only ever EITHER live or seed — never mixed silently.
+  //
+  // The previous helper returned the seed whenever the live value was absent or
+  // the wrong shape, per field, while the header still called the view the
+  // "Authoritative source of truth". So a page could show live markets beside
+  // invented apiHealth and syncJobs with no indication which was which, and the
+  // invented rows carried `lastCheck: new Date().toISOString()` — stamped at
+  // request time, so a fabricated check always looked freshly run.
+  //
+  // `resolved` records the origin of each field so the UI can label it, and any
+  // field with no live data is marked "sample" rather than quietly filled in.
+  const resolved = {};
+  const pick = (key) => {
+    const live = source[key];
+    if (Array.isArray(live)) {
+      resolved[key] = 'live';
+      return live;
+    }
+    resolved[key] = Array.isArray(seed[key]) ? 'sample' : 'empty';
+    return Array.isArray(seed[key]) ? seed[key] : [];
+  };
+
+  const markets = pick('markets');
+  const providers = pick('providers');
+  const exchanges = pick('exchanges');
+  const datasets = pick('datasets');
+  const mappings = pick('mappings');
+  const apiHealth = pick('apiHealth');
+  const syncJobs = pick('syncJobs');
+  const auditLog = pick('auditLog');
+
+  const liveCount = Object.values(resolved).filter((origin) => origin === 'live').length;
+  const sampleCount = Object.values(resolved).filter((origin) => origin === 'sample').length;
+  const isFullyLive = sampleCount === 0 && liveCount > 0;
+  const isFullySample = liveCount === 0;
+
+  /** Label for a section, so the reader knows where its rows came from. */
+  const originLabel = (key) => {
+    switch (resolved[key]) {
+      case 'live': return null;
+      case 'sample': return 'Sample data — the live source returned nothing for this section.';
+      default: return 'No data available — this section is empty.';
+    }
+  };
 
   const africaCount = useMemo(() => markets.filter((m) => m.region === 'Africa').length, [markets]);
   const activeProviders = useMemo(() => providers.filter((p) => p.status === 'active').length, [providers]);
@@ -112,12 +147,45 @@ export default function CoverageRegistryView({ data = COVERAGE_SEED, onExport })
     [markets, regionFilter]
   );
 
+  // Only regions that actually have markets, so a filter can never produce an
+  // empty table without saying why.
+  const availableRegions = useMemo(() => {
+    const seen = new Set();
+    markets.forEach((market) => {
+      const region = String(market?.region || '').trim();
+      if (region) seen.add(region);
+    });
+    return [...seen].sort();
+  }, [markets]);
+
   return (
     <div className="fade-in">
       <SectionHeader
         title="Coverage Registry"
-        description="Authoritative source of truth for markets, providers, exchanges, datasets, and identifier mappings. Africa is a first-class region."
+        description={
+          isFullyLive
+            ? "Live registry of markets, providers, exchanges, datasets, and identifier mappings. Africa is a first-class region."
+            : isFullySample
+              ? "Showing sample data. The coverage registry returned no live rows — nothing here reflects production."
+              : `Partly live: ${liveCount} of ${liveCount + sampleCount} sections are live; the rest are sample data.`
+        }
       />
+
+      {!isFullyLive && (
+        <div className={`registry-notice registry-notice--${isFullySample ? 'sample' : 'partial'}`} role="status">
+          <AlertTriangle size={15} aria-hidden="true" />
+          <div>
+            <p className="registry-notice-title">
+              {isFullySample ? 'Sample data shown' : 'Partly sample data'}
+            </p>
+            <p className="registry-notice-body">
+              {isFullySample
+                ? 'No live coverage rows were returned. Everything below is illustrative and must not be used to judge provider or exchange status.'
+                : 'Sections marked "sample" fell back to illustrative rows because the live source returned nothing for them. Sections without a marker are live.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 28 }}>
         <SummaryCard icon={Globe} label="Markets" value={markets.length} sub={`${africaCount} in Africa`} />
@@ -147,9 +215,19 @@ export default function CoverageRegistryView({ data = COVERAGE_SEED, onExport })
       {tab === 'markets' && (
         <div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-            <select className="filter-select" value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} style={{ height: 36 }}>
+            <select
+              className="filter-select"
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              style={{ height: 36 }}
+              aria-label="Filter markets by region"
+            >
               <option value="All">All Regions</option>
-              {seed.regions.map((r) => (
+              {/* Derived from the markets actually listed. Offering the seed's
+                  regions meant selecting one could filter to an empty table
+                  with no explanation — the option promised rows that were not
+                  in the data. */}
+              {availableRegions.map((r) => (
                 <option key={r} value={r}>{r}</option>
               ))}
             </select>
@@ -345,7 +423,21 @@ export default function CoverageRegistryView({ data = COVERAGE_SEED, onExport })
         <button
           className="btn btn-secondary"
           style={{ fontSize: 12 }}
-          onClick={() => onExport && onExport(COVERAGE_SEED, 'Coverage registry exported.', 'The full coverage registry snapshot was downloaded as JSON.')}
+          // Exports what is ON SCREEN, not the seed. This previously always
+          // shipped COVERAGE_SEED, so an operator looking at live data
+          // downloaded the invented rows instead — and the confirmation said
+          // "the full coverage registry snapshot".
+          onClick={() => onExport && onExport(
+            {
+              markets, providers, exchanges, datasets, mappings, apiHealth, syncJobs, auditLog,
+              _provenance: isFullyLive ? 'live' : isFullySample ? 'sample' : 'partial',
+              _sections: resolved
+            },
+            isFullyLive ? 'Coverage registry exported.' : 'Coverage registry exported (partly sample data).',
+            isFullyLive
+              ? 'The live coverage registry snapshot was downloaded as JSON.'
+              : 'Downloaded, but some sections are sample data rather than live rows. See _provenance in the file.'
+          )}
         >
           Export Registry
         </button>

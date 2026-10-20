@@ -123,7 +123,10 @@ const optionsCalculationSchema = z.object({
 const historyQuerySchema = z.object({
   symbol: symbolSchema,
   type: z.enum(["stock", "etf", "crypto", "forex", "currency", "indicator", "bond", "commodity"]).optional(),
-  interval: z.enum(["4H", "1D", "1W", "1M", "3M", "1Y", "YTD", "MAX"]).optional().default("1D"),
+  // Must stay in step with the provider maps in index.js (fetchHistoryFromYahoo
+  // and CRYPTO_HISTORY_INTERVALS). An interval added here but missing from a
+  // provider map does not error — it silently returns 1-day data.
+  interval: z.enum(["4H", "1D", "1W", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "MAX"]).optional().default("1D"),
   range: z.enum(["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]).optional().default("1mo"),
   marketType: z.enum(["spot", "perp", "equity", "options", "commodity", "forex", "macro"]).optional().default("equity"),
 });
@@ -460,7 +463,54 @@ const validate = (schema, source = "body") => (req, res, next) => {
   }
 };
 
+// ── Admin console schemas ───────────────────────────────────────────────
+// These live here, not in index.js, because `z` is only in scope in this file.
+
+/**
+ * An alert rule.
+ *
+ * The console used to collect a title only and hardcode severity to "warning",
+ * silently folding whatever was in the search box into `query`. The backend
+ * accepted service, severity, and threshold all along — they were never sent,
+ * so every rule was an unscoped title.
+ */
+const adminAlertSchema = z.object({
+  title: z.string().trim().min(3).max(140),
+  query: z.string().trim().max(500).optional().default(""),
+  service: z.enum(["", "web", "api", "db", "auth", "billing", "worker", "cron"]).optional().default(""),
+  severity: z.enum(["info", "warning", "error", "critical"]).optional().default("warning"),
+  threshold: z.coerce.number().int().min(0).max(1000000).nullable().optional(),
+  window: z.enum(["5m", "15m", "1h", "6h", "24h"]).optional().default("15m"),
+  notes: z.string().trim().max(500).optional().default("")
+}).refine((value) => Boolean(value.query || value.service), {
+  // An unscoped rule matches every event, which is noise rather than signal.
+  message: "Provide a query, a service, or both — an unscoped rule matches every event.",
+  path: ["query"]
+});
+
+const adminRecipientSchema = z.object({
+  email: z.string().trim().email(),
+  label: z.string().trim().max(120).optional(),
+  categories: z.array(z.enum(["system", "security", "billing", "summary"])).optional()
+});
+
+const adminRecipientUpdateSchema = z.object({
+  label: z.string().trim().max(120).nullable().optional(),
+  categories: z.array(z.enum(["system", "security", "billing", "summary"])).optional(),
+  isActive: z.boolean().optional()
+});
+
+const adminSettingsSchema = z.object({
+  // Boolean for toggles, number for durations, string for organisation identity
+  // and formatting preferences.
+  settings: z.record(z.string(), z.union([z.boolean(), z.number(), z.string().max(500)]))
+});
+
 module.exports = {
+  adminAlertSchema,
+  adminRecipientSchema,
+  adminRecipientUpdateSchema,
+  adminSettingsSchema,
   validate,
   signupSchema,
   signinSchema,

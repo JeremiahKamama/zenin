@@ -39,7 +39,7 @@ export function useComparisonAsset(symbol, type = "equity") {
         const params = new URLSearchParams({ symbol: sym, type });
         const [pricesRes, historyRes, earningsRes, finvizRes] = await Promise.all([
           zeninFetch(`/prices?${params.toString()}`, { signal }).catch(() => null),
-          zeninFetch(`/history?${params.toString()}&interval=5Y`, { signal }).catch(() => null),
+          zeninFetch(`/history?${params.toString()}&interval=MAX`, { signal }).catch(() => null),
           zeninFetch(`/earnings?symbol=${sym}`, { signal }).catch(() => null),
           zeninFetch(`/finviz?symbol=${sym}`, { signal }).catch(() => null)
         ]);

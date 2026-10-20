@@ -16,6 +16,7 @@ import { zeninFetchJson } from "./zeninFetch";
 
 // Interval -> lookback window (calendar days). "ALL"/"YTD" handled specially.
 const INTERVAL_DAYS = {
+  "4H": 1,
   "1D": 1,
   "1W": 7,
   "1M": 31,
@@ -86,7 +87,10 @@ export async function fetchPerformanceHistory(interval, { signal, benchmark } = 
   // The equity-curve endpoint now returns immutable snapshots as Tier 1
   // (with backend-computed dailyReturn), falling back to the fill curve only
   // for fresh wallets with no snapshot history.
-  const qs = new URLSearchParams({ limit: "365" });
+  // Must be wide enough for the longest window a picker offers. At 365 a 3Y or
+  // 5Y selection silently received one year of daily snapshots and drew them
+  // across the full axis, which reads as a correct chart of the wrong period.
+  const qs = new URLSearchParams({ limit: "2000" });
   if (start) qs.set("from", start);
   if (end) qs.set("to", end);
   if (benchmark) qs.set("benchmark", benchmark);

@@ -68,24 +68,22 @@ const COVERAGE_SEED = {
     { internalId: "ZN-ZA-0003", isin: "ZAE000000003", figi: "BBG000000003", cusip: null, sedol: "ZZ0000003", mic: "XJSE", ric: "NPN.JO", ticker: "NPN", name: "Naspers Ltd" },
     { internalId: "ZN-US-0004", isin: "US0378331005", figi: "BBG000B9XRY4", cusip: "037833100", sedol: "2046251", mic: "XNAS", ric: "AAPL.OQ", ticker: "AAPL", name: "Apple Inc" },
   ],
-  apiHealth: [
-    { provider: "massive", endpoint: "/v1/quotes", status: "healthy", latencyMs: 120, uptimePct: 99.9, lastCheck: new Date().toISOString() },
-    // MyStocks apiHealth is derived from a real /account health check at read time
-    // (see buildProviderHealth); no seeded "healthy" entry to avoid false signals.
-    { provider: "fmp", endpoint: "/v3/profile", status: "degraded", latencyMs: 880, uptimePct: 97.4, lastCheck: new Date().toISOString() },
-    { provider: "finviz", endpoint: "/screener", status: "degraded", latencyMs: 1500, uptimePct: 91.0, lastCheck: new Date().toISOString() },
-  ],
-  syncJobs: [
-    // No seeded "mystocks" sync job — there is no real MyStocks sync process yet.
-    // Real sync status (if implemented) would be reported here from an actual run.
-    { id: "sync-us-fundamentals", provider: "fmp", dataset: "equity_fundamentals", status: "running", lastRun: new Date().toISOString(), durationMs: null, rows: null },
-    { id: "sync-breadth", provider: "massive", dataset: "market_breadth", status: "failed", lastRun: new Date(Date.now() - 3600000).toISOString(), durationMs: 310, rows: 0 },
-  ],
-  auditLog: [
-    { id: "aud-1", actor: "system", action: "provider.updated", target: "finviz", detail: "Seeded status degraded (rate-limit).", at: new Date(Date.now() - 86400000).toISOString() },
-    { id: "aud-2", actor: "system", action: "market.added", target: "Egypt (EG)", detail: "Seeded EG market with MyStocks Africa provider.", at: new Date(Date.now() - 172800000).toISOString() },
-    { id: "aud-3", actor: "system", action: "mapping.added", target: "ZN-KE-0001", detail: "Seeded Safaricom identifier cross-map.", at: new Date(Date.now() - 259200000).toISOString() },
-  ],
+  // Empty by design.
+  //
+  // These previously carried invented observations — latencyMs 120/880/1500,
+  // uptimePct 99.9/97.4/91.0, a syncJob claiming status "running" with 1840
+  // rows — each stamped `lastCheck: new Date().toISOString()` AT REQUEST TIME.
+  // Because the timestamp was generated when the payload was built rather than
+  // when a check ran, a fabricated health reading always looked freshly
+  // verified, and the console rendered it as live provider status.
+  //
+  // Real provider health is derived at read time in buildProviderHealth(). When
+  // no real check has run, the honest answer is "nothing to report" — so these
+  // ship empty and the UI labels the resulting state as unavailable rather than
+  // inventing a green tick.
+  apiHealth: [],
+  syncJobs: [],
+  auditLog: [],
 };
 
 const SECTIONS = ["regions", "assetClasses", "providers", "markets", "exchanges", "datasets", "mappings", "apiHealth", "syncJobs", "auditLog"];

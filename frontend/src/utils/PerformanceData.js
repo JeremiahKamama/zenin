@@ -40,12 +40,17 @@ export const TIMELINE_OPTIONS = [
 // underlying observation count may be larger (e.g. ALL with 365 daily
 // snapshots → downsample to ≤240 points for rendering performance).
 const DISPLAY_POINT_CAPS = {
+  "4H": 96,    // intraday session
   "1D": 288,   // up to 24h of intraday (hourly) — but ONLY if intraday data exists
   "1W": 56,    // 7 days × 8 (3-hour sampling for dense periods)
   "1M": 60,    // 30 days × 2
   "3M": 90,    // 90 days × 1
+  "6M": 120,   // 180 days, ~1.5-day sampling
   "1Y": 126,   // ~2.5 months sampling (largest-triangle preserves shape)
   YTD: 126,
+  "3Y": 180,   // 36 months
+  "5Y": 200,   // 60 months
+  MAX: 240,
   ALL: 240,    // cap rendering at 240 points max; 365+ days downsampled
 };
 

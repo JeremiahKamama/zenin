@@ -9498,7 +9498,127 @@ const admin = {
     };
   },
 
+  /**
+   * Admin accounts that can be switched between without a full re-login.
+   *
+   * An operator with both a day-to-day account and a break-glass account had no
+   * way to see which identity was currently acting, and no way to change it
+   * without signing out and completing the emailed-code flow again. This backs
+   * that switcher.
+   *
+   * Deliberately returns no password state or token material — only what the
+   * switcher needs to label a choice.
+   */
+  listAdminAccounts: async () => {
+    const result = await pool.query(`
+      SELECT id,
+             email,
+             display_name AS "displayName",
+             admin_role AS "adminRole",
+             two_factor_enabled AS "twoFactorEnabled",
+             -- app_users has no last_login_at column. Sign-ins live in
+             -- auth_sessions, so derive it from there rather than reading a
+             -- column that does not exist.
+             (SELECT MAX(s.created_at)
+                FROM auth_sessions s
+               WHERE s.user_id = app_users.id) AS "lastLoginAt",
+             created_at AS "createdAt"
+      FROM app_users
+      WHERE is_admin = TRUE
+      ORDER BY
+        CASE COALESCE(NULLIF(admin_role, ''), 'user')
+          WHEN 'super_admin' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END,
+        email ASC
+      LIMIT 100
+    `);
+    return result.rows || [];
+  },
+
   // ── Admin console settings ─────────────────────────────────────────────
+
+  /**
+   * Real daily counts for the admin Overview's summary cards.
+   *
+   * The cards previously drew a sparkline from `Math.random()`, so every trend
+   * line in the console was invented and reshuffled on each render. A rising
+   * line reads as "this metric is climbing", which made the fabrication worse
+   * than showing nothing at all.
+   *
+   * These are genuine counts bucketed by UTC day. `generate_series` supplies
+   * the empty days so a metric with no activity plots as a flat line rather
+   * than collapsing to a single point.
+   *
+   * Cost: one query, index-backed on each table's created_at. The range is
+   * bounded by `days`, so this stays cheap regardless of table size.
+   */
+  getSystemTrends: async ({ days = 14 } = {}) => {
+    const span = Math.min(Math.max(Number(days) || 14, 2), 90);
+    // A single round trip: generate the day spine, then LEFT JOIN each metric.
+    const result = await pool.query(
+      `
+      WITH spine AS (
+        SELECT generate_series(
+          (NOW() AT TIME ZONE 'UTC')::date - ($1::int - 1),
+          (NOW() AT TIME ZONE 'UTC')::date,
+          INTERVAL '1 day'
+        )::date AS day
+      ),
+      signups AS (
+        SELECT created_at::date AS day, COUNT(*)::int AS count
+        FROM app_users
+        WHERE created_at >= (NOW() AT TIME ZONE 'UTC')::date - ($1::int - 1)
+        GROUP BY 1
+      ),
+      sessions AS (
+        SELECT created_at::date AS day, COUNT(*)::int AS count
+        FROM auth_sessions
+        WHERE created_at >= (NOW() AT TIME ZONE 'UTC')::date - ($1::int - 1)
+        GROUP BY 1
+      ),
+      trades AS (
+        SELECT executed_at::date AS day, COUNT(*)::int AS count
+        FROM user_workspace_trades
+        WHERE executed_at >= (NOW() AT TIME ZONE 'UTC')::date - ($1::int - 1)
+        GROUP BY 1
+      ),
+      admin_actions AS (
+        SELECT created_at::date AS day, COUNT(*)::int AS count
+        FROM admin_audit_logs
+        WHERE created_at >= (NOW() AT TIME ZONE 'UTC')::date - ($1::int - 1)
+        GROUP BY 1
+      )
+      SELECT
+        to_char(spine.day, 'YYYY-MM-DD') AS day,
+        COALESCE(signups.count, 0) AS signups,
+        COALESCE(sessions.count, 0) AS sessions,
+        COALESCE(trades.count, 0) AS trades,
+        COALESCE(admin_actions.count, 0) AS admin_actions
+      FROM spine
+      LEFT JOIN signups ON signups.day = spine.day
+      LEFT JOIN sessions ON sessions.day = spine.day
+      LEFT JOIN trades ON trades.day = spine.day
+      LEFT JOIN admin_actions ON admin_actions.day = spine.day
+      ORDER BY spine.day ASC
+      `,
+      [span]
+    );
+
+    const rows = result.rows || [];
+    return {
+      days: span,
+      generatedAt: new Date().toISOString(),
+      series: rows.map((row) => ({
+        day: row.day,
+        signups: Number(row.signups || 0),
+        sessions: Number(row.sessions || 0),
+        trades: Number(row.trades || 0),
+        adminActions: Number(row.admin_actions || 0)
+      }))
+    };
+  },
 
   /**
    * Read the stored console settings, merged over defaults.

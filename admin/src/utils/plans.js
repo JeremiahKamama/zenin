@@ -44,6 +44,22 @@ export const PLANS = [
 const PLAN_BY_ID = new Map(PLANS.map((plan) => [plan.id, plan]));
 
 /**
+ * Rows for a plan-distribution breakdown: canonical ids in display order, with
+ * a stable colour per tier.
+ *
+ * The Overview panel used to iterate a hardcoded ['Starter','Pro','Desk'] and
+ * read `planBreakdown[plan.toLowerCase()]` — two of those three are RETIRED ids
+ * that the server no longer emits, so those rows always read 0 (0%) regardless
+ * of the real distribution. Deriving the rows from PLANS makes that class of
+ * drift impossible.
+ */
+export const PLAN_BREAKDOWN_ORDER = PLANS.map((plan, index) => ({
+  id: plan.id,
+  label: plan.label,
+  color: ["var(--text-muted)", "var(--accent)", "var(--success)"][index] || "var(--text-secondary)"
+}));
+
+/**
  * Ids that were valid before the rename. Kept so a user row still holding a
  * legacy value renders correctly instead of showing "Unknown".
  */

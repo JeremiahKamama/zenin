@@ -139,16 +139,30 @@ const defaultAppConfig = {
     IN: { open: 9.25, close: 15.5, tz: "Asia/Kolkata" }
   },
   ui: {
+    // The canonical timeframe vocabulary. Every interval below must exist in the
+    // backend's historyQuerySchema enum AND in the provider maps (index.js
+    // fetchHistoryFromYahoo / CRYPTO_HISTORY_INTERVALS) — an interval a provider
+    // map does not know about degrades silently to 1-day data rather than
+    // erroring, which renders a correct-looking chart of the wrong window.
     moversHorizons: {
       daily: { label: "Daily", interval: "1D" },
       weekly: { label: "Weekly", interval: "1W" },
+      monthly: { label: "Monthly", interval: "1M" },
       quarterly: { label: "Quarterly", interval: "3M" },
+      semiannual: { label: "6M", interval: "6M" },
       ytd: { label: "YTD", interval: "YTD" },
-      yearly: { label: "Yearly", interval: "1Y" }
+      yearly: { label: "Yearly", interval: "1Y" },
+      threeYear: { label: "3Y", interval: "3Y" },
+      fiveYear: { label: "5Y", interval: "5Y" }
     },
-    homeDisplayIntervals: ["1D", "1W", "1M", "3M", "1Y", "ALL"],
-    assetModalIntervals: ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"],
-    portfolioIntervals: ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"],
+    // One shared intraday-to-decade scale. HomeModule previously rendered a
+    // hero strip (["Today","1W","1M","YTD","1Y"]) over the SAME state as its
+    // performance panel (["1D","1W","1M","3M","1Y","ALL"]), so each picker
+    // could hold a value the other could not display — switching surfaces
+    // silently kept an unrepresentable selection.
+    homeDisplayIntervals: ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "ALL"],
+    assetModalIntervals: ["4H", "1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "MAX"],
+    portfolioIntervals: ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "ALL"],
     indicatorMetricHorizons: [
       { key: "1Y", label: "1Y", years: 1 },
       { key: "3Y", label: "3Y", years: 3 },

@@ -145,6 +145,10 @@ const {
   journalReportGenerateSchema,
   journalPrefsSchema,
   dailyBriefingGenerateSchema,
+  adminAlertSchema,
+  adminRecipientSchema,
+  adminRecipientUpdateSchema,
+  adminSettingsSchema,
 } = require("./validation");
 
 /**
@@ -7721,6 +7725,123 @@ app.post("/api/admin/users", requireSignedIn, requireAdmin, requireRecentAdminRe
   }
 });
 
+// Real daily counts for the Overview sparklines. Separate from /stats because
+// the Overview can render its cards from /stats while this loads, and because a
+// trend query should not slow down the headline numbers.
+app.get("/api/admin/stats/trends", requireAdmin, async (req, res) => {
+  try {
+    const trends = await admin.getSystemTrends({ days: req.query.days });
+    return res.json(trends);
+  } catch (error) {
+    // A missing trend must not take down the Overview; the cards fall back to
+    // rendering without a sparkline rather than inventing one.
+    console.error("[Admin] Failed to fetch stat trends:", error?.message || error);
+    return res.json({ days: 0, series: [], unavailable: true });
+  }
+});
+
+// ── Admin account switcher ─────────────────────────────────────────────
+//
+// Two distinct admin identities (e.g. a day-to-day account and a break-glass
+// account) previously required a full sign-out plus a new emailed code to swap
+// between, and nothing in the console said which identity was acting. These
+// endpoints back a real switcher.
+//
+// Switching is a privilege change, so it is gated exactly like the other
+// destructive admin writes: the CURRENT identity must have re-authenticated
+// recently. Without that, a hijacked or left-open session could silently adopt
+// a more privileged account.
+
+async function listAdminIdentities() {
+  return admin.listAdminAccounts();
+}
+
+app.get("/api/admin/accounts", requireAdmin, async (req, res) => {
+  try {
+    const accounts = await listAdminIdentities();
+    return res.json({
+      accounts,
+      currentUserId: req.auth?.user?.id || null
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to list admin accounts", error);
+  }
+});
+
+app.post("/api/admin/accounts/switch", requireAdmin, requireRecentAdminReauth, async (req, res) => {
+  try {
+    const targetId = Number(req.body?.userId);
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      return apiError(res, 400, {
+        error: "Invalid account",
+        message: "Choose an admin account to switch to.",
+        code: "INVALID_ADMIN_ACCOUNT",
+        retryable: false
+      });
+    }
+
+    const currentUserId = req.auth?.user?.id || null;
+    if (Number(currentUserId) === targetId) {
+      return apiError(res, 400, {
+        error: "Already active",
+        message: "That account is already the one you are using.",
+        code: "ALREADY_ACTIVE_ADMIN",
+        retryable: false
+      });
+    }
+
+    // The target must be a real admin. Without this check the endpoint would be
+    // an escalation primitive: any admin could adopt any user's session.
+    const target = await pool.query(
+      "SELECT id, email, display_name, admin_role, is_admin FROM app_users WHERE id = $1",
+      [targetId]
+    );
+    const targetUser = target.rows?.[0];
+    if (!targetUser || !targetUser.is_admin) {
+      return apiError(res, 404, {
+        error: "Account not found",
+        message: "That account is not an administrator.",
+        code: "ADMIN_ACCOUNT_NOT_FOUND",
+        retryable: false
+      });
+    }
+
+    // End the current session before issuing the new one, so the old identity
+    // cannot be resumed by replaying the previous cookie.
+    const currentToken = req.auth?.token;
+    if (currentToken) {
+      await userAuth.revokeSessionByTokenHash(hashToken(currentToken)).catch(() => {});
+    }
+
+    const session = await issueSessionForUser(targetUser.id, req, { persistent: false });
+    setSessionCookie(res, req, session.token, session.expiresAt, { persistent: false });
+
+    await admin.logAdminAction({
+      adminId: currentUserId || 0,
+      action: "SWITCH_ADMIN_ACCOUNT",
+      details: {
+        fromUserId: currentUserId,
+        toUserId: targetUser.id,
+        toEmail: targetUser.email,
+        requestId: req.requestId
+      },
+      ipAddress: resolveClientIp(req)
+    });
+
+    return res.json({
+      success: true,
+      user: {
+        id: targetUser.id,
+        email: targetUser.email,
+        displayName: targetUser.display_name,
+        adminRole: targetUser.admin_role
+      }
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to switch admin account", error);
+  }
+});
+
 app.get("/api/admin/stats", requireAdmin, async (req, res) => {
   try {
     const stats = await admin.getSystemStats();
@@ -7869,18 +7990,31 @@ app.get("/api/admin/revenuecat/customers/lookup", requireAdmin, async (req, res)
 app.get("/api/admin/settings", requireAdmin, async (req, res) => {
   try {
     const stored = await admin.getAdminSettings(ADMIN_SETTINGS_DEFAULTS);
+    // Real, server-side security posture. The console previously asserted
+    // "3 IPs configured" and an SSO "Enabled" state that were hardcoded in the
+    // markup, so the UI could claim a restriction that was not in force (or
+    // hide one that was). These come from the running configuration.
+    const ssoProviders = [
+      process.env.GOOGLE_CLIENT_ID ? "Google" : null,
+      process.env.APPLE_CLIENT_ID ? "Apple" : null,
+      process.env.GITHUB_CLIENT_ID ? "GitHub" : null,
+      process.env.MICROSOFT_CLIENT_ID ? "Microsoft" : null
+    ].filter(Boolean);
     return res.json({
       settings: stored.settings,
       updatedAt: stored.updatedAt,
-      defaults: ADMIN_SETTINGS_DEFAULTS
+      defaults: ADMIN_SETTINGS_DEFAULTS,
+      posture: {
+        allowedIpCount: ADMIN_ALLOWED_IPS.size,
+        adminIpRestrictionEnforced: Boolean(IS_PRODUCTION && ADMIN_ALLOWED_IPS.size > 0),
+        ssoProviders,
+        ssoEnabled: ssoProviders.length > 0,
+        enforceTwoFactor: Boolean(stored.settings?.enforceTwoFactor)
+      }
     });
   } catch (error) {
     return handleServerError(res, "Failed to load admin settings", error);
   }
-});
-
-const adminSettingsSchema = z.object({
-  settings: z.record(z.string(), z.union([z.boolean(), z.number(), z.string()]))
 });
 
 app.patch("/api/admin/settings", requireAdmin, requireRecentAdminReauth, validate(adminSettingsSchema), async (req, res) => {
@@ -7924,11 +8058,6 @@ app.get("/api/admin/notification-recipients", requireAdmin, async (req, res) => 
   }
 });
 
-const adminRecipientSchema = z.object({
-  email: z.string().trim().email(),
-  label: z.string().trim().max(120).optional(),
-  categories: z.array(z.enum(["system", "security", "billing", "summary"])).optional()
-});
 
 app.post("/api/admin/notification-recipients", requireAdmin, requireRecentAdminReauth, validate(adminRecipientSchema), async (req, res) => {
   try {
@@ -7951,12 +8080,6 @@ app.post("/api/admin/notification-recipients", requireAdmin, requireRecentAdminR
   } catch (error) {
     return handleServerError(res, "Failed to add notification recipient", error);
   }
-});
-
-const adminRecipientUpdateSchema = z.object({
-  label: z.string().trim().max(120).nullable().optional(),
-  categories: z.array(z.enum(["system", "security", "billing", "summary"])).optional(),
-  isActive: z.boolean().optional()
 });
 
 app.patch("/api/admin/notification-recipients/:id", requireAdmin, requireRecentAdminReauth, validate(adminRecipientUpdateSchema), async (req, res) => {
@@ -8391,13 +8514,26 @@ app.post("/api/admin/users/bulk", requireAdmin, requireRecentAdminReauth, async 
   }
 });
 
-app.post("/api/admin/alerts", requireAdmin, requireRecentAdminReauth, async (req, res) => {
+app.post("/api/admin/alerts", requireAdmin, requireRecentAdminReauth, validate(adminAlertSchema), async (req, res) => {
   try {
     const title = String(req.body?.title || "Admin alert").trim();
     const query = String(req.body?.query || "").trim();
     const service = String(req.body?.service || "").trim();
     const severity = String(req.body?.severity || "warning").trim().toLowerCase();
     const threshold = req.body?.threshold ?? null;
+    const window = String(req.body?.window || "15m");
+    const notes = String(req.body?.notes || "").trim();
+
+    // A rule with no scope matches everything, which is almost never intended
+    // and produces noise. Require at least one of query or service.
+    if (!query && !service) {
+      return apiError(res, 400, {
+        error: "Alert needs a scope",
+        message: "Provide a query, a service, or both — an unscoped rule matches every event.",
+        code: "ALERT_SCOPE_REQUIRED",
+        retryable: false
+      });
+    }
 
     const alert = await admin.createAlertRule({
       title,
@@ -8407,6 +8543,8 @@ app.post("/api/admin/alerts", requireAdmin, requireRecentAdminReauth, async (req
       createdByUserId: req.auth?.user?.id || null,
       details: {
         threshold,
+        window,
+        notes,
         requestId: req.requestId
       }
     });
@@ -8420,6 +8558,8 @@ app.post("/api/admin/alerts", requireAdmin, requireRecentAdminReauth, async (req
         service,
         severity,
         threshold,
+        window,
+        notes,
         alertId: alert.id,
         requestId: req.requestId
       },
@@ -9890,9 +10030,13 @@ const CRYPTO_HISTORY_INTERVALS = {
   "4H": { days: 1, hyperInterval: "15m" },
   "1D": { days: 1, hyperInterval: "15m" },
   "1W": { days: 7, hyperInterval: "1h" },
+  "1M": { days: 30, hyperInterval: "1h" },
   "3M": { days: 90, hyperInterval: "4h" },
+  "6M": { days: 180, hyperInterval: "1d" },
   "1Y": { days: 365, hyperInterval: "1d" },
   "YTD": { days: 365, hyperInterval: "1d" },
+  "3Y": { days: 1095, hyperInterval: "1d" },
+  "5Y": { days: 1825, hyperInterval: "1d" },
   "MAX": { days: 2000, hyperInterval: "1d" },
 };
 
@@ -9997,8 +10141,11 @@ function fetchHistoryFromYahoo(symbol, interval) {
       "1W": { period: "7d", interval: "60m" },
       "1M": { period: "1mo", interval: "1d" },
       "3M": { period: "3mo", interval: "1d" },
+      "6M": { period: "6mo", interval: "1d" },
       "1Y": { period: "1y", interval: "1d" },
       "YTD": { period: "ytd", interval: "1d" },
+      "3Y": { period: "3y", interval: "1d" },
+      "5Y": { period: "5y", interval: "1wk" },
       "MAX": { period: "max", interval: "1wk" },
     };
     const { period, interval: yfInterval } = mapping[interval] || mapping["1D"];
@@ -10526,7 +10673,11 @@ app.get("/api/interval-performance", async (req, res) => {
   if (!cleanSymbol) {
     return res.status(400).json({ error: "Invalid symbol" });
   }
-  const intervals = ["4H", "1D", "1W", "3M", "1Y", "YTD", "MAX"];
+  // Kept in step with historyQuerySchema's enum, the two provider maps above,
+  // and the pickers in the client. Any interval here that a provider map does
+  // not know about degrades silently to 1-day data rather than erroring, so
+  // these four lists must move together.
+  const intervals = ["4H", "1D", "1W", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "MAX"];
   const snapshotParams = {
     symbol: rawSymbol.slice(0, 30),
     type: normalizedType
@@ -15346,7 +15497,12 @@ app.get("/api/portfolio/unified/equity-curve", requireSignedIn, attachActiveWork
   async (req, res) => {
   try {
     const workspaceId = req.workspace.workspace.id;
-    const limit = Math.min(Number(req.query.limit) || 180, 365);
+    // Snapshots are daily, so the old 365 cap silently truncated every window
+    // longer than a year: a 3Y/5Y/ALL request asked for a range it could never
+    // receive and rendered a "5Y" chart holding 12 months of points. 2000 days
+    // covers a 5-year window with headroom, and the query is indexed on
+    // (workspace_id, snapshot_date), so the extra rows are cheap.
+    const limit = Math.min(Number(req.query.limit) || 180, 2000);
     const from = req.query.from || req.query.start || null;
     const to = req.query.to || req.query.end || null;
     const benchmark = req.query.benchmark || null;
