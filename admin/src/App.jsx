@@ -3033,6 +3033,9 @@ export default function App() {
   // Machine-readable error code from the API (e.g. ADMIN_MFA_REQUIRED), so the
   // UI can show the right guidance instead of a blanket "Connection Error".
   const [errorCode, setErrorCode] = useState(null);
+  // HTTP status, so the UI can distinguish a 429 (temporary, wait) from a 5xx
+  // (retry is reasonable) from a 403 (retrying can never help).
+  const [errorStatus, setErrorStatus] = useState(0);
   const [toasts, setToasts] = useState([]);
 
   const dismissToast = (id) => {
@@ -3209,6 +3212,7 @@ export default function App() {
       }
       setError(null);
       setErrorCode(null);
+      setErrorStatus(0);
     } catch (err) {
       console.error(`Error fetching ${tab} data:`, err);
       // Keep the machine-readable code, not just the message. Without it the UI
@@ -3217,6 +3221,7 @@ export default function App() {
       // generic "Connection Error" with a pointless Retry button.
       setError(err.message);
       setErrorCode(err?.code || null);
+      setErrorStatus(Number(err?.status) || 0);
     } finally {
       setLoading(false);
     }
@@ -3742,6 +3747,36 @@ export default function App() {
       // actionable explanation instead.
       const needsMfaEnrollment = errorCode === 'ADMIN_MFA_REQUIRED';
       const needsAdminIp = errorCode === 'ADMIN_IP_RESTRICTED';
+      // A 429 is ALSO not a connectivity problem, and it was falling through to
+      // the generic branch below: "Connection Error" with a "Retry Sync" button
+      // that immediately re-hit the same exhausted bucket, deepening the block.
+      const isRateLimited = Number(errorStatus) === 429;
+
+      if (isRateLimited) {
+        return (
+          <div style={{ padding: '40px', margin: '40px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', maxWidth: '560px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+              <Clock size={28} color="var(--warning, #F59E0B)" />
+              <h3 style={{ margin: 0 }}>Too many requests</h3>
+            </div>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '8px' }}>
+              {error}
+            </p>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '20px', fontSize: '13px' }}>
+              This is a temporary limit, not a fault in your account. Retrying
+              immediately will keep you blocked, so wait a few minutes before trying
+              again.
+            </p>
+            <button
+              className="btn btn-primary"
+              style={{ marginTop: '4px' }}
+              onClick={() => fetchData()}
+            >
+              Try again now
+            </button>
+          </div>
+        );
+      }
 
       if (needsMfaEnrollment || needsAdminIp) {
         // MFA enrollment happens IN the console. It previously linked out to the
