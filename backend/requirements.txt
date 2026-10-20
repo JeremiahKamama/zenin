@@ -1,6 +1,19 @@
-yfinance==0.2.40
-requests==2.31.0
-beautifulsoup4==4.12.2
-pandas==2.1.1
+# yfinance 0.2.40 (Sep 2024) could no longer read Yahoo's chart endpoints.
+# Yahoo requires a cookie+crumb handshake that the 0.2.x line does not perform,
+# so every request came back rejected. fetch_prices.py reports a caught
+# exception as {"error": ...} and exits 0, so the Node side saw "no prices"
+# rather than a failure — which is why this outage produced no error logs and
+# only surfaced as an empty watchlist.
+#
+# Verified locally: yfinance 1.2.0 returns live quotes for NVDA and AAPL while
+# the pinned 0.2.40 does not.
+#
+# The other pins are from 2023 and are raised alongside it: yfinance 1.2.0
+# requires a modern pandas, and mixing an old pandas with a new yfinance
+# produces silent dtype/NaN failures rather than a clean error.
+yfinance==1.2.0
+requests==2.32.3
+beautifulsoup4==4.12.3
+pandas==2.2.3
 multitasking==0.0.11
 posthog==4.2.0

@@ -4087,6 +4087,17 @@ function fetchYFinancePrices(originalSymbols) {
         return;
       }
 
+      // fetch_prices.py reports a CAUGHT exception as {"error": "..."} and still
+      // exits 0. Without this check that payload was silently indistinguishable
+      // from "the provider returned nothing", so a total stock-price outage
+      // surfaced only as an empty watchlist with NO error anywhere — not in the
+      // logs, not in the provider status, not in the UI. Surface it.
+      if (yfPrices && typeof yfPrices === "object" && yfPrices.error) {
+        console.error("[prices] fetch_prices.py reported an error:", String(yfPrices.error).slice(0, 300));
+        resolve({});
+        return;
+      }
+
       // Re-key results from YF ticker back to the original symbol
       const result = {};
       for (const orig of originalSymbols) {
@@ -11211,7 +11222,17 @@ app.get("/api/prices", validate(pricesQuerySchema, "query"), async (req, res) =>
       const priceRows = nextPayload?.prices && typeof nextPayload.prices === "object" ? Object.values(nextPayload.prices) : [];
       const hasAnyFinitePrice = priceRows.some((row) => Number.isFinite(Number(row?.price)));
       if (!hasAnyFinitePrice) {
-        throw new Error("prices_empty_from_provider");
+        // Distinguish "the provider answered and genuinely had nothing for these
+        // symbols" from "every provider call failed". They need different
+        // responses, and collapsing both into one reason is what let a total
+        // stock-price outage sit behind a benign-sounding label.
+        const attemptedProviders = Array.isArray(nextPayload?.providers) ? nextPayload.providers : [];
+        const anyProviderAnswered = attemptedProviders.some((row) => Number(row?.count) > 0);
+        throw new Error(
+          anyProviderAnswered
+            ? "prices_empty_from_provider"
+            : "prices_provider_unavailable"
+        );
       }
 
       await writeAllSnapshots("prices", snapshotParams, nextPayload);

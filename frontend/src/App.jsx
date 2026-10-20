@@ -8117,7 +8117,15 @@ const handleOptionTradeClosed = async (tradeId) => {
                   onCategorySelect={handleCategorySelect}
                   assets={assets}
                   watchlistAssets={lockedWatchlistPreviewAssets}
-                  onAdd={() => {}}
+                  onAdd={(asset) => {
+                    // This was a silent no-op, so clicking a locked row did
+                    // nothing at all — indistinguishable from a broken button.
+                    // Say why it is unavailable and what unlocks it.
+                    const symbol = String(asset?.symbol || "This asset").toUpperCase();
+                    setWatchlistNotice(
+                      `${symbol} is in a shared watchlist. Upgrade to ${lockedWatchlistPlanLabel} to open and manage it.`
+                    );
+                  }}
                   loading={loading}
                   activeTheme={activeTheme}
                   onThemeSelect={setActiveTheme}
@@ -8182,8 +8190,38 @@ const handleOptionTradeClosed = async (tradeId) => {
               lastLivePriceAt={lastLivePriceAt}
               isGuestMode={isExplicitGuestMode}
               onIntent={(asset, intent) => {
-                if (intent === "alert") void dispatchWatchlistAlertEmail(asset, intent);
-                if (isExplicitGuestMode) setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
+                if (intent === "alert") {
+                  void dispatchWatchlistAlertEmail(asset, intent);
+                  return;
+                }
+                if (isExplicitGuestMode) {
+                  setGuestInteraction(`Watchlist:${intent || asset?.symbol || "asset"}`);
+                }
+                // "Open" and "Journal" previously reached this callback and did
+                // NOTHING — only "alert" was handled, so both buttons were dead
+                // on every watchlist row. Route each intent to the workspace
+                // that actually implements it.
+                const symbol = String(asset?.symbol || "").toUpperCase();
+                if (intent === "inspect" || intent === "open") {
+                  // Open the asset detail modal, exactly as clicking a row does.
+                  setSelectedAsset(asset);
+                  return;
+                }
+                if (intent === "journal") {
+                  // Pre-seed the journal with this asset so the note is attached
+                  // to the right symbol instead of opening an empty composer.
+                  setJournalThreadContext({
+                    source: "watchlist",
+                    symbol,
+                    assetName: asset?.name || asset?.companyName || symbol
+                  });
+                  setActiveSection("Journal");
+                  return;
+                }
+                if (intent === "research") {
+                  setActiveSection("Research");
+                  return;
+                }
               }}
               alertAssignments={workspaceAlertAssignments}
               alertsLoading={workspaceAlertsLoading}
