@@ -7,6 +7,7 @@ import Shield from 'lucide-react/dist/esm/icons/shield.mjs';
 import LogOut from 'lucide-react/dist/esm/icons/log-out.mjs';
 import BarChart3 from 'lucide-react/dist/esm/icons/chart-column.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
+import Pencil from 'lucide-react/dist/esm/icons/pencil.mjs';
 import Bell from 'lucide-react/dist/esm/icons/bell.mjs';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
 import ExternalLink from 'lucide-react/dist/esm/icons/external-link.mjs';
@@ -19,6 +20,8 @@ import CheckCircle2 from 'lucide-react/dist/esm/icons/circle-check.mjs';
 import AlertCircle from 'lucide-react/dist/esm/icons/circle-alert.mjs';
 import Clock from 'lucide-react/dist/esm/icons/clock.mjs';
 import { avatarInitials } from './utils/initials';
+import { normalizePlanId, planLabel, planOptionLabel, PLANS } from './utils/plans';
+import PlanChangeModal from './components/PlanChangeModal';
 import { pluralize } from './utils/pluralize';
 import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right.mjs';
 import ArrowDownRight from 'lucide-react/dist/esm/icons/arrow-down-right.mjs';
@@ -436,9 +439,9 @@ const AddUserModal = ({ isOpen, onClose, onAdd }) => {
                 value={plan}
                 onChange={e => setPlan(e.target.value)}
               >
-                <option value="starter">Starter (Free)</option>
-                <option value="pro">Pro ($29/mo)</option>
-                <option value="desk">Desk ($99/mo)</option>
+                {PLANS.map((plan) => (
+                  <option key={plan.id} value={plan.id}>{planOptionLabel(plan.id)}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -557,6 +560,16 @@ const Toggle = ({ active, onClick }) => (
 const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, onRevokeSessions, onOpenRelated }) => {
   const adminUi = useAdminUi();
   const resolvedUser = details?.user || user;
+
+  // Plan changes go through a real modal instead of window.prompt. The prompt
+  // could not show which plan the user was moving from or to, so a mis-click on
+  // the select was invisible until after a write that changes what a paying
+  // customer can access. It also accepted a one-character reason, which makes
+  // the audit entry useless for the person reading it later.
+  const [planModal, setPlanModal] = useState(null); // { target, error, busy } | null
+
+  // NOTE: every hook must run before the early return below, or React sees a
+  // different hook order on renders where the user is absent.
   if (!resolvedUser) return null;
 
   const sessions = details?.sessions || [];
@@ -566,7 +579,22 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
 
   const requestReason = (label) => window.prompt(`Reason for ${label.toLowerCase()}:`, '')?.trim();
 
+  const submitPlanChange = async ({ plan, reason }) => {
+    setPlanModal((prev) => (prev ? { ...prev, busy: true, error: '' } : prev));
+    try {
+      await onUpdate(resolvedUser.id, 'plan', plan, reason);
+      setPlanModal(null);
+    } catch (error) {
+      // Keep the modal open with the typed reason intact so the admin does not
+      // have to rewrite a justification because of a transient failure.
+      setPlanModal((prev) =>
+        prev ? { ...prev, busy: false, error: error?.message || 'Could not change the plan.' } : prev
+      );
+    }
+  };
+
   return (
+    <>
     <div className="detail-panel-overlay" onClick={onClose}>
       <div className="detail-panel" onClick={e => e.stopPropagation()}>
         <div className="detail-header">
@@ -603,22 +631,17 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
           <div className="detail-section">
             <h4 className="detail-section-title">Account Control</h4>
             <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
                 <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Current Plan</span>
-                <select 
-                  className="filter-select" 
-                  value={resolvedUser.plan?.toLowerCase()} 
-                  onChange={(e) => {
-                    const reason = requestReason(`changing ${resolvedUser.email} plan`);
-                    if (!reason) return;
-                    onUpdate(resolvedUser.id, 'plan', e.target.value, reason);
-                  }}
-                  style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '6px', fontSize: '12px' }}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ height: '30px', fontSize: '12px', padding: '0 12px', flexShrink: 0 }}
+                  onClick={() => setPlanModal({ target: normalizePlanId(resolvedUser.plan) || 'starter', error: '', busy: false })}
                 >
-                  <option value="starter">Starter</option>
-                  <option value="pro">Pro</option>
-                  <option value="desk">Desk</option>
-                </select>
+                  {planLabel(resolvedUser.plan)}
+                  <Pencil size={12} aria-hidden="true" />
+                </button>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Admin Role</span>
@@ -628,7 +651,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                   onChange={(e) => {
                     const reason = requestReason(`updating ${resolvedUser.email} role`);
                     if (!reason) return;
-                    onUpdate(resolvedUser.id, 'role', e.target.value, reason);
+                    onUpdate(resolvedUser.id, 'role', e.target.value, reason).catch(() => {});
                   }}
                   style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '6px', fontSize: '12px' }}
                 >
@@ -805,7 +828,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                 onClick={() => {
                   const reason = requestReason(`${resolvedUser.suspendedAt ? 'reactivating' : 'suspending'} ${resolvedUser.email}`);
                   if (!reason) return;
-                  onUpdate(resolvedUser.id, 'suspend', !resolvedUser.suspendedAt, reason);
+                  onUpdate(resolvedUser.id, 'suspend', !resolvedUser.suspendedAt, reason).catch(() => {});
                 }}
               >
                 {resolvedUser.suspendedAt ? <CheckCircle2 size={14} /> : <ZapOff size={14} />}
@@ -817,7 +840,7 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
                 onClick={() => {
                   const reason = requestReason(`deleting ${resolvedUser.email}`);
                   if (!reason) return;
-                  onUpdate(resolvedUser.id, 'delete', true, reason);
+                  onUpdate(resolvedUser.id, 'delete', true, reason).catch(() => {});
                 }}
               >
                 <Trash2 size={14} /> Delete
@@ -827,6 +850,20 @@ const UserDetailPanel = ({ user, details, onClose, onUpdate, onResetPassword, on
         </div>
       </div>
     </div>
+      {planModal && (
+        <PlanChangeModal
+          open
+          user={resolvedUser}
+          currentPlan={resolvedUser.plan}
+          targetPlan={planModal.target}
+          onTargetChange={(next) => setPlanModal((prev) => (prev ? { ...prev, target: next } : prev))}
+          onConfirm={submitPlanChange}
+          onClose={() => setPlanModal(null)}
+          busy={planModal.busy}
+          error={planModal.error}
+        />
+      )}
+    </>
   );
 };
 
@@ -1412,9 +1449,9 @@ const UserManagementView = ({ users, searchQuery, setSearchQuery, onSelectUser, 
           </div>
           <select className="filter-select" value={planFilter} onChange={(event) => setPlanFilter(event.target.value)}>
             <option value="all">All Plans</option>
-            <option value="starter">Starter</option>
-            <option value="pro">Pro</option>
-            <option value="desk">Desk</option>
+            {PLANS.map((plan) => (
+              <option key={plan.id} value={plan.id}>{plan.label}</option>
+            ))}
           </select>
           <select className="filter-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <option value="all">All Status</option>
@@ -3365,6 +3402,10 @@ export default function App() {
       }
     } catch (err) {
       notify('error', 'User update failed.', err.message);
+      // Re-throw so a caller that shows its own inline error — the plan modal —
+      // can keep the admin's typed reason on screen instead of discarding it on
+      // a transient failure. The toast above still fires for every other path.
+      throw err;
     }
   };
 

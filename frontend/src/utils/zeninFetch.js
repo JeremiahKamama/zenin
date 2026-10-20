@@ -142,12 +142,12 @@ async function ensureCsrfToken() {
   return csrfTokenCache;
 }
 
-function getDefaultErrorMessage(status) {
+export function getDefaultErrorMessage(status) {
   if (status === 401) return "Your session has expired. Please sign in again.";
   if (status === 403) return "You do not have permission to perform this action.";
   if (status === 404) return "The requested resource could not be found.";
   if (status === 408) return "The request timed out. Please try again.";
-  if (status === 429) return "Too many requests. Please wait a moment and retry.";
+  if (status === 429) return "Too many requests right now. Please wait a minute, then try again.";
   if (status >= 500) return "The server could not complete this request. Please try again.";
   return `Request failed (${status || 0}).`;
 }
@@ -180,7 +180,8 @@ function normalizeErrorPayload(payload, status) {
     message,
     code: String(payload?.code || (status ? `HTTP_${status}` : "REQUEST_FAILED")).trim() || "REQUEST_FAILED",
     details: payload?.details ?? null,
-    retryable: typeof payload?.retryable === "boolean" ? payload.retryable : (status === 408 || status === 429 || status >= 500),
+    // Deliberately excludes 429: see the note on this.retryable below.
+    retryable: typeof payload?.retryable === "boolean" ? payload.retryable : (status === 408 || status >= 500),
   };
 }
 
@@ -195,7 +196,16 @@ export class ZeninRequestError extends Error {
     this.code = options.code || "REQUEST_FAILED";
     this.error = options.error || "Request failed";
     this.details = options.details ?? null;
-    this.retryable = Boolean(options.retryable);
+    // A 429 is not "retryable" in the sense the UI means: pressing Retry now
+    // cannot succeed. Only 408/5xx (transient faults) earn a Retry affordance;
+    // a rate limit needs a WAIT, which is a different interaction.
+    //
+    // When the caller does not say, derive it from the status so a 5xx built
+    // without an explicit flag still offers Retry instead of silently losing it.
+    this.retryable =
+      typeof options.retryable === "boolean"
+        ? options.retryable
+        : (this.status === 408 || this.status >= 500);
     this.data = options.data ?? null;
     this.endpoint = options.endpoint || "";
     this.cause = options.cause;
@@ -208,7 +218,9 @@ export class ZeninRequestError extends Error {
 // to avoid duplicate side effects. This prevents the "429 storm" / infinite
 // loading where many modules each hammer a rate-limited backend.
 // ---------------------------------------------------------------------------
-const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+// 429 is deliberately ABSENT. Retrying a rate limit spends more of the bucket
+// being waited on, turning a short pause into a longer lockout.
+export const RETRYABLE_STATUS = new Set([408, 500, 502, 503, 504]);
 const MAX_RETRIES = 3;            // up to 4 attempts total
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 8000;
@@ -335,9 +347,12 @@ export async function zeninFetch(endpoint, options = {}) {
     // Circuit breaker: after repeated failures, fail fast instead of hammering
     // a rate-limited backend (prevents the 429 storm / infinite loading).
     if (isRead && !circuitAllow()) {
+      // status 0: this is OUR breaker, not a server response. Reporting 429 here
+      // made a locally-opened circuit indistinguishable from a real rate limit,
+      // so the UI blamed the server for a client-side decision.
       throw new ZeninRequestError(
         "Zenin is rate-limiting requests right now. Showing cached data.",
-        { status: 429, code: "CIRCUIT_OPEN", retryable: false, endpoint: url }
+        { status: 0, code: "CIRCUIT_OPEN", retryable: false, endpoint: url }
       );
     }
 
@@ -370,7 +385,15 @@ export async function zeninFetch(endpoint, options = {}) {
       }
 
       const status = response.status;
-      // Retryable status (429/5xx) -> back off and retry (GET only).
+      // A 429 is NOT retryable, even for a read. Every retry spends more of the
+      // very bucket we are waiting to refill, so backoff turned a short wait
+      // into a longer lockout — and on a shared office IP it spent the whole
+      // team's budget. Surface it immediately and let the caller show guidance.
+      if (status === 429) {
+        circuitRecordFailure();
+        return response;
+      }
+      // Other retryable statuses (5xx/408) -> back off and retry (GET only).
       if (isRead && RETRYABLE_STATUS.has(status) && attempt < maxAttempts) {
         circuitRecordFailure();
         const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS);

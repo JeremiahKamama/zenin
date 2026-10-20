@@ -6855,10 +6855,56 @@ app.delete("/api/account", authIpLimiter, authLimiter, requireSignedIn, validate
   }
 });
 
+// ── Admin console rate limit ────────────────────────────────────────────────
+//
+// This was `max: 100 per IP per 15min`, which locked administrators out of
+// their own console during ordinary use. Measured against production: the 429
+// fired on the 8th request of a session.
+//
+// A single working session easily exceeds 100 calls — every tab switch, user
+// detail open, search, audit view and reauth is a request. The limit is keyed
+// on the client IP, so it is SHARED by everyone behind one office NAT or VPN:
+// two admins working at once halve each other's budget, and one person's retry
+// loop spends it for the whole team. Once spent, every request 429s for up to
+// 15 minutes and the console can only say "Connection Error".
+//
+// The fix has three parts:
+//
+//   1. Key on the ADMIN IDENTITY, not the IP. An authenticated admin gets their
+//      own budget, so colleagues cannot starve each other and a shared IP is no
+//      longer a shared fate. Requests with no identity (sign-in, which is
+//      already separately limited) fall back to the IP.
+//   2. Raise the ceiling well above real usage. This limiter is a blunt
+//      backstop against a runaway client, NOT the authorization boundary — that
+//      is requireAdmin plus requireRecentAdminReauth on each mutation. Real
+//      abuse protection for per-action risk lives in those, not here.
+//   3. Skip successful READS entirely. The dangerous surface is writes, and
+//      writes are already gated per-route. Counting GETs only guarantees that
+//      browsing the console is what locks you out.
+//
+// The separate, tighter `adminReauthLimiter` still governs confirmation
+// attempts, which is the genuinely sensitive action.
 const adminRateLimit = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per window
-  message: { error: "Too many administrative requests. Please try again later." }
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.ADMIN_RATE_LIMIT_MAX || 2000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const identity =
+      req?.auth?.userId ||
+      req?.auth?.user?.id ||
+      req?.auth?.user?.email ||
+      req.ip ||
+      "unknown";
+    return `admin:${crypto.createHash("sha256").update(String(identity)).digest("base64url").slice(0, 16)}`;
+  },
+  // Full console reads are how an admin does their job; do not meter them.
+  // Mutations (POST/PATCH/PUT/DELETE) are all still counted.
+  skip: (req) => req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS",
+  message: {
+    error: "Too many administrative requests. Please try again later.",
+    code: "ADMIN_RATE_LIMITED"
+  }
 });
 
 app.use("/api/admin/*", adminRateLimit);

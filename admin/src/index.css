@@ -1673,3 +1673,401 @@ body {
     width: auto;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Plan change modal
+   ─────────────────────────────────────────────────────────────────────────
+   Replaces window.prompt on the plan control. The prompt could not show the
+   from/to transition, the price movement, or validate the reason — and an
+   unusable audit reason defeats the purpose of collecting one.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.modal-close {
+  appearance: none;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .modal-close:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+}
+
+.modal-close:active:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.modal-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A destructive confirm needs its own affordance; reusing .btn-primary would
+   render the dangerous action as the visually safest one. */
+.btn-danger {
+  background: var(--danger);
+  color: #FFFFFF;
+  border: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn-danger:hover:not(:disabled) {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+  }
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+}
+
+.plan-change-modal {
+  max-width: 540px;
+  /* Never taller than the visible viewport on a phone, or the submit button
+     ends up under the keyboard / home indicator. */
+  max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.plan-change-glyph {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.plan-change-glyph.is-warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+}
+
+.plan-change-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.plan-change-subtitle {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-muted);
+  /* Emails can be long and unbreakable. */
+  overflow-wrap: anywhere;
+}
+
+.plan-change-subtitle strong {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* ── the from -> to transition ─────────────────────────────────────────── */
+
+.plan-change-transition {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-app);
+}
+
+.plan-change-node {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-change-node-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.plan-change-node-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plan-change-arrow {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.plan-change-select {
+  width: 100%;
+  min-height: 34px;
+}
+
+.plan-change-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.plan-change-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+}
+
+.plan-change-chip.is-upgrade {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success);
+}
+
+.plan-change-chip.is-downgrade {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+}
+
+.plan-change-delta {
+  font-size: 13px;
+  font-weight: 600;
+  /* Prices line up in a column across states. */
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.plan-change-blurb {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.plan-change-warning {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.06);
+  color: var(--warning);
+}
+
+.plan-change-warning div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plan-change-warning strong {
+  font-size: 13px;
+}
+
+.plan-change-warning span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* ── reason field ──────────────────────────────────────────────────────── */
+
+.plan-change-field {
+  margin-bottom: 16px;
+}
+
+.plan-change-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.plan-change-label strong {
+  color: var(--text-primary);
+}
+
+.plan-change-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.plan-change-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.plan-change-preset {
+  appearance: none;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  /* Long labels wrap rather than overflow the modal. */
+  white-space: normal;
+  text-align: left;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .plan-change-preset:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: var(--text-primary);
+  }
+}
+
+.plan-change-preset:active:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.plan-change-preset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plan-change-textarea,
+.plan-change-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font: inherit;
+  /* 16px on touch devices or iOS zooms the whole page on focus. */
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+@media (pointer: coarse) {
+  .plan-change-textarea,
+  .plan-change-input {
+    font-size: 16px;
+  }
+}
+
+.plan-change-textarea:focus,
+.plan-change-input:focus {
+  outline: none;
+  border-color: var(--text-muted);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.plan-change-textarea.has-error,
+.plan-change-input.has-error {
+  border-color: var(--danger);
+}
+
+.plan-change-textarea.has-error:focus,
+.plan-change-input.has-error:focus {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.plan-change-meter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  min-height: 16px;
+}
+
+.plan-change-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.plan-change-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.plan-change-count.is-near-limit {
+  color: var(--warning);
+}
+
+.plan-change-submit-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.06);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.plan-change-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+@media (max-width: 520px) {
+  .plan-change-transition {
+    /* Stacking keeps both plans readable; side by side they truncate. */
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .plan-change-arrow {
+    transform: rotate(90deg);
+    align-self: center;
+  }
+
+  .plan-change-actions {
+    flex-direction: column-reverse;
+  }
+
+  .plan-change-actions .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}
